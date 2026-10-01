@@ -1,6 +1,8 @@
+using System.Reflection;
 using System.Text.Json.Nodes;
 using C7Engine;
 using C7GameData;
+using C7GameData.Save;
 using Serilog;
 
 namespace CivBridge;
@@ -250,6 +252,30 @@ sealed partial class Session {
 		return o;
 	}
 
+	static readonly FieldInfo BuildingSource = typeof(Building).GetField("dataSource", BindingFlags.NonPublic | BindingFlags.Instance)
+		?? throw new MissingFieldException(nameof(Building), "dataSource");
+
+	/// <summary>Why the engine's Building.CanProduce refuses this building here, in its own order, or null.</summary>
+	string WhyNot(City c, Building b) {
+		if (b.renderedObsoleteBy != null && human.knownTechs.Contains(b.renderedObsoleteBy.id)) return $"{b.renderedObsoleteBy.Name} made it obsolete";
+		if (c.GetBuildings().Exists(x => x.building == b)) return $"{c.name} already has it";
+		bool wonder = b.greatWonderProperties != null || b.isSmallWonder;
+		if (wonder && gd.cities.FirstOrDefault(x => x.GetBuildings().Exists(cb => cb.building == b)) is City owner
+			&& (b.greatWonderProperties != null || owner.owner == human))
+			return $"{owner.name} ({Owner(owner.owner)}) already built it, and a wonder is built once";
+		if (wonder && human.cities.FirstOrDefault(x => x != c && x.itemBeingProduced?.name == b.name) is City other)
+			return $"{other.name} is already building it, and only one city may";
+		if (b.isCenterOfEmpire) return "the Palace cannot be moved";
+		if (b.isForbiddenPalace && c.GetBuildings().Exists(x => x.building.isCenterOfEmpire || x.building.isForbiddenPalace))
+			return "a Forbidden Palace belongs in a city away from the Palace";
+		if (b.requiredBuilding != null && !c.GetBuildings().Exists(x => x.building == b.requiredBuilding))
+			return $"it needs a {b.requiredBuilding.name} in {c.name} first";
+		if (b.requiredResources.Count > 0) return $"it needs {string.Join(" and ", b.requiredResources.Select(r => r.Name))} connected to {c.name}";
+		if (BuildingSource.GetValue(b) is SaveBuilding source && source.productionPrerequisites.Count > 0)
+			return "the city does not meet its rule: " + string.Join(", ", source.productionPrerequisites.Select(r => r[(r.LastIndexOf('.') + 1)..].Replace('_', ' ')));
+		return null;
+	}
+
 	JsonObject SetProduction(Args a) {
 		EnsurePlaying();
 		City c = CityArg(a);
@@ -261,7 +287,7 @@ sealed partial class Session {
 			Tech missing = known?.requiredTech is Tech t && !human.knownTechs.Contains(t.id) ? t : null;
 			string why = known == null ? $"'{wanted}' is not something a city can build"
 				: missing != null ? $"{known.name} requires {missing.Name}"
-				: $"{c.name} cannot build {known.name} now";
+				: $"{c.name} cannot build {known.name} now" + (known is Building building && WhyNot(c, building) is string reason ? $": {reason}" : "");
 			IProducible close = known == null ? options.FirstOrDefault(o => Close(o.name, wanted)) : null;
 			throw new BridgeError("unknown_item", $"{why}. {c.name} can build: {string.Join(", ", options.Select(o => o.name))}.",
 				BridgeError.Names(options.Select(o => o.name)),

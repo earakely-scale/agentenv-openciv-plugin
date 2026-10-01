@@ -457,6 +457,15 @@ def until(b: Bridge, done, turns: int, chunk: int = 20) -> dict:
     return state
 
 
+def test_a_refused_building_says_why(launch):
+    b = launch()
+    b.call("new_game", seed=SEED, turn_limit=400)
+    state = until(b, lambda s: len(s["cities"]) >= 2, 120)
+    capital, other = state["cities"][0], state["cities"][1]
+    assert "Rome already has it" in b.error("set_production", city=capital["id"], item="Palace")["message"]
+    assert "the Palace cannot be moved" in b.error("set_production", city=other["id"], item="Palace")["message"]
+
+
 def test_revolution_ends_in_the_chosen_government(launch):
     b = launch()
     b.call("new_game", seed=SEED, turn_limit=400)
