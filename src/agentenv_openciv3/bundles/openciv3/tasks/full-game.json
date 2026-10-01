@@ -2,7 +2,8 @@
   {
     "id": "deploy",
     "type": "deploy_env",
-    "env_id": "openciv3"
+    "env_id": "openciv3",
+    "ttl_seconds": 21600
   },
   {
     "id": "new-game",
@@ -29,7 +30,8 @@
     "type": "deploy_agent",
     "env_ids": [
       "openciv3"
-    ]
+    ],
+    "ttl_seconds": 21600
   },
   {
     "id": "play-1",
