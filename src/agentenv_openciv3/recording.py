@@ -28,7 +28,8 @@ from PIL import Image, ImageDraw, ImageFont
 from .actionlog import describe
 
 FORMATS = {"mp4": "video/mp4", "gif": "image/gif", "html": "text/html", "png": "image/png"}
-BASELINE_LABELS = {"engine_ai": "built-in AI", "settler_bot": "settler bot", "null": "do-nothing"}
+BASELINE_LABELS = {"engine_ai": "built-in AI", "settler_bot": "settler bot", "found_capital": "capital only",
+                   "null": "do-nothing"}
 URGENT = {"threat", "unit_lost", "war_declared", "city_destroyed", "disorder", "disorder_started", "city_starved",
           "gold_stolen", "defenseless", "riot_risk", "civ_destroyed"}
 
@@ -180,6 +181,18 @@ def is_barbarian(p: dict) -> bool:
     return "barbarian" in str(p.get("civ", "")).lower()
 
 
+def spread(ys: list[float], gap: float, lo: float, hi: float) -> list[float]:
+    """Positions as close to `ys` as possible, at least `gap` apart, within [lo, hi] when they fit."""
+    order = sorted(range(len(ys)), key=ys.__getitem__)
+    out, prev = list(ys), lo - gap
+    for i in order:
+        prev = out[i] = max(ys[i], prev + gap)
+    nxt = hi + gap
+    for i in reversed(order):
+        nxt = out[i] = min(out[i], nxt - gap)
+    return out
+
+
 class Renderer:
     """Draws frames for one game; the static terrain layer is drawn once."""
 
@@ -301,7 +314,7 @@ class Renderer:
         draw.rectangle([x0, y0, x1, y1], fill=PANEL)
         small = font(11)
         left, right, top, bottom = x0 + 34, x1 - 86, y0 + 18, y1 - 18
-        draw.text((x0 + 8, y0 + 4), "score", font=small, fill=DIM)
+        draw.text((left + 4, y0 + 4), "score", font=small, fill=DIM)
         for value in (0, self.top):
             y = bottom - (bottom - top) * value / self.top
             draw.line([left, y, right, y], fill=ROW)
@@ -313,13 +326,13 @@ class Renderer:
         def xy(turn: int, total: int) -> tuple[float, float]:
             return left + (right - left) * turn / self.limit, bottom - (bottom - top) * total / self.top
 
+        labels: list[tuple[float, float, str, ImageFont.FreeTypeFont, tuple]] = []
         for policy, scores in self.baselines.items():
             pts = [xy(t, s["total"]) for t, s in sorted(scores.items()) if t <= upto]
             if len(pts) > 1:
                 for a, b in zip(pts[::2], pts[1::2], strict=False):
                     draw.line([a, b], fill=DIM, width=1)
-                draw.text((pts[-1][0] + 4, pts[-1][1]), txt(BASELINE_LABELS.get(policy, policy)), font=small,
-                          fill=DIM, anchor="lm")
+                labels.append((pts[-1][1], pts[-1][0] + 4, txt(BASELINE_LABELS.get(policy, policy)), small, DIM))
         series: dict[int, list] = {}
         for snap in self.snaps:
             if snap["turn"] > upto:
@@ -336,8 +349,9 @@ class Renderer:
             if len(pts) > 1:
                 draw.line(pts, fill=tuple(p.get("color") or DIM), width=3 if p.get("is_human") else 1)
             if pts and p.get("is_human"):
-                draw.text((pts[-1][0] + 4, pts[-1][1]), txt(p["civ"]), font=font(11, bold=True), fill=TEXT,
-                          anchor="lm")
+                labels.append((pts[-1][1], pts[-1][0] + 4, txt(p["civ"]), font(11, bold=True), TEXT))
+        for (_, x, text, f, fill), y in zip(labels, spread([lb[0] for lb in labels], 12, top, bottom), strict=True):
+            draw.text((x, y), text, font=f, fill=fill, anchor="lm")
 
     # -- side panel --
 
