@@ -23,8 +23,13 @@ servers = [{{"name": "openciv3", "status": status}}]
 tools = ["mcp__openciv3__end_turn"] if status == "connected" else []
 print(json.dumps({{"type": "system", "subtype": "init", "model": "fake", "mcp_servers": servers, "tools": tools}}),
       flush=True)
+session = sys.argv[sys.argv.index("--session-id") + 1]
+context = int(os.environ.get("FAKE_CONTEXT", "0"))
 for n, line in enumerate(sys.stdin, 1):
-    result = {{"type": "result", "subtype": "success", "terminal_reason": "completed", "total_cost_usd": n / 1000}}
+    usage = {{"input_tokens": 2, "cache_read_input_tokens": context, "cache_creation_input_tokens": 100}}
+    print(json.dumps({{"type": "assistant", "message": {{"content": [], "usage": usage}}}}), flush=True)
+    result = {{"type": "result", "subtype": "success", "terminal_reason": "completed", "total_cost_usd": n / 1000,
+              "session_id": session}}
     print(json.dumps(result), flush=True)
 """
 INIT = {"type": "system", "subtype": "init", "model": "m", "mcp_servers": [{"name": "openciv3", "status": "connected"}]}
@@ -217,6 +222,15 @@ def test_run_stops_when_the_game_stalls_and_saves_the_recording(tmp_path):
     assert json.loads((run_dir / "summary.json").read_text())["turn"] == 1
     assert meta["recording"] == {"files": ["recording.mp4", "replay.html"]}
     assert (run_dir / "replay.html").read_text().startswith("<!doctype html>")
+
+
+def test_run_starts_a_new_session_when_the_context_passes_the_cap(tmp_path):
+    proc, meta, run_dir = _run(tmp_path, "--context-cap", "50000", FAKE_CONTEXT="60000")
+    assert proc.returncode == 1, proc.stderr
+    assert [s["end"] for s in meta["sessions"]] == ["context", "context", "stalled"] and meta["nudges"] == 0
+    assert len({s["session_id"] for s in meta["sessions"]}) == 3 and meta["cost_usd"] == 0.003
+    metrics = json.loads((run_dir / "metrics.json").read_text())
+    assert metrics["sessions"] == 3 and metrics["cost_usd"] == 0.003
 
 
 def test_run_fails_as_harness_error_when_mcp_is_not_connected(tmp_path):

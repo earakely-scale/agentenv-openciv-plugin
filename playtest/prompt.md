@@ -1,7 +1,8 @@
 # Playtest prompts
 
 `run.py` sends the system prompt with `--system-prompt` and the game prompt as the first user
-message. Placeholders: `{civ}`, `{seed}`, `{turn}`, `{turn_limit}`. The prompts give the goal, the
+message. With `--context-cap`, later sessions get the resume prompt after it, and every session the
+handoff. Placeholders: `{civ}`, `{seed}`, `{turn}`, `{turn_limit}`. The prompts give the goal, the
 tools and the few rules the env does not show by itself; how to play is left to the agent. Tools are
 named in prose, never in call syntax a model could copy as a bare tool name.
 
@@ -27,3 +28,14 @@ brief shows back).
 
 The game advances only when you end your turn; the other civilizations and the barbarians move in
 between. There are no tools for combat or diplomacy.
+
+## Resume prompt
+
+This game is already under way: earlier sessions played it, and you take over at turn {turn}. Start with
+the get_turn_brief tool; the plan it shows holds the notes those sessions kept.
+
+## Handoff
+
+The game is played in sessions, and a new one takes over when this one has run long. The next session
+knows only what the game shows and what the plan tool holds, so keep the plan current: your strategy,
+targets and anything you are in the middle of.

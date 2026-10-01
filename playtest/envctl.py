@@ -24,7 +24,8 @@ AUTOPLAY_URI = "urn:openciv3:autoplay/v1"
 POLICIES = ("null", "found_capital", "settler_bot", "engine_ai")   # autoplay policies, weakest first
 RECORDING_URI = "urn:openciv3:recording/v1"
 # What a run directory calls each format the recording extension returns.
-RECORDING_FILES = {"mp4": "recording.mp4", "gif": "recording.gif", "html": "replay.html", "png": "final.png"}
+RECORDING_FILES = {"mp4": "recording.mp4", "gif": "recording.gif", "html": "replay.html", "png": "final.png",
+                   "client.mp4": "client.mp4"}
 DEFAULT_SERVER_CMD = f"{shlex.quote(sys.executable)} -m agentenv_openciv3.server"
 
 
@@ -173,7 +174,7 @@ def save_recording(env: Env, run_dir: Path, formats=("mp4", "html"), timeout: fl
     reply = env.extension(RECORDING_URI, timeout=timeout, formats=list(formats)) or {}
     written = []
     for f in reply.get("files") or []:
-        name = RECORDING_FILES.get(Path(f.get("name", "")).suffix.lstrip(".").lower())
+        name = RECORDING_FILES.get(f.get("name", "").partition(".")[2].lower())
         if name and f.get("base64"):
             (run_dir / name).write_bytes(base64.b64decode(f["base64"]))
             written.append(name)

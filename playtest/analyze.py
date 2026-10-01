@@ -122,8 +122,9 @@ def transcript_metrics(rows: list[dict], start_turn: int | None = None) -> dict:
             acted = True
 
     inits = [r for r in rows if r.get("type") == "system" and r.get("subtype") == "init"]
-    last = results[-1] if results else {}
-    usage = last.get("modelUsage") or {}
+    # Each claude session reports cumulative totals, so its last result counts once.
+    sessions = list({r.get("session_id"): r for r in results}.values())
+    usage = [u for r in sessions for u in (r.get("modelUsage") or {}).values()]
     return {
         "model": next((i.get("model") for i in inits), None),
         "mcp_servers": inits[0].get("mcp_servers") if inits else None,
@@ -152,9 +153,10 @@ def transcript_metrics(rows: list[dict], start_turn: int | None = None) -> dict:
         "segments": len(results),
         "terminal_reasons": [r.get("terminal_reason") or r.get("subtype") for r in results],
         "num_turns": sum(r.get("num_turns") or 0 for r in results),
-        "cost_usd": last.get("total_cost_usd"),
+        "cost_usd": round(sum(r.get("total_cost_usd") or 0 for r in sessions), 4) if sessions else None,
+        "sessions": len(sessions),
         "api_seconds": round(sum(r.get("duration_api_ms") or 0 for r in results) / 1000, 1),
-        "tokens": {k: sum(m.get(k) or 0 for m in usage.values())
+        "tokens": {k: sum(m.get(k) or 0 for m in usage)
                    for k in ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens")},
     }
 
@@ -293,6 +295,7 @@ def analyze(run_dir, baselines: dict | None = None) -> dict:
         "shields_lost": _metric(summary, "shields_lost"),
         "recording": [f for f in RECORDING_FILES.values() if (run / f).exists()],
         "nudges": meta.get("nudges"),
+        "sessions": t["sessions"],
         "wall_seconds": meta.get("wall_seconds"),
         "cost_usd": t["cost_usd"],
         "cost_per_turn": round(t["cost_usd"] / turns_played, 4) if t["cost_usd"] and turns_played else None,
