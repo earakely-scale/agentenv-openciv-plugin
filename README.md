@@ -33,7 +33,18 @@ territory and techs.
 
 ## Quickstart
 
-You need Docker, [uv](https://docs.astral.sh/uv/) and git. No model is needed.
+You need Docker, [uv](https://docs.astral.sh/uv/) and git. One command clones the repository, installs
+`agent-env` with the plugin, builds and registers the env, and plays the smoke game:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/earakely-scale/agentenv-openciv-plugin/main/scripts/install.sh | bash
+```
+
+`bash -s -- --agent` (after the pipe) also sets up the Claude player agent, so Claude can play: it asks for a
+model key, without echoing it. `--client` adds recordings of the real game's view. `--help` lists the
+options; [scripts/install.sh](scripts/install.sh) is short.
+
+By hand, the same steps, with no model needed:
 
 ```bash
 git clone https://github.com/earakely-scale/agentenv-openciv-plugin
@@ -72,12 +83,24 @@ CIVBRIDGE_CMD=$PWD/build/bridge/CivBridge .venv/bin/python playtest/run.py --see
 The run directory gets the transcript, the env's action log, the final summary against the
 baselines, and the recording. See [playtest/README.md](playtest/README.md) for batches and gates.
 
-**Through agent-env, with the `play` task.** `agent-env run openciv3 --task play --model <model>`
-prompts an A2A agent to play 50 turns and grades the game. The task names no agent, so agent-env
-deploys your configured default (`[agents] default_a2a_agent_id` in `.agentenv/config.toml`); pick
-another per run with `agent-env task run ... --a2a-agent-id <agent>`. A plain open-source install
-registers no agent, so register one that advertises the MCP config extension
-(`urn:agentenv:mcp-config/v1`) and set `LITELLM_BASE_URL` and `LITELLM_API_KEY` first.
+**Through agent-env, with the Claude player agent.** The repository ships an A2A agent for the bundle's
+tasks, `agents/claude-player`. It runs Claude Code against the env's tools, one session per prompt.
+
+- **Setup:** `scripts/install.sh --agent` does all of it:
+  - `agent-env openciv3 setup --agent` builds and registers the agent as `openciv3-claude`;
+  - `.agentenv/config.toml` makes it the default agent and names the model endpoint;
+  - the key lives in `~/.config/agentenv/secrets.yaml`, behind a `secret:` reference.
+- **Credentials:** the key may be an Anthropic API key, a `claude setup-token` token or a LiteLLM key.
+- **Running:** run agent-env from inside the checkout, so it finds that config:
+
+```bash
+agent-env run openciv3 --task play        # 50 turns on a Tiny map
+agent-env run openciv3 --task full-game   # 540 turns at Civilization III's own settings, as six 90-turn sessions
+```
+
+The full game took 46 minutes and about $13 on Sonnet 5.5, and scored 0.86 with the full-game verifier. Any
+other A2A agent that advertises `urn:agentenv:mcp-config/v1` works too: set it as the default, or pick it
+per run with `agent-env task run ... --a2a-agent-id <agent>`.
 [The bundle's README](src/agentenv_openciv3/bundles/openciv3/README.md) has the details.
 
 **By hand.** Serve the env and connect Claude Code to it:
@@ -154,7 +177,31 @@ A run reports `passed` only at 1.0: every check passes and the agent matches or 
 
 ## Results
 
-### A full game at Civilization III's own settings
+### The full game as an agent-env task
+
+`agent-env run openciv3 --task full-game`, on the patched engine (patches 0005-0009: AI science, governments
+and peace).
+- **Setup:** seed 1, a Standard map, 7 AIs, Regent, roaming barbarians, 540 turns.
+- **Agent:** Sonnet 5.5 as the Claude player agent, in six 90-turn sessions.
+- **Grade:** 0.86 with the full-game verifier.
+
+| At T540 | Agent (Rome) | Zululand (2nd) | Arabia (3rd) | Built-in AI in Rome's seat | `settler_bot` in Rome's seat |
+|---|---|---|---|---|---|
+| Score | **1,221** | 1,148 | 1,122 | 1,172 | 227 |
+| Cities | 33 | 19 | 23 | 22 | 5 |
+| Techs (of 83) | 45 | 49 | 42 | 41 | 26 |
+
+- **Rank:** first of 8, and every civ survived. With the engine fixes the AIs research, change government and
+  make peace, so the margin is narrow.
+- **World share:** 11.6% of the land and 17.6% of the population. Civ III's domination victory needs two
+  thirds of each.
+- **Government and combat:** the agent changed government three times (Monarchy, Republic, Democracy) and
+  attacked once.
+- **Play:** of its production, it chose 231 items and the engine 62. It made 1,353 tool calls, 3.8% of them
+  invalid.
+- **Cost:** about $13 and 46 minutes, including the recordings.
+
+### A full game at Civilization III's own settings, before the engine fixes
 
 On 2026-10-01 Sonnet 5.5 played a whole game: Standard map (100×100), 7 AI civs, Regent, roaming
 barbarians, 540 turns (4000 BC to AD 2050), seed 1. The harness rotated sessions at a 100K context cap
