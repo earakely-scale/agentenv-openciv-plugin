@@ -36,7 +36,7 @@ class SaveEnvRecordingTaskStep(TaskStep):
         super().__init__(id, version, depends_on=depends_on, fail_task_on_error=fail_task_on_error)
         self.env_id = env_id
         self.extension_uri = extension_uri
-        self.formats = list(formats) if formats is not None else ["mp4", "html"]
+        self.formats = list(formats) if formats is not None else None
         self.view = view
         self.timeout_seconds = timeout_seconds
 
@@ -58,8 +58,8 @@ class SaveEnvRecordingTaskStep(TaskStep):
         card = _recording_card(deployed.environment_card or {}, self.extension_uri)
         if card is None:
             raise RuntimeError(f"env {self.env_id!r} does not advertise {self.extension_uri}")
-        result = await client.invoke_extension(deployed.environment_url, card, self.extension_uri,
-                                               {"formats": self.formats, "view": self.view},
+        args = {"view": self.view, **({"formats": self.formats} if self.formats is not None else {})}
+        result = await client.invoke_extension(deployed.environment_url, card, self.extension_uri, args,
                                                timeout=self.timeout_seconds)
         for note in result.get("notes") or []:
             log.warning("save_env_recording: %s", note)
@@ -70,7 +70,7 @@ class SaveEnvRecordingTaskStep(TaskStep):
         for f in result["files"]:
             content = base64.b64decode(f["base64"])
             artifact = await asyncio.to_thread(
-                FileArtifact.put_bytes, f"{stem}.{f['name'].rpartition('.')[2]}",
+                FileArtifact.put_bytes, f"{stem}.{f['name'].partition('.')[2]}",
                 description=f"Recording of env {self.env_id!r}: {f['name']}", filename=f["name"],
                 content=content, content_type=f["content_type"])
             saved.append({"name": f["name"], "artifact_id": artifact.id, "version": artifact.version,

@@ -5,6 +5,7 @@ Build first with scripts/build-bridge.sh. CIVBRIDGE_CMD overrides the binary (de
 
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import queue
@@ -440,6 +441,17 @@ def test_null_autoplay_survives_defeat(launch):
     assert s["defeated"] and s["units"] == [] and s["blockers"] == []
     assert len(res["trajectory"]) == 61
     assert b.error("end_turn", skip_idle=True)["code"] == "game_over"
+
+
+def test_saves_keeps_every_turn_as_a_loadable_save(launch, tmp_path):
+    b = launch("--saves", str(tmp_path / "saves"))
+    b.call("new_game", seed=SEED, turn_limit=10)
+    b.call("autoplay", turns=3, policy="settler_bot")
+    kept = sorted(p.name for p in (tmp_path / "saves").iterdir())
+    assert kept == ["turn-0000.json.gz", "turn-0001.json.gz", "turn-0002.json.gz", "turn-0003.json.gz"]
+    plain = tmp_path / "turn-2.json"
+    plain.write_bytes(gzip.decompress((tmp_path / "saves" / "turn-0002.json.gz").read_bytes()))
+    assert launch().call("load", path=str(plain))["turn"] == 2
 
 
 def test_watchdog_answers_timeout_and_exits(launch):

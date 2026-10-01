@@ -54,14 +54,20 @@ def _docker_platform() -> str:
               help="Platform to build for. Default: the Docker host's (linux/arm64 on Apple Silicon); "
                    "remote sandboxes need linux/amd64.")
 @click.option("--image", help="Register this existing local image instead of building one.")
-def setup(env_id: str, source: Path | None, build_platform: str | None, image: str | None):
+@click.option("--client", is_flag=True,
+              help="Also install the real OpenCiv3 client, so recordings include its view (client_mp4). Adds about "
+                   "350 MB and fetches OpenCiv3's community art, which carries no license: keep the image private.")
+def setup(env_id: str, source: Path | None, build_platform: str | None, image: str | None, client: bool):
     """Build the env image and register it as an MCP server env on the `server` provider."""
     if image is None:
         root = _checkout(source)
         image = f"mcp-server-{env_id}"
         build_platform = build_platform or _docker_platform()
-        click.echo(f"Building {image} for {build_platform} from {root}")
-        if subprocess.run(["docker", "build", "--platform", build_platform, "-t", image, str(root)]).returncode:
+        with_client = " with the OpenCiv3 client" if client else ""
+        click.echo(f"Building {image} for {build_platform} from {root}{with_client}")
+        target = ["--target", "client"] if client else []
+        build = ["docker", "build", "--platform", build_platform, *target, "-t", image, str(root)]
+        if subprocess.run(build).returncode:
             raise click.ClickException("docker build failed")
     click.echo("Storing the image (docker save, can take a minute)")
     artifact = DockerImageArtifact.put(id=f"mcp-server-{env_id}", image_name=image,

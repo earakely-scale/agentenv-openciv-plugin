@@ -2,7 +2,7 @@
 
 The world is hand-made around the start at (12,10): coast to the west, a river, a few resources, a Greek
 city to the northeast and a barbarian that shows up on turn 3. Shapes follow protocol.md and
-docs/recording.md exactly. Flags: --record <dir>, --autosave <dir> (others are accepted and ignored).
+docs/recording.md exactly. Flags: --record <dir>, --autosave <dir>, --saves <dir> (others are accepted and ignored).
 Test hooks: FAKE_BRIDGE_STDERR_KB (log noise before ready), FAKE_BRIDGE_STDOUT_NOISE (a stray non-JSON
 line), FAKE_BRIDGE_CRASH_ON (a command that kills the process), and the commands `_sleep`, `_big`,
 `_crash`, `_city` (overwrite city fields) and `_game` (overwrite game attributes).
@@ -770,6 +770,7 @@ def main():
     opts = flags(sys.argv[1:])
     record = Path(opts["record"]) if opts.get("record") else None
     autosave = Path(opts["autosave"]) if opts.get("autosave") else None
+    saves = Path(opts["saves"]) if opts.get("saves") else None
     crash_on = os.environ.get("FAKE_BRIDGE_CRASH_ON")
     noise_kb = int(os.environ.get("FAKE_BRIDGE_STDERR_KB", "0"))
     for _ in range(noise_kb):
@@ -790,6 +791,10 @@ def main():
             autosave.mkdir(parents=True, exist_ok=True)
             blob = base64.b64encode(pickle.dumps(game)).decode()
             (autosave / "autosave.json").write_text(json.dumps({"pickle": blob}))
+        if saves:
+            saves.mkdir(parents=True, exist_ok=True)
+            with gzip.open(saves / f"turn-{game.turn:04d}.json.gz", "wt") as f:
+                json.dump({"format": 1, "bridge": {}, "game": {"turn": game.turn}}, f)
 
     def started():
         return {"turn": game.turn, "turn_limit": game.turn_limit, "seed": game.seed, "civ": game.civ,

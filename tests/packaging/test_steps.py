@@ -32,7 +32,8 @@ class FakeRecorder(AgentEnvEnvironment):
     @extension(RECORDING_EXTENSION, description="Render the recording so far.")
     async def recording(self, formats: list | None = None, view: str = "spectator", fps: int = 4) -> dict:
         self.requests.append({"formats": formats, "view": view})
-        out = [(f"openciv3-seed3.{fmt}", f"{fmt} of {view}".encode()) for fmt in formats or ["mp4", "html"]]
+        out = [(f"openciv3-seed3.{fmt.replace('client_mp4', 'client.mp4')}", f"{fmt} of {view}".encode())
+               for fmt in formats or ["mp4", "html"]]
         return {"turns": 3, "files": [{"name": name, "content_type": CONTENT_TYPES[name.rpartition(".")[2]],
                                        "bytes": len(data), "base64": base64.b64encode(data).decode()}
                                       for name, data in out]}
@@ -77,7 +78,7 @@ async def test_each_file_becomes_a_file_artifact(local_stores, caplog):
     async with deployed(env) as record:
         context = await step.execute(run_context(record))
 
-    assert env.requests == [{"formats": ["mp4", "html"], "view": "agent"}]
+    assert env.requests == [{"formats": None, "view": "agent"}]
     saved = context.metadata["recordings"]["recording"]
     assert [(f["name"], f["artifact_id"], f["version"], f["content_type"]) for f in saved] == [
         ("openciv3-seed3.mp4", "smoke-recording-i1.mp4", 1, "video/mp4"),
@@ -89,6 +90,14 @@ async def test_each_file_becomes_a_file_artifact(local_stores, caplog):
         assert f["bytes"] == len(artifact.load())
         assert artifact.object_url.startswith(f"file://{local_stores.resolve()}")
         assert any(artifact.id in m and artifact.object_url in m for m in caplog.messages)
+
+
+async def test_two_videos_keep_distinct_artifact_ids(local_stores):
+    step = SaveEnvRecordingTaskStep(id="recording", version=None, env_id="openciv3", formats=["mp4", "client_mp4"])
+    async with deployed(FakeRecorder()) as record:
+        context = await step.execute(run_context(record))
+    assert [f["artifact_id"] for f in context.metadata["recordings"]["recording"]] == [
+        "smoke-recording-i1.mp4", "smoke-recording-i1.client.mp4"]
 
 
 async def test_finds_the_extension_on_a_child_env_behind_a_gateway(local_stores):

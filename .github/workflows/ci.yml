@@ -74,3 +74,29 @@ jobs:
         with:
           name: smoke-recording
           path: recording/
+
+  # The image with the real OpenCiv3 client, on x86_64: the smoke task's recording must include the client's
+  # view, one frame per turn. Those frames carry the client's unlicensed art, so they are never uploaded.
+  client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          submodules: true
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - run: pip install .
+      - run: agent-env openciv3 setup --client
+      - run: |
+          agent-env run openciv3 --task smoke | tee smoke.log
+          grep -qE 'tasks/smoke\.json v[0-9]+: passed' smoke.log
+      - name: The client's view has every turn (31 saves, plus the 2 s hold on the last at 4 fps)
+        run: |
+          agent-env openciv3 recordings --out recording
+          ls -l recording
+          video=$(basename recording/*.client.mp4)
+          frames=$(docker run --rm -v "$PWD/recording:/r:ro" --entrypoint ffmpeg mcp-server-openciv3 \
+            -i "/r/$video" -map 0:v:0 -f null - 2>&1 | grep -oE 'frame= *[0-9]+' | tail -1 | grep -oE '[0-9]+')
+          echo "client video frames: $frames"
+          test "$frames" -ge 39

@@ -45,6 +45,8 @@ authoritative record of what the agent did.
 | `OPENCIV_SIZE`, `OPENCIV_OPPONENTS`, `OPENCIV_DIFFICULTY`, `OPENCIV_BARBARIANS` | as in `new_game` | Scenario |
 | `OPENCIV_BASELINES` | `1` | Compute the null and built-in-AI baselines for the same seed in the background |
 | `OPENCIV_ACTION_LOG` | unset | Path of the action log |
+| `OPENCIV_RECORD` | `1` | Record every turn for the recording extension |
+| `OPENCIV_CLIENT`, `GODOT`, `GODOT_ARGS` | set by the client image | The OpenCiv3 client install, the Godot binary and its arguments, for `client_mp4` (`docs/recording.md`) |
 | `MCP_HOST`, `MCP_PORT` | `0.0.0.0`, `18765` | HTTP bind (AgentEnv SDK) |
 
 ## Data plane and extensions

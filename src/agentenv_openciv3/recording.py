@@ -461,7 +461,7 @@ def _png(img: Image.Image, colors: int | None = None) -> bytes:
     return out.getvalue()
 
 
-class _Mp4:
+class Mp4:
     """Frames as fast PNGs in a temp dir, then ffmpeg (libx264, else mpeg4); the last frame is held for 2 s."""
 
     CODECS = (["-c:v", "libx264", "-preset", "veryfast", "-crf", "23"], ["-c:v", "mpeg4", "-q:v", "4"])
@@ -474,6 +474,10 @@ class _Mp4:
 
     def add(self, img: Image.Image) -> None:
         img.save(self.dir / f"f{self.count:05d}.png", compress_level=1)
+        self.count += 1
+
+    def add_png(self, path: Path) -> None:
+        shutil.copyfile(path, self.dir / f"f{self.count:05d}.png")
         self.count += 1
 
     def finish(self) -> bytes | None:
@@ -498,7 +502,7 @@ def render(snapshots: list[dict], *, formats: Iterable[str] = ("mp4", "html"), v
         raise ValueError("no snapshots to render")
     formats = list(dict.fromkeys(formats))
     r = Renderer(snapshots, view=view, actions=actions, baselines=baselines)
-    mp4 = _Mp4(fps) if "mp4" in formats else None
+    mp4 = Mp4(fps) if "mp4" in formats else None
     gif: list[Image.Image] = []
     pages: list[dict] = []
     last = None

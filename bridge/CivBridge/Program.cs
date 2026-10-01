@@ -16,8 +16,8 @@ Console.SetOut(Console.Error);
 Log.Logger = new LoggerConfiguration().MinimumLevel.Warning()
 	.WriteTo.Console(standardErrorFromLevel: LogEventLevel.Verbose).CreateLogger();
 
-const string Usage = "usage: CivBridge [--lua-dir <dir>] [--timeout <seconds per turn>] [--autosave <dir>] [--record <dir>]";
-string luaDir = Path.Combine(AppContext.BaseDirectory, "Lua"), autosaveDir = null, recordDir = null;
+const string Usage = "usage: CivBridge [--lua-dir <dir>] [--timeout <seconds per turn>] [--autosave <dir>] [--record <dir>] [--saves <dir>]";
+string luaDir = Path.Combine(AppContext.BaseDirectory, "Lua"), autosaveDir = null, recordDir = null, savesDir = null;
 double timeout = 60;
 for (int i = 0; i < args.Length; i++) {
 	string value = i + 1 < args.Length ? args[i + 1] : null;
@@ -25,6 +25,7 @@ for (int i = 0; i < args.Length; i++) {
 		case "--lua-dir" when value != null: luaDir = args[++i]; break;
 		case "--autosave" when value != null: autosaveDir = args[++i]; break;
 		case "--record" when value != null: recordDir = args[++i]; break;
+		case "--saves" when value != null: savesDir = args[++i]; break;
 		case "--timeout" when double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out timeout) && timeout > 0: i++; break;
 		default: return Fail(2, "bad_args", $"Unknown or incomplete argument '{args[i]}'. {Usage}");
 	}
@@ -37,8 +38,9 @@ bool ownAutosaveDir = autosaveDir == null;
 try {
 	autosaveDir = ownAutosaveDir ? Directory.CreateTempSubdirectory("civbridge-").FullName : Directory.CreateDirectory(autosaveDir).FullName;
 	if (recordDir != null) recordDir = Directory.CreateDirectory(recordDir).FullName;
+	if (savesDir != null) savesDir = Directory.CreateDirectory(savesDir).FullName;
 } catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) {
-	return Fail(2, "bad_args", $"Cannot create the --autosave or --record directory: {e.Message}");
+	return Fail(2, "bad_args", $"Cannot create the --autosave, --record or --saves directory: {e.Message}");
 }
 
 var watchdog = new Watchdog(output, TimeSpan.FromSeconds(timeout));
@@ -48,7 +50,7 @@ int status = EngineContext.Run(async () => {
 	new MsgSetAnimationsEnabled(false).send();
 	EngineStorage.ProcessNextMessageToEngine();
 
-	var session = new Session(luaDir, watchdog, autosaveDir, recordDir);
+	var session = new Session(luaDir, watchdog, autosaveDir, recordDir, savesDir);
 	output.Write(Json.Ok(0, new JsonObject { ["ready"] = true, ["version"] = Session.Version, ["autosave"] = session.AutosavePath }));
 	while (await Task.Run(input.ReadLine) is string line) {
 		if (line.Trim().Length > 0) output.Write(await Handle(session, line));

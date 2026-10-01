@@ -11,6 +11,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import tempfile
 import time
 import weakref
@@ -31,7 +32,7 @@ from agentenv_protocol import (
 from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from . import recording, render
+from . import client, recording, render
 from .actionlog import ActionLog
 from .baselines import POLICIES, Baselines
 from .bridge import DEAD, Bridge, BridgeError
@@ -111,6 +112,8 @@ class OpenCiv3Env(AgentEnvEnvironment):
         self.cmd = shlex.split(os.environ.get("CIVBRIDGE_CMD", "/opt/civbridge/CivBridge"))
         self.scenario = scenario_from_env()
         self.record = flag("OPENCIV_RECORD")
+        self.client_missing = client.missing() if self.record else "recording is off"
+        self.client = self.client_missing is None
         self.root = Path(tempfile.mkdtemp(prefix="openciv3-"))
         weakref.finalize(self, shutil.rmtree, self.root, True)
         self.games = 0
@@ -135,7 +138,8 @@ class OpenCiv3Env(AgentEnvEnvironment):
 
     def _bridge_cmd(self, game_dir: Path) -> list[str]:
         return [*self.cmd, "--autosave", str(game_dir / "autosave")] + (
-            ["--record", str(game_dir / "record")] if self.record else [])
+            ["--record", str(game_dir / "record")] if self.record else []) + (
+            ["--saves", str(game_dir / "saves")] if self.client else [])
 
     async def _new_game(self, scenario: dict | None = None) -> None:
         """Start a game in a new bridge; the running game is replaced only once the new one has started."""
@@ -638,13 +642,15 @@ class OpenCiv3Env(AgentEnvEnvironment):
                 "trajectory": [{"turn": t, "score": score} for t, score in sorted(trajectory.items())]}
 
     @extension("urn:openciv3:recording/v1",
-               description="Render the game so far: mp4 (gif without ffmpeg), html replay, or png of the last turn.")
+               description="Render the game so far: mp4 (gif without ffmpeg), html replay, png of the last turn, or "
+                           "client_mp4 (the real OpenCiv3 client's view, in images built with --target client).")
     async def recording(self, formats: list[str] | None = None, view: Literal["spectator", "agent"] = "spectator",
                         fps: int = 4) -> dict:
         self.harness["extension_calls"] += 1
-        formats = formats or ["mp4", "html"]
-        if unknown := set(formats) - set(recording.FORMATS):
-            raise ValueError(f"unknown formats {sorted(unknown)}; valid: {', '.join(recording.FORMATS)}")
+        formats = formats or ["mp4", "html", *([client.FORMAT] if self.client else [])]
+        valid = [*recording.FORMATS, client.FORMAT]
+        if unknown := set(formats) - set(valid):
+            raise ValueError(f"unknown formats {sorted(unknown)}; valid: {', '.join(valid)}")
         if not 1 <= fps <= 30:
             raise ValueError("fps must be 1-30")
         if not self.record:
@@ -655,8 +661,19 @@ class OpenCiv3Env(AgentEnvEnvironment):
             actions = {t: list(lines) for t, lines in self.actions.timeline.items()}
             baselines = self.baselines.trajectories() if self.baselines else {}
             name = f"openciv3-seed{self.game['seed']}" + ("-agent" if view == "agent" else "")
-        files, notes = await asyncio.to_thread(recording.render, snapshots, formats=formats, view=view, fps=fps,
-                                               name=name, actions=actions, baselines=baselines)
+            saves = self.game_dir / "saves"
+        own = [f for f in formats if f in recording.FORMATS]
+        files, notes = await asyncio.to_thread(recording.render, snapshots, formats=own, view=view, fps=fps, name=name,
+                                               actions=actions, baselines=baselines) if own else ([], [])
+        if client.FORMAT in formats:
+            if not self.client:
+                notes.append(f"{client.FORMAT} skipped: {self.client_missing}")
+            else:
+                try:
+                    video = await asyncio.to_thread(client.render, saves, fps=fps)
+                    files.append(recording.File(f"{name}.client.mp4", "video/mp4", video))
+                except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+                    notes.append(f"{client.FORMAT} failed: {e}")
         return {"turns": len(snapshots), "notes": notes,
                 "files": [{"name": f.name, "content_type": f.content_type, "bytes": len(f.data),
                            "base64": base64.b64encode(f.data).decode()} for f in files]}

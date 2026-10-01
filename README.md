@@ -185,12 +185,16 @@ self-contained HTML replay with a turn slider. See [docs/recording.md](docs/reco
 
 - **In agent-env:** every task in the bundle ends with the `save_env_recording` step, in parallel
   with grading. It stores each file as a `file` artifact named
-  `<task id>-recording-<instance id>.<ext>`. `agent-env openciv3 recordings` lists them, and
+  `<task id>-recording-<instance id>.<suffix>`. `agent-env openciv3 recordings` lists them, and
   `agent-env openciv3 recordings <instance id> --out <dir>` copies one run's files out (`agent-env
   run` prints the instance id). The step works with any env that advertises an extension of that
   shape, and a failed recording never stops grading.
 - **In the playtest harness:** every run directory gets `recording.mp4` and `replay.html`, and
   `playtest/replay.py` rebuilds them for older runs.
+- **The real game's view:** `agent-env openciv3 setup --client` builds the image with the OpenCiv3 client
+  (Godot, rendering on the CPU, no GPU or display). Recordings then also include `client.mp4`, one frame per
+  turn of the real client with its art. It adds about a minute per 60 turns and about 350 MB. The art carries
+  no licence, so keep that image and its videos private; see [docs/recording.md](docs/recording.md#5-the-real-clients-view-client_mp4).
 - `OPENCIV_RECORD=0` turns recording off.
 
 ## How it works
@@ -266,6 +270,11 @@ The image also contains Blast (Apache-2.0), Serilog (Apache-2.0), MoonSharp (BSD
 ini-parser (MIT), the .NET runtime (MIT) and a static FFmpeg build (GPL-3.0-or-later); the image
 carries their licences in `/opt/civbridge/licenses/`. See
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+The optional client image (`--target client`) adds the OpenCiv3 client (MIT), Godot (MIT), the .NET
+runtime, Xvfb and Mesa, and OpenCiv3's community art from
+[C7-Game/Assets](https://github.com/C7-Game/Assets). That art carries no licence: it is fetched when the
+image is built, never stored in this repository, and the image and its videos are for private use.
 
 Civilization and Civilization III are trademarks of Take-Two Interactive Software. This project is
 not affiliated with or endorsed by Take-Two, Firaxis Games or the OpenCiv3 project, and it uses no

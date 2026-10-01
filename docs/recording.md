@@ -34,7 +34,8 @@ The env starts the bridge with `--record` unless `OPENCIV_RECORD=0`, and keeps t
 in memory, per turn. The extension `urn:openciv3:recording/v1` renders the recording so far:
 
 - **Args:**
-  - `formats`: list, default `["mp4", "html"]`; any of `mp4`, `gif`, `html`, `png` (the last turn).
+  - `formats`: list, default `["mp4", "html"]`, plus `client_mp4` in an image with the client (section 5); any of
+    `mp4`, `gif`, `html`, `png` (the last turn) and `client_mp4`.
   - `view`: `spectator` (default, everything) or `agent` (only tiles the player has explored).
   - `fps`: default 4.
 - **Result:** `{"turns": n, "files": [{"name": "openciv3-seed3.mp4", "content_type": "video/mp4", "bytes": n, "base64": "..."}]}`.
@@ -63,13 +64,14 @@ point. Its fields:
 |---|---|---|
 | `env_id` | required | The deployed env to record |
 | `extension_uri` | `urn:openciv3:recording/v1` | The env extension that returns `{"files": [...]}` |
-| `formats` | `["mp4", "html"]` | Passed to the extension |
+| `formats` | the env's default | Passed to the extension when set |
 | `view` | `spectator` | Passed to the extension |
 | `timeout_seconds` | `300` | For the extension call |
 | `fail_task_on_error` | `false` | A failed recording never fails the game |
 
 **What it does:**
-- Each returned file is stored as a `file` artifact, `<task id>-recording-<instance id>.<ext>`, so bulk output goes to the object store rather than the context.
+- Each returned file is stored as a `file` artifact, `<task id>-recording-<instance id>.<suffix>`, so bulk output goes to the object store rather than the context. The suffix is everything after the first dot of the file's name (`mp4`, `html`, `client.mp4`), so two videos keep separate artifacts.
+- It logs the extension's notes (a format that was skipped or fell back) as warnings.
 - It records `context.metadata["recordings"][<step id>] = [{"name", "artifact_id", "version", "bytes", "content_type"}]`.
 - It logs one line per file, saying where the file is.
 - It works with any env that advertises an extension returning that shape, so it can later move to agent-env core unchanged.
@@ -80,3 +82,31 @@ Every task in the `openciv3` bundle ends with this step, after the game and in p
 
 - **Playtests:** `playtest/run.py` calls the extension at the end of every game and writes `recording.mp4` and `replay.html` into the run directory. The batch report links them.
 - **Replays:** `playtest/replay.py <run dir>` rebuilds the recording of a game played before recording existed. It replays the run's `actions.jsonl` against a fresh bridge with the same seed and scenario; the engine is deterministic, so the replay matches. It checks that the final score equals `summary.json` and fails if not.
+
+## 5. The real client's view (`client_mp4`)
+
+The image's `client` target (`docker build --target client`, or `agent-env openciv3 setup --client`) adds
+the OpenCiv3 client itself: Godot 4.4.1 .NET on Xvfb with Mesa's CPU renderer, so it needs no GPU or
+display. In that image:
+
+- **Saves:** the env starts the bridge with `--saves <dir>`, which keeps every turn's autosave as
+  `turn-NNNN.json.gz`.
+- **Rendering:** `client_mp4` loads each save into the client, captures the map as the player sees it at
+  the start of that turn, and joins the frames into `<name>.client.mp4`. A frame shows the real art, fog of
+  war, borders, units, the minimap and the status box. The capture is `client/FrameCapture.cs`, an
+  autoload added to a copy of the client when the image is built; `vendor/OpenCiv3` is not modified.
+- **Defaults:** `client_mp4` is in the env's default formats there, so the bundle's tasks record it with
+  no change.
+- **Cost:** about 3 s to start plus 0.8 to 1.3 s per turn on 4 CPUs, so a 60-turn game renders in about a
+  minute. Raise the step's `timeout_seconds` (300) for games over about 200 turns. The image is about
+  350 MB larger.
+- **Failures:** when the client is missing or fails, the other formats are still returned and the reason
+  is a note.
+
+**Art licensing.** The client draws OpenCiv3's community art from
+[C7-Game/Assets](https://github.com/C7-Game/Assets), which carries no licence. The image fetches it at
+build time, and it is never committed here. Keep client images and their videos private: do not push
+them to a public registry or publish the videos.
+
+[client/README.md](../client/README.md) has the capture's details, measurements and how to run it on a
+Mac for debugging.

@@ -258,3 +258,6 @@ Implemented. These extend the sections above; folding them in is still to do.
   - The exact sites are in the robustness audit.
 - **Autosave and `load`:** every human turn start writes `<autosave dir>/autosave.json`. The `--autosave <dir>` flag sets the directory; it defaults to a temp dir. A `load {path}` command restores a save (a new process plus `load`), so the env can recover from a bridge crash.
 - **Recording:** `--record <dir>` and the `world` command, as specified in `docs/recording.md`.
+- **Per-turn saves:** `--saves <dir>` also keeps every turn's autosave as `<dir>/turn-NNNN.json.gz`, for
+  renderers that load engine saves (the client's view in `docs/recording.md`). Each one loads with `load`
+  once decompressed.

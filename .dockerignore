@@ -2,7 +2,8 @@
 !vendor/OpenCiv3/C7Engine
 !vendor/OpenCiv3/QueryCiv3
 !vendor/OpenCiv3/Blast
-!vendor/OpenCiv3/C7/Lua
+!vendor/OpenCiv3/C7
+!vendor/OpenCiv3/ConvertCiv3Media
 !vendor/OpenCiv3/LICENSE
 !bridge
 !patches
@@ -13,6 +14,10 @@
 !LICENSE
 !NOTICE
 !THIRD_PARTY_NOTICES.md
+!client
+client/README.md
+vendor/OpenCiv3/C7/Assets
+**/.godot
 **/bin
 **/obj
 **/__pycache__

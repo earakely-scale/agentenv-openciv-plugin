@@ -28,7 +28,7 @@ def fake_cmd():
 def env_vars(monkeypatch, tmp_path):
     """The env's configuration: the fake bridge, no baselines, an action log in tmp_path."""
     values = {"CIVBRIDGE_CMD": FAKE_CMD, "OPENCIV_BASELINES": "0", "OPENCIV_SEED": "3", "OPENCIV_TURN_LIMIT": "8",
-              "OPENCIV_ACTION_LOG": str(tmp_path / "actions.jsonl")}
+              "OPENCIV_ACTION_LOG": str(tmp_path / "actions.jsonl"), "OPENCIV_CLIENT": str(tmp_path / "no-client")}
     for k, v in values.items():
         monkeypatch.setenv(k, v)
     for k in ("ENVIRONMENT_NAME", "OPENCIV_SIZE", "OPENCIV_OPPONENTS", "OPENCIV_DIFFICULTY", "OPENCIV_BARBARIANS"):

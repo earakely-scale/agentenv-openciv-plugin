@@ -1,5 +1,6 @@
 # The OpenCiv3 env: CivBridge (.NET 8, self-contained) driven by the Python MCP server.
 # Build from the repo root: docker build -t openciv3 .
+# With the real OpenCiv3 client as a recording renderer (docs/recording.md): docker build --target client ...
 
 # The bridge is cross-compiled on the build host, so an arm64 host building amd64 never emulates .NET.
 FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:8.0 AS bridge
@@ -22,7 +23,7 @@ RUN --mount=type=cache,target=/root/.nuget/packages \
  && cp /usr/share/dotnet/LICENSE.txt /out/licenses/dotnet-LICENSE.txt \
  && cp /usr/share/dotnet/ThirdPartyNotices.txt /out/licenses/dotnet-ThirdPartyNotices.txt
 
-FROM python:3.12-slim
+FROM python:3.12-slim AS env
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 # The server's dependencies from pyproject.toml, without agentenv-framework (the control plane, which
 # the CLI plugin, the bundle and the save_env_recording step use), and with the protocol pinned to the
@@ -41,3 +42,50 @@ RUN pip install --no-deps /tmp/pkg && rm -rf /tmp/pkg
 ENV CIVBRIDGE_CMD=/opt/civbridge/CivBridge DOTNET_EnableWriteXorExecute=0
 EXPOSE 18765
 CMD ["python3", "-m", "agentenv_openciv3.server"]
+
+# The client target: Godot 4.4.1 .NET runs the OpenCiv3 client on Xvfb with Mesa's CPU renderer (no GPU), and
+# loads each turn's save to capture the map. The art is OpenCiv3's community art, fetched here and never
+# committed; it carries no license, so never publish this image or push it to a public registry.
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS godot
+ARG GODOT_VERSION=4.4.1
+ARG BUILDARCH
+ARG TARGETARCH
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip && rm -rf /var/lib/apt/lists/*
+RUN for a in $(echo "$BUILDARCH $TARGETARCH" | tr ' ' '\n' | sort -u); do \
+      g=$([ "$a" = arm64 ] && echo arm64 || echo x86_64); \
+      curl -fsSL -o /tmp/godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_mono_linux_${g}.zip" \
+      && unzip -q /tmp/godot.zip -d /tmp/g && rm /tmp/godot.zip \
+      && mv /tmp/g/Godot_v${GODOT_VERSION}-stable_mono_linux_${g} /opt/godot-$a && rmdir /tmp/g \
+      && ln -s Godot_v${GODOT_VERSION}-stable_mono_linux.${g} /opt/godot-$a/godot || exit 1; \
+    done
+
+# The C# build and the resource import do not depend on the CPU, so they run natively on the build host.
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:8.0-bookworm-slim AS client-build
+ARG BUILDARCH
+ARG ASSETS_REF=716625cc6c68e872f253c48efe7f934b77d9ba0c
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+RUN apt-get update && apt-get install -y --no-install-recommends git procps libfontconfig1 && rm -rf /var/lib/apt/lists/*
+RUN git init -q /assets && git -C /assets fetch -q --depth 1 https://github.com/C7-Game/Assets.git "$ASSETS_REF" \
+ && git -C /assets checkout -q FETCH_HEAD
+COPY --from=godot /opt/godot-${BUILDARCH} /opt/godot
+COPY vendor/OpenCiv3 /src/vendor/OpenCiv3
+COPY client /src/client
+RUN --mount=type=cache,target=/root/.nuget/packages \
+    GODOT=/opt/godot/godot ASSETS_REF=$ASSETS_REF ASSETS_SRC=/assets /src/client/prepare.sh /work \
+ && rm -rf /work/OpenCiv3/*/obj /work/OpenCiv3/C7/.godot/mono/temp/obj /work/OpenCiv3/C7/.godot/editor
+
+FROM env AS client
+ARG TARGETARCH
+RUN apt-get update && apt-get install -y --no-install-recommends procps xvfb xauth libicu76 \
+      libgl1 libglx-mesa0 libgl1-mesa-dri libegl1 libxcursor1 libxinerama1 libxrandr2 libxi6 libxkbcommon0 libfontconfig1 \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=mcr.microsoft.com/dotnet/runtime:8.0-bookworm-slim /usr/share/dotnet /usr/share/dotnet
+COPY --from=godot /opt/godot-${TARGETARCH} /opt/godot
+COPY --from=client-build /work/OpenCiv3 /opt/openciv3-client/OpenCiv3
+COPY client/capture.sh client/deadline.sh /opt/openciv3-client/
+ENV DOTNET_ROOT=/usr/share/dotnet GODOT=/opt/godot/godot OPENCIV_CLIENT=/opt/openciv3-client LIBGL_ALWAYS_SOFTWARE=1 \
+    GODOT_ARGS="--rendering-driver opengl3 --rendering-method gl_compatibility"
+RUN "$GODOT" --version >/dev/null
+
+# The default target is the env without the client.
+FROM env

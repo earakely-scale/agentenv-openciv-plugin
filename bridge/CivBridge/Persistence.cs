@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -41,6 +42,22 @@ sealed partial class Session {
 		} catch (Exception e) {
 			// A failed autosave must not fail the turn; the previous autosave stays in place.
 			Log.Warning(e, "autosave to {Path} failed", AutosavePath);
+			return;
+		}
+		if (savesDir != null) KeepSave();
+	}
+
+	/// <summary>--saves keeps every turn's autosave as turn-NNNN.json.gz, for renderers that load engine saves.</summary>
+	void KeepSave() {
+		string path = System.IO.Path.Combine(savesDir, $"turn-{gd.turn:0000}.json.gz"), tmp = path + ".tmp";
+		try {
+			using (FileStream source = File.OpenRead(AutosavePath))
+			using (FileStream file = File.Create(tmp))
+			using (var gzip = new GZipStream(file, CompressionLevel.Fastest))
+				source.CopyTo(gzip);
+			File.Move(tmp, path, overwrite: true);
+		} catch (Exception e) {
+			Log.Warning(e, "keeping the save {Path} failed", path);
 		}
 	}
 

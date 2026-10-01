@@ -140,6 +140,22 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
+## In the client image only (`docker build --target client`)
+
+The default image does not contain these. The `client` target adds them, for recordings with the real
+client's view (docs/recording.md).
+
+| Component | Licence | Copyright | Source |
+|---|---|---|---|
+| OpenCiv3 client (`C7`), built from the pinned submodule plus `client/FrameCapture.cs` | MIT | OpenCiv3 contributors | <https://github.com/C7-Game/OpenCiv3> |
+| Godot Engine 4.4.1 .NET (editor binary and GodotSharp) | MIT | Godot Engine contributors | <https://github.com/godotengine/godot> |
+| .NET 8 runtime (shared, in `/usr/share/dotnet`) | MIT | .NET Foundation and Contributors | <https://github.com/dotnet/runtime> |
+| Xvfb, Mesa and the other Debian packages the target installs | their own licences, in `/usr/share/doc/*/copyright` | their authors | Debian |
+| OpenCiv3's art, from `C7-Game/Assets` | **none**: mostly community art from CivFanatics, not licensed for redistribution | its artists | <https://github.com/C7-Game/Assets>, at the commit the client pins |
+
+Because of the art, the client image and anything rendered with it are for private use: do not publish
+them.
+
 ## In the Python environment
 
 The env server and its dependencies are installed from PyPI: `agentenv-framework-protocol`

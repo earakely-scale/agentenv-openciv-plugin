@@ -9,7 +9,7 @@ using Serilog;
 namespace CivBridge;
 
 /// <summary>One game, driven by protocol commands. Everything here runs on the engine thread.</summary>
-sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDir, string recordDir) {
+sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDir, string recordDir, string savesDir) {
 	public const string Version = "0.2.0";
 	public const int MaxTurnLimit = 1000;
 
