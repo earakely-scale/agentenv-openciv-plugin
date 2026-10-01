@@ -49,8 +49,9 @@ class PlayerConfig(AgentConfig):
     effort: str | None = None
 
 
-def model_env(environ: dict[str, str]) -> dict[str, str]:
-    """Claude Code's credential settings for the endpoint agent-env passes (LITELLM_BASE_URL, LITELLM_API_KEY)."""
+def model_env(environ: dict[str, str], model: str) -> dict[str, str]:
+    """Claude Code's settings for the endpoint agent-env passes (LITELLM_BASE_URL, LITELLM_API_KEY). Behind a proxy,
+    Claude Code's background calls use the configured model too, since the proxy may not serve its default names."""
     key, base = environ.get("LITELLM_API_KEY", ""), environ.get("LITELLM_BASE_URL", "").rstrip("/")
     env = {}
     if key.startswith("sk-ant-oat"):
@@ -61,6 +62,7 @@ def model_env(environ: dict[str, str]) -> dict[str, str]:
         env["ANTHROPIC_AUTH_TOKEN"] = key
     if base and "api.anthropic.com" not in base:
         env["ANTHROPIC_BASE_URL"] = base.removesuffix("/v1")
+        env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = env["ANTHROPIC_SMALL_FAST_MODEL"] = model
     return env
 
 
@@ -127,7 +129,7 @@ class ClaudePlayer(AgentEnvAgent):
             proc = await asyncio.create_subprocess_exec(
                 *claude_cmd(config, mcp_file, list(request.mcp_servers)), cwd=tmp,
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-                env={**os.environ, **model_env(dict(os.environ))}, limit=64 * 1024 * 1024)
+                env={**os.environ, **model_env(dict(os.environ), config.model)}, limit=64 * 1024 * 1024)
             try:
                 return await asyncio.wait_for(self._play(proc, prompt, stop, config), config.timeout_seconds)
             except TimeoutError:

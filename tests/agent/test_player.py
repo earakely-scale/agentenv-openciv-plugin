@@ -12,12 +12,16 @@ spec.loader.exec_module(player)
 
 
 def test_each_kind_of_key_becomes_the_claude_code_setting_for_it():
-    assert player.model_env({"LITELLM_API_KEY": "sk-ant-oat01-x"}) == {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-x"}
-    assert player.model_env({"LITELLM_API_KEY": "sk-ant-api03-x", "LITELLM_BASE_URL": "https://api.anthropic.com"}) == {
-        "ANTHROPIC_API_KEY": "sk-ant-api03-x"}
-    assert player.model_env({"LITELLM_API_KEY": "sk-proxy", "LITELLM_BASE_URL": "https://llm.example.com/v1/"}) == {
-        "ANTHROPIC_AUTH_TOKEN": "sk-proxy", "ANTHROPIC_BASE_URL": "https://llm.example.com"}
-    assert player.model_env({}) == {}
+    oauth = {"LITELLM_API_KEY": "sk-ant-oat01-x"}
+    assert player.model_env(oauth, "sonnet") == {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-x"}
+    direct = {"LITELLM_API_KEY": "sk-ant-api03-x", "LITELLM_BASE_URL": "https://api.anthropic.com"}
+    assert player.model_env(direct, "sonnet") == {"ANTHROPIC_API_KEY": "sk-ant-api03-x"}
+    proxy = {"LITELLM_API_KEY": "sk-proxy", "LITELLM_BASE_URL": "https://llm.example.com/v1/"}
+    assert player.model_env(proxy, "anthropic/claude-sonnet-5-5") == {
+        "ANTHROPIC_AUTH_TOKEN": "sk-proxy", "ANTHROPIC_BASE_URL": "https://llm.example.com",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "anthropic/claude-sonnet-5-5",
+        "ANTHROPIC_SMALL_FAST_MODEL": "anthropic/claude-sonnet-5-5"}
+    assert player.model_env({}, "sonnet") == {}
 
 
 def test_mcp_servers_become_a_claude_code_mcp_config():
