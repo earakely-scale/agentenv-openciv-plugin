@@ -69,3 +69,20 @@ def action_log(env_vars):
     """Reads the action log back as a list of rows."""
     path = Path(env_vars["OPENCIV_ACTION_LOG"])
     return lambda: [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+@pytest.fixture
+async def tool_env(env_vars, monkeypatch):
+    """A factory for an env with extra environment variables (set before its bridge starts), and its Tools."""
+    made = []
+
+    async def make(**overrides):
+        for k, v in overrides.items():
+            monkeypatch.setenv(k, v)
+        e = OpenCiv3Env()
+        e.create_app()
+        made.append(e)
+        return e, Tools(e)
+    yield make
+    for e in made:
+        await e.close()

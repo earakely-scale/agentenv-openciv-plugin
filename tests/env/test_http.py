@@ -17,7 +17,7 @@ pytestmark = pytest.mark.anyio
 
 SRC = Path(__file__).resolve().parents[2] / "src"
 TOOLS = {"get_turn_brief", "list_units", "view_map", "find_city_sites", "unit_order", "city_info", "set_production",
-         "research", "end_turn", "plan"}
+         "research", "set_rates", "buy", "end_turn", "plan"}
 
 
 def free_port() -> int:
@@ -57,9 +57,11 @@ async def test_card(server):
     assert {t["name"] for t in card["capabilities"]["tools"]} == TOOLS
     assert card["capabilities"]["operations"] == ["data/reset", "data/add", "data/get"]
     ext = {e["uri"]: e for e in card["capabilities"]["extensions"]}
-    assert set(ext) == {"urn:openciv3:new-game/v1", "urn:openciv3:autoplay/v1"}
+    assert set(ext) == {"urn:openciv3:new-game/v1", "urn:openciv3:autoplay/v1", "urn:openciv3:recording/v1"}
     assert ext["urn:openciv3:autoplay/v1"]["params"]["methods"]["autoplay"]["request"]["properties"]["policy"]["enum"] \
-        == ["null", "found_capital", "engine_ai"]
+        == ["null", "found_capital", "engine_ai", "settler_bot"]
+    recording = ext["urn:openciv3:recording/v1"]["params"]["methods"]["recording"]["request"]["properties"]
+    assert recording["view"]["enum"] == ["spectator", "agent"] and recording["fps"]["default"] == 4
     assert client.mcp_path(card) == "/mcp"
     unit_order = client.find_tool(card, "unit_order")
     assert unit_order["inputSchema"]["required"] == ["unit", "order"]
@@ -101,6 +103,10 @@ async def test_data_plane_and_extensions(server):
     assert res["turn"] == 5 and len(res["trajectory"]) == 4
     [part] = (await client.get_data(server)).parts
     assert (part.data["seed"], part.data["turn"]) == (21, 5)
+    assert part.data["harness"] == {"autoplay_turns": 4, "new_games": 3, "extension_calls": 2, "engine_restarts": 0}
+    args = {"formats": ["png"], "view": "agent"}
+    rec = await client.invoke_extension(server, card, "urn:openciv3:recording/v1", args)
+    assert rec["turns"] == 5 and [f["name"] for f in rec["files"]] == ["openciv3-seed21-agent.png"]
     async with httpx.AsyncClient() as http:
         r = await http.post(f"{server}/agentenv/ext/autoplay", json={"turns": 1, "policy": "random"})
     assert r.status_code == 400 and r.json()["error"]["code"] == "invalid_params"

@@ -22,11 +22,13 @@ def unit(n, kind, x, y, status="idle", needs=False, target=None):
             "orders": orders, "needs_orders": needs}
 
 
-def city(n, name, x, y, size, item="Warrior"):
+def city(n, name, x, y, size, item="Warrior", **fields):
     return {"id": f"c{n}", "name": name, "x": x, "y": y, "size": size, "capital": n == 1, "food_stored": 4,
             "food_needed": 20, "food_per_turn": 2, "turns_to_grow": 8, "shields_per_turn": 3, "producing": item,
-            "production_stored": 12, "production_cost": 30, "turns_to_complete": 6, "disorder": False,
-            "buildings": ["Palace"] if n == 1 else []}
+            "producing_source": "agent", "production_stored": 12, "production_cost": 30, "turns_to_complete": 6,
+            "disorder": False, "happy": 0, "content": min(size, 2), "unhappy": max(0, size - 3), "defenders": 1,
+            "riot_risk": False, "capped": False, "shields_lost_last_turn": 0,
+            "buildings": ["Palace"] if n == 1 else [], **fields}
 
 
 def state(n_cities, idle, standing, n_events, turn=34):
@@ -60,7 +62,7 @@ def state(n_cities, idle, standing, n_events, turn=34):
 
 SITE = {"x": 17, "y": 7, "score": 41, "dist": 2, "dir": "NE", "turns": 2, "terrain": "Grassland", "river": True,
         "coastal": False, "yield": {"food": 18, "shields": 6, "commerce": 4}}
-BASELINES = {"engine_ai": score(3, 6, 27, 6), "null": score(1, 3, 9, 4)}
+BASELINES = {"engine_ai": score(3, 6, 27, 6), "settler_bot": score(4, 7, 30, 5), "null": score(1, 3, 9, 4)}
 
 
 def brief_of(s, plan_chars):
@@ -72,8 +74,8 @@ def brief_of(s, plan_chars):
 def test_typical_brief_fits_600_tokens():
     text = brief_of(state(3, idle=2, standing=4, n_events=4), plan_chars=300)
     assert len(text) / 4 < 600, len(text) / 4
-    assert "VS T34 (same seed) built-in AI 99 (3 cities, pop 6, techs 6) · do-nothing 44 (1 city, pop 3, techs 4)" \
-        in text
+    assert ("VS T34 (same seed) built-in AI 99 (3 cities, pop 6, techs 6) · settler bot 111 (4 cities, pop 7, "
+            "techs 5) · do-nothing 44 (1 city, pop 3, techs 4)") in text
     assert "!! Barbarian Warrior 3 tiles E of Veii (19,13)" in text
 
 
@@ -85,13 +87,14 @@ def test_crowded_brief_stays_bounded():
     assert "+4 more idle units → list_units()" in text
     assert "+6 more" in text and "+3 more → city_info()" in text
     events = next(line for line in text.splitlines() if line.startswith("EVENTS"))
-    assert "!! Barbarian Warrior" in events and events.endswith("+3 more")
+    assert "learned Pottery" in events and events.endswith("+3 more")
+    assert "Barbarian" not in events  # threats are the first to go when a turn has too many events
 
 
 def test_brief_sections():
     text = brief_of(state(2, idle=1, standing=5, n_events=2), plan_chars=40)
     lines = text.splitlines()
-    assert lines[0] == "T34/60 · Rome · Despotism · gold 34 (+3/t)"
+    assert lines[0] == "T34/60 · Rome · Despotism · gold 34 (+3/t) · tax 40% sci 60% lux 0%"
     assert lines[1] == "RESEARCH Bronze Working 8/20 → 3t (then Currency)"
     assert lines[2] == "SCORE 97 (cities 2, pop 9, tiles 30, techs 5) · explored 18.5%"
     assert lines[3] == "PACE cities 2 BEHIND (3 by T30) · techs 5 ok (next: 6 by T40)"
@@ -100,7 +103,7 @@ def test_brief_sections():
             in lines)
     assert ("STANDING u2 Warrior exploring (auto) · u3 Worker auto-working · u4 Warrior fortified · "
             "u5 Settler settle→(21,7) 3 NE · u6 Warrior goto→(9,13) 2 SW") in lines
-    assert "  c1 Rome (12,10) size 2 · food +2/t grows 8t · Settler 12/30 → 6t (completes only at size 3+)" in lines
+    assert "  c1 Rome (12,10) size 2 · food +2/t grows 8t · Settler 12/30 → 6t (delivered at size 3)" in lines
     assert lines[-1].startswith("PLAN (T30) Expand to the river;")
 
 
@@ -155,7 +158,7 @@ def test_map_budget_and_layout():
     assert row20[col] == "@"
     row21 = next(line for line in lines if line.startswith("   21 "))
     assert row21[header.index(" 23")] == "!"
-    assert "!! foreign units: Barbarians Warrior x2 (23,21) 2 E" in text
+    assert "!! hostile units: Barbarians Warrior x2 (23,21) 2 E" in text
     assert "good city sites: (22,18) score 41 2 E" in text
     assert "your units: u2 Warrior (20,20) here" in text
     big = render.map_view(tiles_around(20, 20, 6), label="at (20,20)", width=60, wrap_x=True)
@@ -223,6 +226,7 @@ def test_city_detail_and_techs():
         "tiles_worked": [{"x": 13, "y": 9}, {"x": 12, "y": 8}, {"x": 11, "y": 11}]}
     assert render.city_detail(c) == (
         "c1 Rome (12,10) size 3 capital · food 4/20 +2/t grows 8t · shields 3/t · works 3 tiles\n"
+        "  mood happy 0 content 2 unhappy 0 · defenders 1\n"
         "  producing Warrior 12/30 → 6t\n"
         "  buildings: Palace\n"
         "  can build: Settler 30 (6t) · Wealth")
@@ -241,3 +245,128 @@ def test_resolve_name_takes_only_unambiguous_matches():
     assert resolve_name("Pyramids", options) is None
     assert resolve_name("Bronze working", ["Bronze Working", "Iron Working"]) == "Bronze Working"
     assert resolve_name("Working", ["Bronze Working", "Iron Working"]) is None
+
+
+def troubled_state():
+    """Rome rioting, Veii one citizen from rioting, Antium bare with a full Settler, and idle gold."""
+    s = state(3, idle=0, standing=0, n_events=0)
+    s["gold"] = 250
+    rome, veii, antium = s["cities"]
+    rome.update(size=4, disorder=True, unhappy=2, content=2, defenders=0, shields_per_turn=0, turns_to_complete=None)
+    veii.update(riot_risk=True, defenders=1)
+    antium.update(producing="Settler", size=2, production_stored=30, capped=True, turns_to_complete=4, defenders=0,
+                  shields_lost_last_turn=3)
+    s["units"] = [unit(5, "Warrior", 20, 14, status="fortified"), unit(6, "Warrior", 12, 10, status="fortified")]
+    s["blockers"] = [{"kind": "disorder", "id": "c1", "message": "Rome is in civil disorder: raise luxury, move a "
+                      "military unit in, or let it shrink."}]
+    return s
+
+
+def test_brief_names_disorder_and_its_fixes():
+    text = render.brief(troubled_state(), start_techs=2)
+    assert ('  !! Rome is in civil disorder: raise luxury, move a military unit in, or let it shrink → '
+            'set_rates(science=4, luxury=2) or unit_order(unit="u5", order="goto", x=12, y=10) then fortify') in text
+    assert "  c1 Rome (12,10) size 4 · food +2/t grows 8t · Settler 12/30 no progress (city in disorder) · " \
+           "!! DISORDER · no defender" in text
+    assert "NEEDS ORDERS none" not in text
+
+
+def test_attention_lists_risks_bare_cities_full_production_and_gold():
+    text = render.brief(troubled_state(), start_techs=2)
+    attention = text.split("ATTENTION\n", 1)[1].split("\nSTANDING", 1)[0].splitlines()
+    assert attention == [
+        "  riot risk at the next citizen: c2 Veii (defenders 1) → a military unit inside calms one unhappy citizen; "
+        "more luxury with set_rates also helps",
+        "  no defender: c1 Rome, c3 Antium",
+        "  c3 Antium Settler 30/30 FULL, waits for size 3 → 4t, 3 shields lost last turn",
+        "  gold 250 unspent → set_rates(science=..., luxury=...) moves tax into research"]
+    s = troubled_state()
+    s["rates"]["max"], s["government"] = 8, "Monarchy"
+    gold = render.attention_lines(s)[-1]
+    assert gold == ('gold 250 unspent → set_rates(science=8, luxury=0) moves tax into research · buy(city="...") '
+                    "rushes a city's production")
+
+
+def test_calm_brief_says_nothing_needs_attention():
+    s = state(1, idle=0, standing=0, n_events=0)
+    assert "NEEDS ORDERS none — end_turn() or end_turn(until_attention=true)" in render.brief(s, start_techs=2)
+    assert "ATTENTION" not in render.brief(s, start_techs=2)
+    s["cities"][0]["riot_risk"] = True
+    assert "NEEDS ORDERS none — see ATTENTION, then end_turn()" in render.brief(s, start_techs=2)
+
+
+def test_engine_picks_ask_to_keep_or_change():
+    s = state(1, idle=0, standing=0, n_events=0)
+    s["cities"][0].update(producing="Warrior", producing_source="engine")
+    s["research"]["source"] = "engine"
+    s["blockers"] = [{"kind": "choose_production", "id": "c1", "message": "Rome built Settler; the engine picked "
+                      "Warrior"}, {"kind": "choose_research", "message": "The engine picked Bronze Working"}]
+    text = render.brief(s, start_techs=2)
+    assert ('  Rome built Settler; the engine picked Warrior → set_production(city="c1", item="Warrior") keeps it, '
+            'city_info(city="c1") lists options') in text
+    assert '  The engine picked Bronze Working → research(tech="Bronze Working") keeps it, research() lists options' \
+        in text
+    assert "  end_turn(skip_idle=true) accepts the engine's picks and holds idle units" in text
+    assert "RESEARCH Bronze Working 8/20 → 3t (then Currency) (engine pick)" in text
+    assert "Warrior 12/30 → 6t (engine pick)" in text
+    assert render.footer(s) == "[T34/60 · needs orders: c1, research]"
+    blocked = render.blocked({"blockers": s["blockers"]}, s)
+    assert ('  Rome built Settler; the engine picked Warrior → set_production(city="c1", item="Warrior") keeps it, '
+            'city_info(city="c1") lists options') in blocked
+    assert "the engine's production and research picks are accepted" in blocked
+
+
+def test_missing_eta_says_why_instead_of_nonet():
+    c = city(1, "Rome", 12, 10, 4, disorder=True, shields_per_turn=0, turns_to_complete=None) | {"options": [
+        {"name": "Settler", "kind": "unit", "cost": 30, "turns": None}, {"name": "Wealth", "kind": "wealth",
+                                                                         "cost": 0, "turns": None}]}
+    text = render.city_detail(c)
+    assert "None" not in text
+    assert "  producing Warrior 12/30 no progress (city in disorder)" in text
+    assert "  can build: Settler 30 (no progress: city in disorder) · Wealth" in text
+    assert "  mood happy 0 content 2 unhappy 1 · defenders 1" in text
+    t = {"current": None, "known": ["Alphabet"], "available": [{"name": "Pottery", "cost": 32, "turns": None}]}
+    assert "  Pottery 32 beakers no progress yet (0 beakers/t)" in render.techs_list(t)
+    assert render.production_text(city(1, "Rome", 12, 10, 1, item="Wealth", production_cost=0)) == \
+        "Wealth (shields become gold)"
+
+
+def test_peaceful_and_repeated_threats_are_not_spam():
+    events = [{"turn": 44, "kind": "threat", "text": "Zululand Archer (at peace) 2 tiles N of Rome"},
+              *({"turn": t, "kind": "threat", "text": "Barbarians Galley 3 tiles W of Veii"} for t in (44, 45, 46)),
+              {"turn": 46, "kind": "city_founded", "text": "Founded Cumae"}]
+    lines = render.events_lines(events, cap=2)
+    assert lines == ["T44: !! Barbarians Galley 3 tiles W of Veii (T44–T46)", "T46: Founded Cumae", "+1 more"]
+    assert render.event_text(events[0]) == "Zululand Archer (at peace) 2 tiles N of Rome"
+
+
+def test_declined_trades_are_summarised():
+    autos = [{"kind": "trade_declined", "text": f"Declined a trade from Greece #{i}"} for i in range(5)]
+    report = render.turn_report({"turn": 5, "turns_advanced": 1, "auto": autos}, 4)
+    assert report.count("auto: Declined") == 3
+    assert report.endswith("auto: +2 more trade offers declined (the env declines every offer)")
+
+
+def test_vs_line_marks_failed_baselines():
+    assert render.vs_line(9, {"engine_ai": "unavailable", "settler_bot": None}) == \
+        "VS T9 (same seed) built-in AI unavailable · settler bot computing…"
+
+
+def test_city_sites_suggest_settling_only_for_settlers_in_time():
+    res = {"origin": {"x": 12, "y": 10}, "sites": [SITE | {"turns": 9}, SITE | {"x": 14, "y": 8, "turns": 2}],
+           "nearby": [SITE | {"x": 14, "y": 8}, {"x": 10, "y": 12, "score": 30, "dist": 1, "dir": "SW"}]}
+    settler = unit(3, "Settler", 12, 10, needs=True)
+    text = render.sites_list(res, settler, turn=52, turn_limit=60)
+    assert "#1 (17,7) score 41 · 2 NE · 9t away" in text and "arrives T61, too late for the turn limit" in text
+    assert "nearby legal sites (within 4 tiles): (10,12) score 30 1 SW" in text
+    assert text.splitlines()[-1].startswith('Do this: unit_order(unit="u3", order="settle", x=14, y=8)')
+    worker = unit(2, "Worker", 12, 10, needs=True)
+    text = render.sites_list(res, worker, turn=10, turn_limit=60)
+    assert "settle" not in text.split("\n#2")[1]
+    assert text.splitlines()[-1] == "u2 Worker cannot found cities; sites are ranked from where it stands."
+
+
+def test_rates_result():
+    res = {"message": "Rates set.", "rates": {"tax": 2, "science": 6, "luxury": 2}, "gold_per_turn": -1,
+           "turns_left_research": 5}
+    assert render.rates_result(res) == "tax 20% · science 60% · luxury 20% · gold -1/t · research 5t"

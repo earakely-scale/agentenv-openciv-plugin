@@ -13,8 +13,11 @@ log = logging.getLogger(__name__)
 
 LINE_LIMIT = 64 * 1024 * 1024
 READY_TIMEOUT = 60.0
-DEFAULT_TIMEOUT = 30.0
-TIMEOUTS = {"new_game": 120.0, "end_turn": 300.0, "autoplay": 900.0}
+# Longer than the bridge's own 60 s watchdog, so a hung engine reports itself before the client gives up.
+DEFAULT_TIMEOUT = 75.0
+TIMEOUTS = {"new_game": 120.0, "load": 120.0, "end_turn": 300.0, "autoplay": 900.0}
+# Error codes after which the process is gone (or is being stopped): the game has to be restored.
+DEAD = frozenset({"bridge_failed", "bridge_down", "timeout"})
 
 
 class BridgeError(Exception):
@@ -61,6 +64,10 @@ class Bridge:
     async def new_game(self, **args: Any) -> dict:
         await self.start()
         return await self.call("new_game", **args)
+
+    async def load(self, path: str) -> dict:
+        await self.start()
+        return await self.call("load", path=path)
 
     async def call(self, cmd: str, *, timeout: float | None = None, **args: Any) -> dict:
         async with self._lock:

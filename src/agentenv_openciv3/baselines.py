@@ -1,4 +1,5 @@
-"""Same-seed reference games, played in the background: do-nothing (`null`) and the built-in AI (`engine_ai`)."""
+"""Same-seed reference games, played in the background: the built-in AI (`engine_ai`), the scripted `settler_bot`
+that follows the env's own suggestions, and do-nothing (`null`)."""
 
 from __future__ import annotations
 
@@ -6,13 +7,15 @@ import asyncio
 import contextlib
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .bridge import Bridge
 
 log = logging.getLogger(__name__)
 
-POLICIES = ("null", "engine_ai")
+POLICIES = ("engine_ai", "settler_bot", "null")
 CHUNK = 10
+ATTEMPTS = 2
 
 
 @dataclass
@@ -27,8 +30,9 @@ class Run:
 class Baselines:
     """Plays each policy to the turn limit in its own bridge, in chunks so partial trajectories are usable."""
 
-    def __init__(self, cmd: list[str]):
+    def __init__(self, cmd: list[str], workdir: Path):
         self.cmd = cmd
+        self.workdir = workdir
         self.runs: dict[str, Run] = {}
         self._tasks: list[asyncio.Task] = []
 
@@ -50,27 +54,35 @@ class Baselines:
         return tasks
 
     async def _play(self, policy: str, scenario: dict) -> None:
-        run, bridge = self.runs[policy], Bridge(self.cmd)
-        try:
-            game = await bridge.new_game(**scenario)
-            run.turn, limit = game["turn"], game["turn_limit"]
-            run.scores[run.turn] = (await bridge.call("score"))["human"]
-            while run.turn < limit:
-                res = await bridge.call("autoplay", turns=min(CHUNK, limit - run.turn), policy=policy, record=True)
-                for point in res.get("trajectory", []):
-                    run.scores[point["turn"]] = point["score"]
-                run.scores[res["turn"]] = res["score"]
-                run.turn, run.defeated = res["turn"], res.get("defeated", False)
-                if res.get("game_over") or run.defeated:
-                    break
-            run.status = "done"
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            log.warning("baseline %s failed: %s", policy, e)
-            run.status, run.error = "failed", str(e)
-        finally:
-            await bridge.close()
+        run = self.runs[policy]
+        for attempt in range(1, ATTEMPTS + 1):
+            bridge = Bridge([*self.cmd, "--autosave", str(self.workdir / policy)])
+            try:
+                await self._play_once(bridge, run, policy, scenario)
+                run.status, run.error = "done", None
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                log.warning("baseline %s failed (attempt %d of %d): %s", policy, attempt, ATTEMPTS, e)
+                run.status, run.error = ("running" if attempt < ATTEMPTS else "failed"), str(e)
+                run.scores.clear()
+            finally:
+                await bridge.close()
+
+    @staticmethod
+    async def _play_once(bridge: Bridge, run: Run, policy: str, scenario: dict) -> None:
+        game = await bridge.new_game(**scenario)
+        run.turn, limit = game["turn"], game["turn_limit"]
+        run.scores[run.turn] = (await bridge.call("score"))["human"]
+        while run.turn < limit:
+            res = await bridge.call("autoplay", turns=min(CHUNK, limit - run.turn), policy=policy, record=True)
+            for point in res.get("trajectory", []):
+                run.scores[point["turn"]] = point["score"]
+            run.scores[res["turn"]] = res["score"]
+            run.turn, run.defeated = res["turn"], res.get("defeated", False)
+            if res.get("game_over") or run.defeated:
+                break
 
     def score_at(self, policy: str, turn: int) -> dict | None:
         """The policy's score at `turn`, once its game has got that far (or ended before it)."""
@@ -80,10 +92,14 @@ class Baselines:
         known = [t for t in run.scores if t <= turn]
         return run.scores[max(known)] if known else None
 
-    def scores_at(self, turn: int) -> dict[str, dict | None]:
-        """Each live policy's score at `turn` (None while it is still computing); failed runs are left out."""
-        return {p: self.score_at(p, turn) for p in ("engine_ai", "null") if p in self.runs
-                and self.runs[p].status != "failed"}
+    def scores_at(self, turn: int) -> dict[str, dict | str | None]:
+        """Each policy's score at `turn`: a score, None while still computing, or "unavailable" if it failed."""
+        return {p: "unavailable" if self.runs[p].status == "failed" else self.score_at(p, turn)
+                for p in POLICIES if p in self.runs}
+
+    def trajectories(self) -> dict[str, dict[int, dict]]:
+        """Every score known so far for each policy, by turn."""
+        return {p: dict(run.scores) for p, run in self.runs.items() if run.status != "failed"}
 
     def summary(self, turn: int) -> dict:
         out = {}

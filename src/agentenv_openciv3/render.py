@@ -8,8 +8,12 @@ from typing import Any
 
 from .bridge import BridgeError
 
-URGENT = {"threat", "unit_lost", "war_declared", "city_destroyed", "disorder", "city_starved",
-          "settle_failed", "goto_blocked"}
+URGENT = {"threat", "unit_lost", "war_declared", "city_destroyed", "disorder", "disorder_started", "city_starved",
+          "settle_failed", "goto_blocked", "gold_stolen", "defenseless", "riot_risk", "engine_restarted"}
+# Kept first when a turn has more events than fit; threats go last, they repeat the most.
+FIRST = {"city_founded", "unit_lost", "city_destroyed", "civ_destroyed", "war_declared", "disorder", "disorder_started",
+         "gold_stolen", "defenseless", "tech_learned", "city_starved", "settle_failed", "goto_blocked",
+         "engine_restarted"}
 CITY_TARGETS = ((1, 1), (15, 2), (30, 3), (45, 4), (60, 5), (80, 6), (100, 7))
 TECHS_LEARNED_TARGETS = ((20, 2), (40, 4), (60, 6), (80, 8), (100, 10))
 TERRAIN = {"grassland": "g", "plains": "p", "desert": "d", "tundra": "t", "floodplain": "f", "hills": "h",
@@ -17,10 +21,13 @@ TERRAIN = {"grassland": "g", "plains": "p", "desert": "d", "tundra": "t", "flood
            "sea": "~", "ocean": "~"}
 TERRAIN_NAMES = {"g": "grassland", "p": "plains", "d": "desert", "t": "tundra", "f": "flood plain", "h": "hills",
                  "m": "mountains", "F": "forest", "j": "jungle", "s": "marsh", "v": "volcano", "~": "water"}
-BASELINE_LABELS = {"engine_ai": "built-in AI", "null": "do-nothing"}
-MAX_UNIT_LINES, MAX_STANDING, MAX_CITY_LINES, MAX_EVENTS = 5, 6, 6, 5
-# An item completes only when the city is bigger than its population cost (Settler 2, Worker 1 in the ruleset).
+BASELINE_LABELS = {"engine_ai": "built-in AI", "settler_bot": "settler bot", "null": "do-nothing"}
+MAX_UNIT_LINES, MAX_STANDING, MAX_CITY_LINES, MAX_EVENTS, MAX_AUTO = 5, 6, 6, 5, 3
+# An item is delivered only when the city is bigger than its population cost (Settler 2, Worker 1 in the ruleset).
 MIN_SIZE = {"Settler": 3, "Worker": 2}
+IDLE_GOLD = 100
+# Governments that rush production with population, not gold (Civ III rules).
+FORCED_LABOUR = {"Despotism", "Communism", "Anarchy"}
 
 
 def pos(o: dict) -> str:
@@ -52,7 +59,7 @@ def footer(state: dict) -> str:
     turn = f"T{state['turn']}/{state['turn_limit']}"
     if state.get("game_over") or state.get("defeated"):
         return f"[GAME OVER {turn}]"
-    pending = [b.get("id") or "research" for b in state.get("blockers", [])]
+    pending = dict.fromkeys(b.get("id") or "research" for b in state.get("blockers", []))
     return f"[{turn} · " + (f"needs orders: {', '.join(pending)}]" if pending else "nothing needs orders]")
 
 
@@ -97,16 +104,37 @@ def units_list(state: dict, everything: bool) -> str:
     return "\n".join([head, *(unit_line(u, detail=True) for u in shown)])
 
 
+def is_military(u: dict) -> bool:
+    return "fortify" in u.get("orders", [])
+
+
 # ---- cities ----
+
+def stalled(c: dict) -> str:
+    """Why a city makes no progress on its item."""
+    if c.get("disorder"):
+        return "city in disorder"
+    if not c.get("shields_per_turn"):
+        return "0 shields/t"
+    return "waits for the city to grow"
+
 
 def production_text(c: dict) -> str:
     item = c.get("producing")
     if not item:
         return "NOTHING in production"
-    eta = c.get("turns_to_complete")
-    text = f"{item} {c.get('production_stored', 0)}/{c.get('production_cost', '?')}" + (f" → {eta}t" if eta else "")
-    if c.get("size", 0) < MIN_SIZE.get(item, 0):
-        text += f" (completes only at size {MIN_SIZE[item]}+)"
+    if not c.get("production_cost"):
+        return f"{item} (shields become gold)" if item == "Wealth" else item
+    text = f"{item} {c.get('production_stored', 0)}/{c['production_cost']}"
+    eta, need = c.get("turns_to_complete"), MIN_SIZE.get(item, 0)
+    if c.get("capped"):
+        text += f" FULL, waits for size {need}" + (f" → {eta}t" if eta else "")
+    elif eta:
+        text += f" → {eta}t" + (f" (delivered at size {need})" if c.get("size", 0) < need else "")
+    else:
+        text += f" no progress ({stalled(c)})"
+    if c.get("producing_source") == "engine":
+        text += " (engine pick)"
     return text
 
 
@@ -118,11 +146,36 @@ def growth_text(c: dict) -> str:
     return f"{fpt:+d}/t" + (f" grows {eta}t" if eta else " not growing")
 
 
+def city_flags(c: dict) -> list[str]:
+    flags = []
+    if c.get("disorder"):
+        flags.append("!! DISORDER")
+    elif c.get("riot_risk"):
+        flags.append("riot risk")
+    if c.get("defenders") == 0:
+        flags.append("no defender")
+    return flags
+
+
 def city_line(c: dict) -> str:
     parts = [f"{c['id']} {c['name']} {pos(c)} size {c['size']}", "food " + growth_text(c), production_text(c)]
-    if c.get("disorder"):
-        parts.append("!! DISORDER")
-    return " · ".join(parts)
+    return " · ".join(parts + city_flags(c))
+
+
+def mood_text(c: dict) -> str | None:
+    if c.get("unhappy") is None:
+        return None
+    text = f"mood happy {c.get('happy', 0)} content {c.get('content', 0)} unhappy {c['unhappy']}"
+    if c.get("defenders") is not None:
+        text += f" · defenders {c['defenders']}"
+    return text
+
+
+def option_text(o: dict, c: dict) -> str:
+    if o.get("kind") == "wealth":
+        return o["name"]
+    eta = f"{o['turns']}t" if o.get("turns") is not None else f"no progress: {stalled(c)}"
+    return f"{o['name']} {o['cost']} ({eta})"
 
 
 def city_detail(c: dict) -> str:
@@ -132,17 +185,47 @@ def city_detail(c: dict) -> str:
     worked = c.get("tiles_worked")
     if worked is not None:
         head.append(f"works {len(worked) if isinstance(worked, list) else worked} tiles")
-    if c.get("disorder"):
-        head.append("!! DISORDER")
-    item = production_text(c)
-    lines = [" · ".join(head), f"  {'producing ' if c.get('producing') else ''}{item}"]
+    lines = [" · ".join(head + city_flags(c))]
+    if mood := mood_text(c):
+        lines.append(f"  {mood}" + (" · one more citizen riots" if c.get("riot_risk") else ""))
+    lines.append(f"  {'producing ' if c.get('producing') else ''}{production_text(c)}")
+    if c.get("shields_lost_last_turn"):
+        lines.append(f"  {c['shields_lost_last_turn']} shields lost last turn (production full)")
     if c.get("buildings"):
         lines.append("  buildings: " + ", ".join(c["buildings"]))
-    opts = [o["name"] if o.get("kind") == "wealth" else f"{o['name']} {o['cost']} ({o['turns']}t)"
-            for o in c.get("options", [])]
+    opts = [option_text(o, c) for o in c.get("options", [])]
     if opts:
         lines.append("  can build: " + " · ".join(opts))
     return "\n".join(lines)
+
+
+# ---- fixes ----
+
+def rates_fix(state: dict, luxury: int = 2) -> str | None:
+    """A set_rates call that moves up to `luxury` tenths from science to luxury, if the rates allow it."""
+    r = state.get("rates") or {}
+    sci, lux = r.get("science"), r.get("luxury")
+    if sci is None or lux is None:
+        return None
+    step = min(luxury, sci, r.get("max", 10) - lux)
+    return call("set_rates", science=sci - step, luxury=lux + step) if step > 0 else None
+
+
+def garrison_fix(state: dict, city: dict) -> str | None:
+    """Send the nearest military unit that is not guarding a city into `city`."""
+    towns = {(c["x"], c["y"]) for c in state.get("cities", [])}
+    free = [u for u in state.get("units", []) if is_military(u) and (u["x"], u["y"]) not in towns]
+    if not free:
+        return None
+    u = min(free, key=lambda u: (abs(u["x"] - city["x"]) + abs(u["y"] - city["y"]), u["id"]))
+    return call("unit_order", unit=u["id"], order="goto", x=city["x"], y=city["y"]) + " then fortify"
+
+
+def disorder_fix(state: dict, city: dict) -> str:
+    fixes = [f for f in (rates_fix(state), garrison_fix(state, city)) if f]
+    if fixes:
+        return " or ".join(fixes)
+    return "no free military unit and no room for more luxury: it calms down as it shrinks"
 
 
 # ---- turn brief ----
@@ -161,28 +244,50 @@ def pace_line(state: dict, start_techs: int) -> str:
             f"techs {s['techs']} {_milestone(TECHS_LEARNED_TARGETS, turn, s['techs'], start_techs)}")
 
 
-def vs_line(turn: int, baselines: dict[str, dict | None]) -> str:
-    parts = [f"{BASELINE_LABELS[p]} " + (score_text(s, short=True) if s else "computing…")
-             for p, s in baselines.items()]
+def vs_line(turn: int, baselines: dict[str, dict | str | None]) -> str:
+    def text(s):
+        return score_text(s, short=True) if isinstance(s, dict) else s or "computing…"
+    parts = [f"{BASELINE_LABELS.get(p, p)} {text(s)}" for p, s in baselines.items()]
     return f"VS T{turn} (same seed) " + " · ".join(parts)
+
+
+def is_urgent(e: dict) -> bool:
+    return e.get("kind") in URGENT and not (e.get("kind") == "threat" and "(at peace)" in (e.get("text") or ""))
 
 
 def event_text(e: dict) -> str:
     text = e.get("text") or e.get("kind", "")
     if "x" in e and "y" in e and pos(e) not in text:
         text = f"{text.rstrip('.')} {pos(e)}"
-    return ("!! " if e.get("kind") in URGENT else "") + text
+    return ("!! " if is_urgent(e) else "") + text
+
+
+def _rank(e: dict) -> int:
+    if e.get("kind") == "threat":
+        return 2 if is_urgent(e) else 3
+    return 0 if e.get("kind") in FIRST else 1
 
 
 def events_lines(events: list[dict], cap: int = MAX_EVENTS) -> list[str]:
-    keep = sorted(range(len(events)), key=lambda i: events[i].get("kind") not in URGENT)[:cap]
+    """Events grouped by turn; an event repeated on several turns is shown once, at its first turn."""
+    seen: dict[tuple, list[int]] = {}
+    for e in events:
+        seen.setdefault((e.get("kind"), event_text(e)), []).append(e.get("turn", 0))
+    unique = list(seen.items())
+    keep = sorted(range(len(unique)), key=lambda i: _rank({"kind": unique[i][0][0], "text": unique[i][0][1]}))[:cap]
     by_turn: dict[int, list[str]] = {}
     for i in sorted(keep):
-        by_turn.setdefault(events[i].get("turn", 0), []).append(event_text(events[i]))
-    lines = [f"T{t}: " + " · ".join(texts) for t, texts in by_turn.items()]
-    if len(events) > cap:
-        lines.append(f"+{len(events) - cap} more")
+        (_, text), turns = unique[i]
+        repeat = f" (T{turns[0]}–T{turns[-1]})" if len(turns) > 1 else ""
+        by_turn.setdefault(turns[0], []).append(text + repeat)
+    lines = [f"T{t}: " + " · ".join(texts) for t, texts in sorted(by_turn.items())]
+    if len(unique) > cap:
+        lines.append(f"+{len(unique) - cap} more")
     return lines
+
+
+def _city(state: dict, cid: str | None) -> dict:
+    return next((c for c in state.get("cities", []) if c["id"] == cid), {})
 
 
 def blocker_line(b: dict, state: dict, site: dict | None = None) -> str:
@@ -204,34 +309,92 @@ def blocker_line(b: dict, state: dict, site: dict | None = None) -> str:
         elif not here:
             line += " · orders: " + " ".join(u.get("orders", []))
         return line
+    message = b.get("message", str(b)).rstrip(".")
     if kind == "no_production":
-        return f"{b.get('message', bid)} → {call('set_production', city=bid, item='...')}"
+        return f"{message} → {call('set_production', city=bid, item='...')}"
     if kind == "no_research":
-        return f"{b.get('message', 'nothing being researched')} → research() lists techs"
-    return b.get("message", str(b))
+        return f"{message} → research() lists techs"
+    if kind == "choose_production":
+        item = _city(state, bid).get("producing")
+        keep = call("set_production", city=bid, item=item) + " keeps it, " if item else ""
+        return f"{message} → {keep}{call('city_info', city=bid)} lists options"
+    if kind == "choose_research":
+        tech = (state.get("research") or {}).get("current")
+        keep = call("research", tech=tech) + " keeps it, " if tech else ""
+        return f"{message} → {keep}research() lists options"
+    if kind == "disorder":
+        return f"!! {message} → {disorder_fix(state, _city(state, bid) or {'x': 0, 'y': 0})}"
+    return message
+
+
+def attention_lines(state: dict) -> list[str]:
+    """What needs a look without blocking the turn: riot risk, empty garrisons, full production, idle gold."""
+    cities = state.get("cities", [])
+    out = []
+    risk = [c for c in cities if c.get("riot_risk") and not c.get("disorder")]
+    if risk:
+        names = ", ".join(f"{c['id']} {c['name']} (defenders {c.get('defenders', '?')})" for c in risk)
+        out.append(f"riot risk at the next citizen: {names} → a military unit inside calms one unhappy citizen; "
+                   "more luxury with set_rates also helps")
+    bare = [f"{c['id']} {c['name']}" for c in cities if c.get("defenders") == 0]
+    if bare:
+        out.append("no defender: " + ", ".join(bare))
+    for c in (c for c in cities if c.get("capped")):
+        lost = f", {c['shields_lost_last_turn']} shields lost last turn" if c.get("shields_lost_last_turn") else ""
+        out.append(f"{c['id']} {c['name']} {production_text(c)}{lost}")
+    gold = state.get("gold", 0)
+    if gold >= IDLE_GOLD:
+        hints = [h for h in (science_fix(state),) if h]
+        if state.get("government") not in FORCED_LABOUR and cities:
+            hints.append('buy(city="...") rushes a city\'s production')
+        out.append(f"gold {gold} unspent" + (" → " + " · ".join(hints) if hints else ""))
+    return out
+
+
+def science_fix(state: dict) -> str | None:
+    """Move tax into science: a concrete call when the government's maximum rate is known."""
+    r = state.get("rates") or {}
+    sci, lux = r.get("science"), r.get("luxury", 0)
+    if sci is None:
+        return None
+    if "max" not in r:
+        return 'set_rates(science=..., luxury=...) moves tax into research'
+    top = min(r["max"], 10 - lux)
+    return call("set_rates", science=top, luxury=lux) + " moves tax into research" if top > sci else None
+
+
+def rates_text(state: dict) -> str | None:
+    r = state.get("rates")
+    if not r:
+        return None
+    return f"tax {r.get('tax', 0) * 10}% sci {r.get('science', 0) * 10}% lux {r.get('luxury', 0) * 10}%"
 
 
 def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: int | None = None,
-          baselines: dict[str, dict | None] | None = None, sites: dict[str, dict] | None = None,
-          events: bool = True) -> str:
+          baselines: dict[str, dict | str | None] | None = None, sites: dict[str, dict] | None = None,
+          events: bool = True, notices: list[dict] | None = None) -> str:
     s = state
     head = [f"T{s['turn']}/{s['turn_limit']}", s.get("civ", "?"), s.get("government", "?")]
     if s.get("anarchy_until"):
         head.append(f"anarchy until T{s['anarchy_until']}")
     head.append(f"gold {s.get('gold', 0)} ({s.get('gold_per_turn', 0):+d}/t)")
+    if rates := rates_text(s):
+        head.append(rates)
     wars = [r["civ"] for r in s.get("rivals", []) if r.get("at_war")]
     if wars:
         head.append("!! at war with " + ", ".join(wars))
     if s.get("defeated"):
         head.append("DEFEATED")
     lines = [" · ".join(head)]
+    lines += [f"!! {n['text']}" for n in notices or []]
 
     r = s.get("research") or {}
     if r.get("current"):
         then = [t for t in r.get("queue", []) if t != r["current"]]
         lines.append(f"RESEARCH {r['current']} {r.get('beakers', 0)}/{r.get('cost', '?')}"
-                     + (f" → {r['turns_left']}t" if r.get("turns_left") else "")
-                     + (f" (then {', '.join(then[:3])})" if then else ""))
+                     + (f" → {r['turns_left']}t" if r.get("turns_left") else " no progress (0 beakers/t)")
+                     + (f" (then {', '.join(then[:3])})" if then else "")
+                     + (" (engine pick)" if r.get("source") == "engine" else ""))
     else:
         lines.append("RESEARCH none — research() lists techs")
     lines.append(f"SCORE {score_text(s['score'])} · explored {num(s.get('explored_pct', 0))}%")
@@ -239,6 +402,7 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
     if baselines:
         lines.append(vs_line(s["turn"], baselines))
 
+    attention = attention_lines(s)
     blockers = s.get("blockers", [])
     if blockers:
         lines.append(f"NEEDS ORDERS ({len(blockers)})")
@@ -247,8 +411,15 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
             lines.append("  " + blocker_line(b, s, (sites or {}).get(b.get("id"))))
         if len(units) > MAX_UNIT_LINES:
             lines.append(f"  +{len(units) - MAX_UNIT_LINES} more idle units → list_units()")
+        if any(b.get("kind") in ("choose_production", "choose_research") for b in blockers):
+            lines.append("  end_turn(skip_idle=true) accepts the engine's picks and holds idle units")
+    elif attention:
+        lines.append("NEEDS ORDERS none — see ATTENTION, then end_turn()")
     else:
         lines.append("NEEDS ORDERS none — end_turn() or end_turn(until_attention=true)")
+    if attention:
+        lines.append("ATTENTION")
+        lines += ["  " + line for line in attention]
 
     standing = [u for u in s.get("units", []) if not u.get("needs_orders") and u.get("status") not in ("idle", "done")]
     if standing:
@@ -274,11 +445,20 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
 
 # ---- end turn ----
 
+def auto_lines(autos: list[dict]) -> list[str]:
+    trades = [a for a in autos if a.get("kind") == "trade_declined"]
+    others = [a for a in autos if a.get("kind") != "trade_declined"]
+    lines = [f"auto: {a.get('text') or a.get('kind')}" for a in others + trades[:MAX_AUTO]]
+    if len(trades) > MAX_AUTO:
+        lines.append(f"auto: +{len(trades) - MAX_AUTO} more trade offers declined (the env declines every offer)")
+    return lines
+
+
 def turn_report(result: dict, prev_turn: int) -> str:
     n = result.get("turns_advanced", 0)
     lines = [f"TURN T{prev_turn} → T{result['turn']} ({n} turn{'s' if n != 1 else ''})"]
     lines += ["  " + line for line in events_lines(result.get("events", []), cap=15)]
-    lines += [f"  auto: {a.get('text') or a.get('kind')}" for a in result.get("auto", [])]
+    lines += ["  " + line for line in auto_lines(result.get("auto", []))]
     return "\n".join(lines)
 
 
@@ -296,14 +476,17 @@ def blocked(result: dict, state: dict) -> str:
             hint = call("set_production", city=bid, item="...") + f" — options: {call('city_info', city=bid)}"
         elif kind == "no_research":
             hint = 'research(tech="...") — options: research()'
+        elif kind in ("choose_production", "choose_research", "disorder"):
+            hint = blocker_line(b, state).split(" → ", 1)[-1]
         else:
             hint = "get_turn_brief()"
-        lines.append(f"  {b.get('message', kind)} → {hint}")
-    lines.append("Or end_turn(skip_idle=true): idle units hold this turn and research is auto-picked.")
+        lines.append(f"  {b.get('message', kind).rstrip('.')} → {hint}")
+    lines.append("Or end_turn(skip_idle=true): idle units hold this turn, research is auto-picked and the engine's "
+                 "production and research picks are accepted.")
     return "\n".join(lines)
 
 
-def game_over(state: dict, baselines: dict[str, dict | None] | None) -> str:
+def game_over(state: dict, baselines: dict[str, dict | str | None] | None) -> str:
     s = state
     why = (f"your civilization was destroyed (T{s['turn']})" if s.get("defeated")
            else f"turn {s['turn']}/{s['turn_limit']} reached")
@@ -316,7 +499,7 @@ def game_over(state: dict, baselines: dict[str, dict | None] | None) -> str:
     return "\n".join(lines)
 
 
-# ---- research ----
+# ---- research and rates ----
 
 def techs_list(t: dict) -> str:
     known = t.get("known", [])
@@ -324,14 +507,25 @@ def techs_list(t: dict) -> str:
     lines = [f"RESEARCH current: {cur} · known {len(known)}: {', '.join(known)}", "AVAILABLE"]
     for a in t.get("available", []):
         unlocks = f" → {', '.join(a['unlocks'])}" if a.get("unlocks") else ""
-        lines.append(f"  {a['name']} {a.get('cost', '?')} beakers {a.get('turns', '?')}t{unlocks}")
-    lines.append('research(tech="...") sets it; any tech works — missing prerequisites are queued first.')
+        eta = f"{a['turns']}t" if a.get("turns") is not None else "no progress yet (0 beakers/t)"
+        lines.append(f"  {a['name']} {a.get('cost', '?')} beakers {eta}{unlocks}")
+    lines.append('research(tech="...") sets it; a later tech is accepted too, with its prerequisites queued first.')
     return "\n".join(lines)
+
+
+def rates_result(res: dict) -> str:
+    r = res.get("rates") or {}
+    parts = [f"tax {r.get('tax', 0) * 10}% · science {r.get('science', 0) * 10}% · luxury {r.get('luxury', 0) * 10}%"]
+    if res.get("gold_per_turn") is not None:
+        parts.append(f"gold {res['gold_per_turn']:+d}/t")
+    if res.get("turns_left_research") is not None:
+        parts.append(f"research {res['turns_left_research']}t")
+    return " · ".join(parts)
 
 
 # ---- city sites ----
 
-def site_text(s: dict) -> str:
+def site_text(s: dict, turn: int | None = None, turn_limit: int | None = None) -> str:
     y = s.get("yield") or {}
     traits = [t for t, on in (("river", s.get("river")), ("coast", s.get("coastal"))) if on]
     parts = [f"{pos(s)} score {num(s['score'])}", rel(s)]
@@ -341,20 +535,35 @@ def site_text(s: dict) -> str:
         parts.append(f"area food {y.get('food')} shields {y.get('shields')} commerce {y.get('commerce')}")
     if s.get("terrain"):
         parts.append(s["terrain"].lower())
+    if late := arrives_late(s, turn, turn_limit):
+        traits.append(late)
     return " · ".join(parts + traits)
 
 
-def sites_list(result: dict, unit: dict | None) -> str:
+def arrives_late(site: dict, turn: int | None, turn_limit: int | None) -> str | None:
+    if site.get("turns") is None or turn is None or turn_limit is None or turn + site["turns"] < turn_limit:
+        return None
+    return f"arrives T{turn + site['turns']}, too late for the turn limit"
+
+
+def sites_list(result: dict, unit: dict | None, turn: int | None = None, turn_limit: int | None = None) -> str:
     origin = result.get("origin") or {}
     who = f"{unit['id']} {unit['type']} at {pos(origin)}" if unit else pos(origin)
     sites = result.get("sites", [])
     lines = [f"CITY SITES from {who}" + (f" ({result['note']})" if result.get("note") else "")]
-    if not sites:
+    ranked = {(s["x"], s["y"]) for s in sites}
+    nearby = [s for s in result.get("nearby") or [] if (s["x"], s["y"]) not in ranked]
+    if not sites and not nearby:
         lines.append("none found — explore more: unit_order(unit=..., order=\"explore\")")
         return "\n".join(lines)
-    lines += [f"#{i} {site_text(s)}" for i, s in enumerate(sites, 1)]
-    if unit:
-        lines.append("Do this: " + call("unit_order", unit=unit["id"], order="settle", x=sites[0]["x"], y=sites[0]["y"])
+    lines += [f"#{i} {site_text(s, turn, turn_limit)}" for i, s in enumerate(sites, 1)]
+    if nearby:
+        lines.append("nearby legal sites (within 4 tiles): " + " · ".join(
+            f"{pos(s)} score {num(s['score'])} {rel(s)}" for s in nearby[:8]))
+    if unit and "settle" not in unit.get("orders", []):
+        lines.append(f"{unit['id']} {unit['type']} cannot found cities; sites are ranked from where it stands.")
+    elif unit and (best := next((s for s in sites if not arrives_late(s, turn, turn_limit)), None)):
+        lines.append("Do this: " + call("unit_order", unit=unit["id"], order="settle", x=best["x"], y=best["y"])
                      + "  # walks there and founds the city on arrival")
     return "\n".join(lines)
 
@@ -376,7 +585,7 @@ def _occupant(t: dict) -> str:
 
 
 def map_view(m: dict, *, label: str, width: int | None = None, wrap_x: bool = False,
-             sites: list[dict] | None = None) -> str:
+             sites: list[dict] | None = None, hostile: Iterable[str] = ("Barbarians",)) -> str:
     cx, cy = m["center"]["x"], m["center"]["y"]
 
     def dx_of(x: int) -> int:
@@ -414,11 +623,11 @@ def map_view(m: dict, *, label: str, width: int | None = None, wrap_x: bool = Fa
     lines.append("legend: @ your city  C foreign city  # your units  ! foreign units  * resource  ' river · "
                  + terrain)
     lines.append("Each tile is one 3-char cell under its x; rows alternate. N=(x,y-2) E=(x+2,y) NE=(x+1,y-1).")
-    lines += _notable(m, cells, sites or [])
+    lines += _notable(m, cells, sites or [], set(hostile))
     return "\n".join(lines)
 
 
-def _notable(m: dict, cells: dict, sites: list[dict]) -> list[str]:
+def _notable(m: dict, cells: dict, sites: list[dict], hostile: set[str]) -> list[str]:
     tiles = sorted(cells.values(), key=lambda t: t.get("dist", 0))
     out = ["notable (distance and direction from the center):"]
     center = cells.get((0, 0))
@@ -431,10 +640,12 @@ def _notable(m: dict, cells: dict, sites: list[dict]) -> list[str]:
         if cs and not center.get("city"):
             line += " · found city here: " + ("yes" if cs.get("ok") else f"no — {cs.get('reason', '')}")
         out.append(line)
-    foreign = [f"{u.get('owner', '?')} {u['type']}" + (f" x{u['count']}" if u.get("count", 1) > 1 else "")
-               + f" {pos(t)} {rel(t)}" for t in tiles for u in t.get("units") or [] if "id" not in u]
-    if foreign:
-        out.append("!! foreign units: " + " · ".join(foreign))
+    for label, wanted in (("!! hostile units", True), ("foreign units", False)):
+        found = [f"{u.get('owner', '?')} {u['type']}" + (f" x{u['count']}" if u.get("count", 1) > 1 else "")
+                 + f" {pos(t)} {rel(t)}" for t in tiles for u in t.get("units") or []
+                 if "id" not in u and (u.get("owner") in hostile) == wanted]
+        if found:
+            out.append(f"{label}: " + " · ".join(found))
     cities = [(f"{t['city']['id']} " if t["city"].get("id") else "") + t["city"]["name"]
               + ("" if t["city"].get("id") else f" ({t['city'].get('owner', '?')})")
               + f" size {t['city'].get('size', '?')} {pos(t)} {rel(t)}" for t in tiles if t.get("city")]

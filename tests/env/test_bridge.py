@@ -16,7 +16,7 @@ async def bridge(fake_cmd):
 
 async def test_ready_line_and_new_game(bridge):
     game = await bridge.new_game(seed=5, turn_limit=30)
-    assert bridge.version == "fake-1"
+    assert bridge.version == "fake-2"
     assert game == {"turn": 1, "turn_limit": 30, "seed": 5, "civ": "Rome", "opponents": ["Greece", "Egypt", "Babylon"],
                     "map": {"width": 60, "height": 60, "wrap_x": True}}
     state = await bridge.call("state")
@@ -79,7 +79,7 @@ async def test_heavy_stderr_logging_does_not_block(bridge, monkeypatch):
 async def test_stray_stdout_lines_are_skipped(bridge, monkeypatch):
     monkeypatch.setenv("FAKE_BRIDGE_STDOUT_NOISE", "1")
     await bridge.start()
-    assert bridge.version == "fake-1"
+    assert bridge.version == "fake-2"
 
 
 async def test_cancelled_call_does_not_shift_replies(bridge):
@@ -89,6 +89,21 @@ async def test_cancelled_call_does_not_shift_replies(bridge):
     slow.cancel()
     state = await bridge.call("state")
     assert state["turn"] == 1 and "units" in state
+
+
+async def test_load_restores_an_autosave(fake_cmd, tmp_path):
+    first = Bridge([*fake_cmd, "--autosave", str(tmp_path)])
+    await first.new_game(seed=4, turn_limit=12)
+    await first.call("unit_order", unit="u1", order="found_city")
+    await first.call("end_turn", skip_idle=True)
+    await first.close()
+    second = Bridge(fake_cmd)
+    try:
+        game = await second.load(str(tmp_path / "autosave.json"))
+        assert (game["seed"], game["turn"]) == (4, 2)
+        assert [c["name"] for c in (await second.call("state"))["cities"]] == ["Rome"]
+    finally:
+        await second.close()
 
 
 async def test_missing_binary():

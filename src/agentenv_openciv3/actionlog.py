@@ -1,4 +1,5 @@
-"""Per-call record of what the agent did: the JSON-lines action log plus the counters data/get reports."""
+"""Per-call record of what the agent did: the JSON-lines action log, the counters data/get reports, and the
+per-turn list of game actions the recording shows."""
 
 from __future__ import annotations
 
@@ -7,6 +8,22 @@ import datetime
 import json
 from pathlib import Path
 from typing import Any
+
+
+def describe(tool: str, args: dict) -> str | None:
+    """One line for a call that changes the game, e.g. `u4 settle → (32,28)`; None for observations."""
+    if tool == "unit_order":
+        target = f" → ({args['x']},{args['y']})" if args.get("x") is not None and args.get("y") is not None else ""
+        return f"{args.get('unit')} {args.get('order')}{target}"
+    if tool == "set_production":
+        return f"{args.get('city')} builds {args.get('item')}"
+    if tool == "research" and args.get("tech"):
+        return f"research {args['tech']}"
+    if tool == "set_rates":
+        return "rates " + ", ".join(f"{k} {args[k]}" for k in ("science", "luxury") if args.get(k) is not None)
+    if tool == "buy":
+        return f"{args.get('city')} buys its production"
+    return None
 
 
 class ActionLog:
@@ -21,6 +38,7 @@ class ActionLog:
         self.turn: int | None = None
         self.calls_this_turn = 0
         self.failures: collections.Counter[str] = collections.Counter()
+        self.timeline: dict[int, list[dict]] = {}
 
     def begin(self, turn: int | None) -> int:
         """Count a call in `turn`; returns how many calls this turn so far, this one included."""
@@ -35,6 +53,11 @@ class ActionLog:
         self.failures[key] += 1
         return self.failures[key]
 
+    def note(self, turn: int | None, text: str, ok: bool = True) -> None:
+        """Add a line to the turn's actions in the recording."""
+        if turn is not None:
+            self.timeline.setdefault(turn, []).append({"text": text, "ok": ok})
+
     def record(self, *, turn: int | None, tool: str, args: dict, ok: bool, error_code: str | None, ms: float,
                **extra: Any) -> None:
         if ok:
@@ -44,6 +67,8 @@ class ActionLog:
             self.invalid += 1
             self.streak += 1
             self.max_streak = max(self.max_streak, self.streak)
+        if text := describe(tool, args):
+            self.note(turn, text if ok else f"{text} ✗ {error_code}", ok)
         if self.path is None:
             return
         row = {"ts": datetime.datetime.now(datetime.UTC).isoformat(timespec="milliseconds"), "turn": turn,
