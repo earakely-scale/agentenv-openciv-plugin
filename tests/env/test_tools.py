@@ -595,13 +595,16 @@ async def test_client_recording_from_the_kept_saves(fake_client, tool_env):
     assert files["openciv3-seed3.client.mp4"]["content_type"] == "video/mp4" and res["notes"] == []
 
 
-async def test_client_recording_failures_are_notes(env, tools, env_vars, fake_client, tool_env):
+async def test_client_mp4_without_a_client_is_a_note(env, tools, env_vars):
     await found_capital(tools)
     res = await env.recording(formats=["png", "client_mp4"])
     assert [f["name"] for f in res["files"]] == ["openciv3-seed3.png"]
     assert res["notes"] == [f"client_mp4 skipped: the OpenCiv3 client is not installed at {env_vars['OPENCIV_CLIENT']} "
                             "(build the image with --target client)"]
 
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+async def test_a_failed_client_render_is_a_note(fake_client, tool_env):
     (fake_client / "capture.sh").write_text("#!/bin/sh\nexit 0\n")
     env, tools = await tool_env()
     await found_capital(tools)

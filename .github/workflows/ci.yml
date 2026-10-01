@@ -46,6 +46,8 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: scripts/build-bridge.sh
+      # ffmpeg, so the recording tests that encode mp4 run here too.
+      - run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
       - run: pip install -e '.[dev]'
       # tests/ (bridge, env, packaging) and the playtest harness's offline tests.
       - run: pytest

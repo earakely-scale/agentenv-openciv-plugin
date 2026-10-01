@@ -76,7 +76,8 @@ RUN --mount=type=cache,target=/root/.nuget/packages \
 
 FROM env AS client
 ARG TARGETARCH
-RUN apt-get update && apt-get install -y --no-install-recommends procps xvfb xauth libicu76 \
+RUN apt-get -o Acquire::Retries=5 update \
+ && apt-get -o Acquire::Retries=5 install -y --no-install-recommends procps xvfb xauth libicu76 \
       libgl1 libglx-mesa0 libgl1-mesa-dri libegl1 libxcursor1 libxinerama1 libxrandr2 libxi6 libxkbcommon0 libfontconfig1 \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=mcr.microsoft.com/dotnet/runtime:8.0-bookworm-slim /usr/share/dotnet /usr/share/dotnet
