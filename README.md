@@ -7,7 +7,13 @@ scripted bot that plays through the same tools, and every game can be saved as a
 replay.
 
 The game runs headless: no Godot, no display and no Civilization III files. One env serves one game
-at a time, and a game is deterministic: the same seed and the same actions give the same game.
+at a time, 
+
+https://github.com/user-attachments/assets/3c59d7b2-831a-40ff-9db7-920af600b0a0
+
+and a game is deterministic: the same seed and the same actions give the same game.
+
+
 
 ## Scope
 
