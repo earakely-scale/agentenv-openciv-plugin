@@ -1,18 +1,20 @@
 """Toy stand-in for the OpenCiv3 env, to test the playtest harness without the engine.
 
 It serves what the harness relies on, shaped like the real env (docs/tools.md) and the AgentEnv SDK:
-the ten tools over streamable HTTP at /mcp, the card at /.well-known/agent-env.json, JSON-RPC
-data/reset|add|get at /agentenv, the new-game and autoplay extensions, and the action log. The game
-is tiny and deterministic: a settler that can found cities, a warrior that explores, growth,
-production and research.
+the twelve tools over streamable HTTP at /mcp, the card at /.well-known/agent-env.json, JSON-RPC
+data/reset|add|get at /agentenv (with decisions, harness counters and baselines), the new-game,
+autoplay and recording extensions, and the action log. The game is tiny and deterministic: a
+settler that can found cities, a warrior that explores, growth, production, research and gold.
 
     MCP_PORT=18765 OPENCIV_TURN_LIMIT=6 python playtest/stub_env.py      # needs mcp>=1.25,<2
 """
+import base64
 import functools
+import html
 import json
 import os
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
@@ -27,6 +29,11 @@ ORDERS = {"Settler": ["settle", "found_city", "goto", "hold", "disband"],
           "Warrior": ["explore", "goto", "fortify", "wake", "hold", "disband"],
           "Worker": ["auto_work", "goto", "hold", "disband"]}
 CITY_NAMES = ["Rome", "Veii", "Antium", "Cumae", "Neapolis", "Ravenna"]
+POLICIES = ("null", "found_capital", "settler_bot", "engine_ai")
+BASELINES = ("null", "settler_bot", "engine_ai")
+MUTATING = ("unit_order", "set_production", "research", "set_rates", "buy", "end_turn")
+FORMATS = {"mp4": "video/mp4", "gif": "image/gif", "html": "text/html", "png": "image/png"}
+GOLD_PER_SHIELD_TURN = 5
 
 
 class GameError(Exception):
@@ -53,8 +60,12 @@ class Game:
         self.units = {"u1": {"type": "Settler", "x": 10, "y": 10, "order": None, "target": None, "eta": 0},
                       "u2": {"type": "Warrior", "x": 10, "y": 10, "order": None, "target": None, "eta": 0}}
         self.cities: dict[str, dict] = {}
-        self.next_unit, self.research, self.beakers, self.techs = 3, None, 0, ["Alphabet"]
+        self.next_unit, self.research, self.research_by, self.beakers = 3, None, None, 0
+        self.techs, self.gold, self.rates = ["Alphabet"], 10, {"science": 5, "luxury": 0}
         self.plan, self.events, self.grow_every = "", [], 3 + self.seed % 2
+        self.decisions = {"production": Counter(), "research": Counter()}
+        self.history = [(self.turn, self.score()["total"])]
+        self.actions: dict[int, list[str]] = defaultdict(list)
 
     # --- rules -------------------------------------------------------------------------------
     @property
@@ -81,7 +92,7 @@ class Game:
         u = self.units.pop(uid)
         cid = f"c{len(self.cities) + 1}"
         self.cities[cid] = {"name": CITY_NAMES[len(self.cities) % len(CITY_NAMES)], "x": u["x"], "y": u["y"],
-                            "size": 1, "food": 0, "producing": None, "progress": 0}
+                            "size": 1, "food": 0, "producing": None, "by": None, "progress": 0}
         self.events.append(f"{self.cities[cid]['name']} ({cid}) founded at ({u['x']},{u['y']})")
         return cid
 
@@ -89,7 +100,8 @@ class Game:
         return [uid for uid, u in self.units.items() if u["order"] is None]
 
     def blockers(self) -> list[str]:
-        out = [f"{uid} {self.units[uid]['type']} has no orders → unit_order(unit=\"{uid}\", ...)" for uid in self.needs_orders()]
+        out = [f"{uid} {self.units[uid]['type']} has no orders → unit_order(unit=\"{uid}\", ...)"
+               for uid in self.needs_orders()]
         out += [f"{cid} {c['name']} produces nothing → set_production(city=\"{cid}\", item=\"Settler\")"
                 for cid, c in self.cities.items() if not c["producing"]]
         if self.cities and not self.research and (tech := next((t for t in TECHS if t not in self.techs), None)):
@@ -99,7 +111,7 @@ class Game:
     def advance(self) -> None:
         self.events = []
         if self.cities and not self.research and (pick := next((t for t in TECHS if t not in self.techs), None)):
-            self.research = pick
+            self.research, self.research_by = pick, "engine"
             self.events.append(f"research auto-picked: {pick}")
         for uid, u in list(self.units.items()):
             if u["order"] in ("settle", "goto"):
@@ -121,7 +133,7 @@ class Game:
                     u["order"], u["eta"] = None, 0
             elif u["order"] == "hold":
                 u["order"] = None
-        for cid, c in self.cities.items():
+        for c in self.cities.values():
             c["food"] += 1
             if c["food"] >= self.grow_every:
                 c["size"], c["food"] = c["size"] + 1, 0
@@ -130,22 +142,27 @@ class Game:
                 c["progress"] += 1
                 item = c["producing"]
                 if c["progress"] >= BUILD_TURNS[item] and not (item == "Settler" and c["size"] < 2):
-                    c["progress"] = 0
+                    self.decisions["production"][c["by"]] += 1
+                    c["progress"], c["by"] = 0, "engine"   # the engine keeps building the same item
                     if item == "Granary":
                         c["producing"] = None
                     else:
                         c["size"] -= item == "Settler"
                         uid = f"u{self.next_unit}"
                         self.next_unit += 1
-                        self.units[uid] = {"type": item, "x": c["x"], "y": c["y"], "order": None, "target": None, "eta": 0}
+                        self.units[uid] = {"type": item, "x": c["x"], "y": c["y"], "order": None, "target": None,
+                                           "eta": 0}
                     self.events.append(f"{c['name']} built {item}")
         if self.research:
             self.beakers += 1 + len(self.cities) // 2
             if self.beakers >= TECHS[self.research]:
                 self.techs.append(self.research)
+                self.decisions["research"][self.research_by] += 1
                 self.events.append(f"learned {self.research}")
-                self.research, self.beakers = None, 0
+                self.research, self.research_by, self.beakers = None, None, 0
+        self.gold += 1 + len(self.cities)
         self.turn += 1
+        self.history.append((self.turn, self.score()["total"]))
 
     # --- text ---------------------------------------------------------------------------------
     def footer(self) -> str:
@@ -166,7 +183,8 @@ class Game:
     def city_line(self, cid: str) -> str:
         c = self.cities[cid]
         prod = f"{c['producing']} {c['progress']}/{BUILD_TURNS[c['producing']]}" if c["producing"] else "nothing"
-        return f"{cid} {c['name']} ({c['x']},{c['y']}) size {c['size']}, grows in {self.grow_every - c['food']}t, building {prod}"
+        return (f"{cid} {c['name']} ({c['x']},{c['y']}) size {c['size']}, grows in {self.grow_every - c['food']}t, "
+                f"building {prod}")
 
 
 class State:
@@ -174,52 +192,60 @@ class State:
         self.scenario = {"seed": int(os.environ.get("OPENCIV_SEED", 1)),
                          "turn_limit": int(os.environ.get("OPENCIV_TURN_LIMIT", 60))}
         self.log_path = os.environ.get("OPENCIV_ACTION_LOG")
+        self.new_games = 0
         self.new_game()
 
     def new_game(self):
         self.game = Game(**self.scenario)
+        self.new_games += 1
+        self.autoplay_turns = self.extension_calls = 0
         self.ok = self.invalid = self.streak = self.max_streak = 0
         self.calls, self.failures = Counter(), Counter()
-        self._baselines = {p: simulate(self.scenario, p) for p in ("null", "engine_ai")}
+        self._baselines = {p: simulate(self.scenario, p) for p in BASELINES}
 
     def baselines(self) -> dict:
         g = self.game
-        return {p: {"turn": g.turn, "score": s[min(g.turn, len(s)) - 1], "final": s[-1]} for p, s in self._baselines.items()}
+        return {p: {"turn": g.turn, "score": s[min(g.turn, len(s)) - 1], "final": s[-1]}
+                for p, s in self._baselines.items()}
 
     def summary(self) -> dict:
         g, sc = self.game, self.game.score()
         return {"turn": g.turn, "turn_limit": g.limit, "game_over": g.over, "defeated": False, "seed": g.seed,
                 "civ": "Rome", "score": sc,
                 "metrics": {"cities": sc["cities"], "pop": sc["pop"], "techs": sc["techs"], "tiles": sc["tiles"],
-                            "units": len(g.units), "gold": 10 * g.turn, "explored_pct": min(100, 10 + 5 * g.turn)},
+                            "units": len(g.units), "gold": g.gold, "explored_pct": min(100, 10 + 5 * g.turn)},
                 "baselines": self.baselines(),
+                "decisions": {k: {"agent": v["agent"], "engine": v["engine"]} for k, v in g.decisions.items()},
+                "harness": {"autoplay_turns": self.autoplay_turns, "new_games": self.new_games,
+                            "extension_calls": self.extension_calls},
                 "actions": {"ok": self.ok, "invalid": self.invalid, "max_consecutive_errors": self.max_streak}}
 
 
-def autoplay(g: Game, turns: int, policy: str) -> None:
-    for _ in range(turns):
-        if g.over:
-            return
-        if policy in ("found_capital", "engine_ai") and "u1" in g.units and not g.cities:
+def autoplay(g: Game, turns: int, policy: str) -> int:
+    """Play up to `turns` turns with a scripted policy; returns the turns played."""
+    played = 0
+    while played < turns and not g.over:
+        if policy != "null" and "u1" in g.units and not g.cities:
             g.found("u1")
-        for cid, c in g.cities.items():
-            c["producing"] = c["producing"] or ("Settler" if policy == "engine_ai" else "Warrior")
-        for uid, u in g.units.items():
-            if policy == "engine_ai" and u["type"] == "Settler" and u["order"] is None and (s := g.sites(u["x"], u["y"], 1)):
+        busy = policy in ("settler_bot", "engine_ai")
+        for c in g.cities.values():
+            if not c["producing"]:
+                c["producing"], c["by"] = "Settler" if busy else "Warrior", "engine"
+        for u in g.units.values():
+            if busy and u["type"] == "Settler" and u["order"] is None and (s := g.sites(u["x"], u["y"], 1)):
                 u.update(order="settle", target=(s[0][0], s[0][1]), eta=max(1, dist(u["x"], u["y"], s[0][0], s[0][1])))
             elif u["order"] is None:
-                u["order"] = "explore" if policy == "engine_ai" and u["type"] == "Warrior" else "hold"
+                u["order"] = "explore" if busy and u["type"] == "Warrior" else "hold"
         g.advance()
+        played += 1
+    return played
 
 
 def simulate(scenario: dict, policy: str) -> list[int]:
     """Score per turn (index turn-1) for a policy on a fresh game of the same scenario."""
     g = Game(**scenario)
-    scores = [g.score()["total"]]
-    while not g.over:
-        autoplay(g, 1, policy)
-        scores.append(g.score()["total"])
-    return scores
+    autoplay(g, g.limit, policy)
+    return [score for _, score in g.history]
 
 
 STATE = State()
@@ -232,13 +258,16 @@ def tool(fn):
     def wrapper(**kwargs):
         g, t0 = STATE.game, time.perf_counter()
         turn, args = g.turn, {k: v for k, v in kwargs.items() if v is not None}
-        row = {"ts": round(time.time(), 3), "turn": turn, "tool": fn.__name__, "args": args, "ok": True, "error_code": None}
+        row = {"ts": round(time.time(), 3), "turn": turn, "tool": fn.__name__, "args": args, "ok": True,
+               "error_code": None}
         if fn.__name__ == "end_turn":
             row["idle_units"] = len(g.needs_orders())
         STATE.calls[turn] += 1
         try:
             text = fn(**kwargs)
             STATE.ok, STATE.streak = STATE.ok + 1, 0
+            if fn.__name__ in MUTATING and (fn.__name__ != "research" or args):
+                g.actions[turn].append(f"{fn.__name__} {json.dumps(args)}")
             if STATE.calls[turn] >= 25:
                 text += "\nconsider end_turn(skip_idle=true)"
             return text
@@ -252,7 +281,7 @@ def tool(fn):
                 if STATE.failures[key] >= 3 else ""
             raise ValueError(f"{e}{hint}\n{g.footer()}") from None
         except Exception:
-            row.update(ok=False, error_code="internal")
+            row.update(ok=False, error_code="internal_error")
             raise
         finally:
             if fn.__name__ == "end_turn":
@@ -266,7 +295,8 @@ def tool(fn):
 
 def _live() -> Game:
     if STATE.game.over:
-        raise GameError("game_over", f"the game is over at T{STATE.game.turn}; final score {STATE.game.score()['total']}.")
+        raise GameError("game_over", f"the game is over at T{STATE.game.turn}; "
+                                     f"final score {STATE.game.score()['total']}.")
     return STATE.game
 
 
@@ -286,7 +316,7 @@ def brief(g: Game) -> str:
     sc, base = g.score(), STATE.baselines()
     research = f"{g.research} {g.beakers}/{TECHS[g.research]}" if g.research else "none"
     standing = [g.unit_line(uid) for uid, u in g.units.items() if u["order"]]
-    lines = [f"T{g.turn}/{g.limit} · Rome · Research: {research}",
+    lines = [f"T{g.turn}/{g.limit} · Rome · gold {g.gold} · Research: {research}",
              f"SCORE {sc['total']} (cities {sc['cities']}, pop {sc['pop']}, tiles {sc['tiles']}, techs {sc['techs']})"
              f" · baselines now: null {base['null']['score']}, built-in AI {base['engine_ai']['score']}",
              "NEEDS ORDERS: " + ("; ".join(g.blockers()) or "nothing")]
@@ -299,7 +329,8 @@ def brief(g: Game) -> str:
 
 @tool
 def get_turn_brief() -> str:
-    """Turn, score, research, baselines, what needs orders, cities, last events and your plan. Lost context? Call this."""
+    """Turn, score, research, baselines, what needs orders, cities, last events and your plan.
+    Lost context? Call this."""
     return brief(STATE.game)
 
 
@@ -326,10 +357,13 @@ def view_map(x: int | None = None, y: int | None = None, radius: int = 3, around
     marks = {(s[0], s[1]): "*" for s in SITES}
     marks |= {(u["x"], u["y"]): u["type"][0] for u in g.units.values()}
     marks |= {(c["x"], c["y"]): "C" for c in g.cities.values()}
-    rows = ["".join(marks.get((cx, cy), ".") if (cx + cy) % 2 == 0 else " " for cx in range(x - 2 * radius, x + 2 * radius + 1))
+    rows = ["".join(marks.get((cx, cy), ".") if (cx + cy) % 2 == 0 else " "
+                    for cx in range(x - 2 * radius, x + 2 * radius + 1))
             for cy in range(y - 2 * radius, y + 2 * radius + 1)]
-    notable = [f"site ({s[0]},{s[1]}) {s[3]}, {dist(x, y, s[0], s[1])} tiles {direction(x, y, s[0], s[1])}" for s in g.sites(x, y)]
-    return "\n".join(rows + ["legend: C city, S settler, W warrior, * good site, . grassland", "notable: " + "; ".join(notable)])
+    notable = [f"site ({s[0]},{s[1]}) {s[3]}, {dist(x, y, s[0], s[1])} tiles {direction(x, y, s[0], s[1])}"
+               for s in g.sites(x, y)]
+    return "\n".join(rows + ["legend: C city, S settler, W warrior, * good site, . grassland",
+                             "notable: " + "; ".join(notable)])
 
 
 @tool
@@ -337,9 +371,16 @@ def find_city_sites(unit: str | None = None, top: int = 5) -> str:
     """Ranked city sites with score, distance, direction and travel turns from the unit (default: first settler)."""
     g = STATE.game
     u = _unit(g, unit) if unit else next((u for u in g.units.values() if u["type"] == "Settler"), {"x": 10, "y": 10})
-    sites = g.sites(u["x"], u["y"], top)
-    return "\n".join(f"({sx},{sy}) score {score}, {dist(u['x'], u['y'], sx, sy)} tiles {direction(u['x'], u['y'], sx, sy)}, "
-                     f"{max(1, dist(u['x'], u['y'], sx, sy))} turns, {kind}" for sx, sy, score, kind in sites) or "no free sites"
+    lines = []
+    for sx, sy, score, kind in g.sites(u["x"], u["y"], top):
+        d = dist(u["x"], u["y"], sx, sy)
+        lines.append(f"({sx},{sy}) score {score}, {d} tiles {direction(u['x'], u['y'], sx, sy)}, {max(1, d)} turns, "
+                     f"{kind}")
+    return "\n".join(lines) or "no free sites"
+
+
+def _settle_hint(unit: str, site: tuple) -> str:
+    return f'Do this: unit_order(unit="{unit}", order="settle", x={site[0]}, y={site[1]})'
 
 
 @tool
@@ -353,29 +394,32 @@ def unit_order(unit: str, order: str, x: int | None = None, y: int | None = None
         raise GameError("invalid_order", f"{unit} {u['type']} cannot {order}. Valid orders: {', '.join(valid)}.")
     if order in ("settle", "goto"):
         if x is None or y is None:
-            raise GameError("bad_target", f"{order} needs x and y, e.g. unit_order(unit=\"{unit}\", order=\"{order}\", x=14, y=10).")
+            raise GameError("bad_target", f"{order} needs x and y.")
         if (x + y) % 2:
-            raise GameError("bad_target", f"({x},{y}) is not a tile: x+y must be even. Copy coordinates from find_city_sites.")
+            raise GameError("bad_target", f"({x},{y}) is not a tile: x+y must be even. Copy coordinates from "
+                                          "find_city_sites.")
         if order == "settle" and (why := g.why_not_found(x, y)):
             best = g.sites(u["x"], u["y"], 1)
             raise GameError("cannot_found", f"cannot settle at ({x},{y}): {why}."
-                            + (f" Do this: unit_order(unit=\"{unit}\", order=\"settle\", x={best[0][0]}, y={best[0][1]})" if best else ""))
+                            + (f" {_settle_hint(unit, best[0])}" if best else ""))
         if (x, y) == (u["x"], u["y"]) and order == "settle":
             return f"{g.cities[g.found(unit)]['name']} founded.\n{g.footer()}"
         d = dist(u["x"], u["y"], x, y)
         u.update(order=order, target=(x, y), eta=max(1, d))
-        return f"{unit} {u['type']} will {order} at ({x},{y}), {d} tiles {direction(u['x'], u['y'], x, y)}, arriving in {max(1, d)}t.\n{g.footer()}"
+        return (f"{unit} {u['type']} will {order} at ({x},{y}), {d} tiles {direction(u['x'], u['y'], x, y)}, "
+                f"arriving in {max(1, d)}t.\n{g.footer()}")
     if order == "found_city":
         if why := g.why_not_found(u["x"], u["y"]):
             best = g.sites(u["x"], u["y"], 3)
             raise GameError("cannot_found", f"cannot found a city at ({u['x']},{u['y']}): {why}. Sites: "
                             + " | ".join(f"({s[0]},{s[1]}) score {s[2]}" for s in best)
-                            + (f". Do this: unit_order(unit=\"{unit}\", order=\"settle\", x={best[0][0]}, y={best[0][1]})" if best else ""))
+                            + (f". {_settle_hint(unit, best[0])}" if best else ""))
         return f"{g.cities[g.found(unit)]['name']} founded at ({u['x']},{u['y']}).\n{g.footer()}"
     if order == "disband":
         del g.units[unit]
         return f"{unit} disbanded.\n{g.footer()}"
-    u.update(order=None if order == "wake" else {"fortify": "fortified", "explore": "explore"}.get(order, order), target=None, eta=0)
+    standing = {"fortify": "fortified", "explore": "explore"}.get(order, order)
+    u.update(order=None if order == "wake" else standing, target=None, eta=0)
     return f"{unit} {u['type']}: {order}.\n{g.footer()}"
 
 
@@ -387,7 +431,8 @@ def city_info(city: str | None = None) -> str:
     for cid in ids:
         _city(g, cid)
     options = ", ".join(f"{k} ({v}t)" for k, v in BUILD_TURNS.items())
-    return "\n".join([f"{g.city_line(cid)} · can build: {options}" for cid in ids] or ["no cities yet"]) + "\n" + g.footer()
+    lines = [f"{g.city_line(cid)} · can build: {options}" for cid in ids] or ["no cities yet"]
+    return "\n".join(lines) + "\n" + g.footer()
 
 
 @tool
@@ -397,7 +442,7 @@ def set_production(city: str, item: str) -> str:
     c = _city(g, city)
     if item not in BUILD_TURNS:
         raise GameError("unknown_item", f"{c['name']} cannot build {item!r}. Options: {', '.join(BUILD_TURNS)}.")
-    c["producing"], c["progress"] = item, 0
+    c["producing"], c["by"], c["progress"] = item, "agent", 0
     return f"{c['name']} now builds {item} ({BUILD_TURNS[item]}t).\n{g.footer()}"
 
 
@@ -413,8 +458,33 @@ def research(tech: str | None = None) -> str:
         raise GameError("already_known", f"{tech} is already known. Available: {', '.join(available)}.")
     if tech not in TECHS:
         raise GameError("unknown_tech", f"unknown tech {tech!r}. Available: {', '.join(available)}.")
-    g.research, g.beakers = tech, 0
+    g.research, g.research_by, g.beakers = tech, "agent", 0
     return f"Researching {tech} ({TECHS[tech]}t).\n{g.footer()}"
+
+
+@tool
+def set_rates(science: int, luxury: int = 0) -> str:
+    """Set the science and luxury rates (0-10 each); tax is the rest."""
+    g = _live()
+    if min(science, luxury) < 0 or science + luxury > 10:
+        raise GameError("bad_rates", "science and luxury are 0-10 each and add up to at most 10.")
+    g.rates = {"science": science, "luxury": luxury}
+    return f"Rates: science {science}, luxury {luxury}, tax {10 - science - luxury}.\n{g.footer()}"
+
+
+@tool
+def buy(city: str) -> str:
+    """Rush the city's current production with gold; it completes next turn."""
+    g = _live()
+    c = _city(g, city)
+    if not c["producing"]:
+        raise GameError("cannot_hurry", f"{c['name']} is producing nothing.")
+    cost = GOLD_PER_SHIELD_TURN * max(0, BUILD_TURNS[c["producing"]] - c["progress"] - 1)
+    if cost > g.gold:
+        raise GameError("cannot_hurry", f"buying {c['producing']} costs {cost} gold; you have {g.gold}.")
+    g.gold -= cost
+    c["progress"] = BUILD_TURNS[c["producing"]] - 1
+    return f"Bought {c['producing']} in {c['name']} for {cost} gold.\n{g.footer()}"
 
 
 @tool
@@ -461,14 +531,19 @@ def _ext(uri: str, op: str, props: dict) -> dict:
 
 @mcp.custom_route("/.well-known/agent-env.json", methods=["GET"])
 async def card(request: Request) -> JSONResponse:
-    tools = [{"name": t.name, "description": t.description, "inputSchema": t.inputSchema} for t in await mcp.list_tools()]
+    tools = [{"name": t.name, "description": t.description, "inputSchema": t.inputSchema}
+             for t in await mcp.list_tools()]
     return JSONResponse({
         "name": os.environ.get("ENVIRONMENT_NAME", NAME), "protocolVersion": "1.0", "url": "/agentenv",
         "preferredTransport": "JSONRPC", "additionalInterfaces": [{"url": "/mcp", "transport": "mcp"}],
         "capabilities": {"operations": ["data/reset", "data/add", "data/get"], "tools": tools, "extensions": [
-            _ext("urn:openciv3:new-game/v1", "new_game", {"seed": {"type": "integer"}, "turn_limit": {"type": "integer"}}),
-            _ext("urn:openciv3:autoplay/v1", "autoplay", {"turns": {"type": "integer"},
-                                                         "policy": {"enum": ["null", "found_capital", "engine_ai"]}})]}})
+            _ext("urn:openciv3:new-game/v1", "new_game",
+                 {"seed": {"type": "integer"}, "turn_limit": {"type": "integer"}}),
+            _ext("urn:openciv3:autoplay/v1", "autoplay",
+                 {"turns": {"type": "integer"}, "policy": {"enum": list(POLICIES)}}),
+            _ext("urn:openciv3:recording/v1", "recording",
+                 {"formats": {"type": "array", "items": {"enum": list(FORMATS)}}, "view": {"type": "string"},
+                  "fps": {"type": "integer"}})]}})
 
 
 @mcp.custom_route("/agentenv", methods=["POST"])
@@ -486,7 +561,8 @@ async def data_plane(request: Request) -> JSONResponse:
     elif method == "data/get":
         result = {"parts": [{"kind": "data", "data": STATE.summary()}]}
     else:
-        return JSONResponse({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"method not found: {method}"}})
+        error = {"code": -32601, "message": f"method not found: {method}"}
+        return JSONResponse({"jsonrpc": "2.0", "id": rid, "error": error})
     return JSONResponse({"jsonrpc": "2.0", "id": rid, "result": result})
 
 
@@ -494,15 +570,37 @@ async def data_plane(request: Request) -> JSONResponse:
 async def new_game(request: Request) -> JSONResponse:
     STATE.scenario |= await request.json()
     STATE.new_game()
+    STATE.extension_calls += 1
     return JSONResponse({"turn": STATE.game.turn, "turn_limit": STATE.game.limit, "seed": STATE.game.seed})
 
 
 @mcp.custom_route("/agentenv/ext/autoplay", methods=["POST"])
 async def autoplay_ext(request: Request) -> JSONResponse:
     body = await request.json()
-    autoplay(STATE.game, int(body.get("turns", 1)), body.get("policy", "null"))
+    STATE.autoplay_turns += autoplay(STATE.game, int(body.get("turns", 1)), body.get("policy", "null"))
+    STATE.extension_calls += 1
     g = STATE.game
     return JSONResponse({"turn": g.turn, "game_over": g.over, "defeated": False, "score": g.score()})
+
+
+def _page(g: Game) -> str:
+    rows = "".join(f"<tr><td>T{t}</td><td>{s}</td><td>{html.escape('; '.join(g.actions.get(t, [])))}</td></tr>"
+                   for t, s in g.history)
+    return f"<!doctype html><title>stub replay seed {g.seed}</title><table>{rows}</table>"
+
+
+@mcp.custom_route("/agentenv/ext/recording", methods=["POST"])
+async def recording(request: Request) -> JSONResponse:
+    """Fake media, and an HTML page with each turn's score and the agent's calls that turn."""
+    formats = (await request.json()).get("formats") or ["mp4", "html"]
+    STATE.extension_calls += 1
+    g = STATE.game
+    files = []
+    for fmt in formats:
+        data = _page(g).encode() if fmt == "html" else f"stub {fmt} {json.dumps(g.history)}".encode()
+        files.append({"name": f"openciv3-seed{g.seed}.{fmt}", "content_type": FORMATS[fmt], "bytes": len(data),
+                      "base64": base64.b64encode(data).decode()})
+    return JSONResponse({"turns": len(g.history), "files": files})
 
 
 if __name__ == "__main__":

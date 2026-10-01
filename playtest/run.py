@@ -3,7 +3,8 @@
     python playtest/run.py --seed 1 --turns 60 --model sonnet --budget-usd 25
 
 The run directory gets transcript.jsonl (claude's stream-json), actions.jsonl (the env's action
-log), summary.json (final data/get), meta.json, server.log, claude.stderr and metrics.json.
+log), summary.json (final data/get), meta.json, server.log, claude.stderr, metrics.json and the env's
+recording of the game (recording.mp4, or .gif without ffmpeg, and replay.html).
 `--server-cmd` may use the placeholders {port}, {seed}, {turns} and {run_dir}, e.g. for Docker:
     --server-cmd "docker run --rm -p 127.0.0.1:{port}:18765 -e OPENCIV_SEED={seed}
                   -e OPENCIV_TURN_LIMIT={turns} -e OPENCIV_ACTION_LOG=/run/actions.jsonl -v {run_dir}:/run openciv3"
@@ -16,11 +17,20 @@ import sys
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import analyze
-from envctl import DEFAULT_SERVER_CMD, Env, HarnessError, clean_claude_project, free_ports, kill_group
+from envctl import (
+    DEFAULT_SERVER_CMD,
+    RECORDING_FILES,
+    Env,
+    HarnessError,
+    clean_claude_project,
+    free_ports,
+    kill_group,
+    save_recording,
+)
 
 HERE = Path(__file__).resolve().parent
 MCP_NAME = "openciv3"
@@ -42,7 +52,7 @@ def load_prompts(path: Path) -> tuple[str, str]:
     try:
         return "\n".join(sections["system prompt"]).strip(), "\n".join(sections["game prompt"]).strip()
     except KeyError as e:
-        raise SystemExit(f"{path}: missing section ## {e.args[0].capitalize()}")
+        raise SystemExit(f"{path}: missing section ## {e.args[0].capitalize()}") from None
 
 
 class _Fields(dict):
@@ -166,20 +176,25 @@ def main() -> int:
     ap.add_argument("--actions", type=Path, help="with --url: the env's OPENCIV_ACTION_LOG, to copy this run's rows")
     ap.add_argument("--port", type=int, help="port for the env (default: a free one)")
     ap.add_argument("--env", action="append", default=[], metavar="KEY=VALUE", help="extra env var for the server")
-    ap.add_argument("--scenario", type=json.loads, default={}, help='extra new_game args as JSON, e.g. \'{"size": "Small"}\'')
+    ap.add_argument("--scenario", type=json.loads, default={},
+                    help='extra new_game args as JSON, e.g. \'{"size": "Small"}\'')
     ap.add_argument("--run-dir", type=Path)
     ap.add_argument("--prompt", type=Path, default=HERE / "prompt.md")
     ap.add_argument("--baselines-file", type=Path, help="baselines JSON from baseline.py, for the metrics")
     ap.add_argument("--claude", default="claude", help="claude executable")
-    ap.add_argument("--claude-arg", action="append", default=[], help="extra claude flag, e.g. --claude-arg=--effort=low")
+    ap.add_argument("--claude-arg", action="append", default=[],
+                    help="extra claude flag, e.g. --claude-arg=--effort=low")
+    ap.add_argument("--no-recording", action="store_true", help="skip the env's recording at the end")
     args = ap.parse_args()
 
     run_dir = (args.run_dir or HERE / "runs" / f"{datetime.now():%Y%m%d-%H%M%S}-seed{args.seed}").resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
-    for stale in ("transcript.jsonl", "actions.jsonl", "summary.json", "metrics.json", "server.log"):
+    for stale in ("transcript.jsonl", "actions.jsonl", "summary.json", "metrics.json", "server.log",
+                  *RECORDING_FILES.values()):
         (run_dir / stale).unlink(missing_ok=True)
-    meta = {"seed": args.seed, "turn_limit": args.turns, "model": args.model, "budget_usd": args.budget_usd,
-            "max_agent_turns": args.max_agent_turns, "started": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    meta = {"seed": args.seed, "turn_limit": args.turns, "scenario": args.scenario, "model": args.model,
+            "budget_usd": args.budget_usd, "max_agent_turns": args.max_agent_turns,
+            "started": datetime.now(UTC).isoformat(timespec="seconds"),
             "baselines_file": str(args.baselines_file.resolve()) if args.baselines_file else None}
     t0 = time.monotonic()
     env = None
@@ -212,6 +227,13 @@ def main() -> int:
                 (run_dir / "summary.json").write_text(json.dumps(env.summary(), indent=2) + "\n")
             except HarnessError as e:
                 meta.setdefault("harness_error", f"final data/get: {e}")
+            if not args.no_recording:
+                try:
+                    meta["recording"] = save_recording(env, run_dir)
+                    log(f"recording: {', '.join(meta['recording']['files'])}")
+                except HarnessError as e:
+                    meta["recording"] = {"error": str(e)}
+                    log(f"no recording: {e}")
             env.stop()
         if args.actions and args.actions.exists():
             with open(args.actions, "rb") as src:

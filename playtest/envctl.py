@@ -2,6 +2,7 @@
 
 Standard library only, so the harness runs on any Python 3.11+ without the env's dependencies.
 """
+import base64
 import json
 import os
 import re
@@ -20,6 +21,10 @@ from urllib.parse import urljoin
 CARD_PATH = "/.well-known/agent-env.json"
 RPC_PATH = "/agentenv"
 AUTOPLAY_URI = "urn:openciv3:autoplay/v1"
+POLICIES = ("null", "found_capital", "settler_bot", "engine_ai")   # autoplay policies, weakest first
+RECORDING_URI = "urn:openciv3:recording/v1"
+# What a run directory calls each format the recording extension returns.
+RECORDING_FILES = {"mp4": "recording.mp4", "gif": "recording.gif", "html": "replay.html", "png": "final.png"}
 DEFAULT_SERVER_CMD = f"{shlex.quote(sys.executable)} -m agentenv_openciv3.server"
 
 
@@ -161,6 +166,20 @@ class Env:
     def stop(self) -> None:
         if self.proc:
             kill_group(self.proc)
+
+
+def save_recording(env: Env, run_dir: Path, formats=("mp4", "html"), timeout: float = 900) -> dict:
+    """Render the env's recording so far into run_dir; returns {"files": [names written], "notes"?: [...]}."""
+    reply = env.extension(RECORDING_URI, timeout=timeout, formats=list(formats)) or {}
+    written = []
+    for f in reply.get("files") or []:
+        name = RECORDING_FILES.get(Path(f.get("name", "")).suffix.lstrip(".").lower())
+        if name and f.get("base64"):
+            (run_dir / name).write_bytes(base64.b64decode(f["base64"]))
+            written.append(name)
+    if not written:
+        raise HarnessError(f"{RECORDING_URI} returned no files: {str(reply)[:300]}")
+    return {"files": written, **({"notes": reply["notes"]} if reply.get("notes") else {})}
 
 
 def clean_claude_project(cwd: Path) -> list[Path]:
