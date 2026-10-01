@@ -1,12 +1,22 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <!-- Build with scripts/build-bridge.sh: it first creates build/engine from vendor/OpenCiv3 plus patches/. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>disable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <Version>0.1.0</Version>
+    <EngineDir>$(MSBuildThisFileDirectory)../../build/engine/</EngineDir>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../../vendor/OpenCiv3/C7Engine/C7Engine.csproj" />
+    <ProjectReference Include="$(EngineDir)C7Engine/C7Engine.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="$(EngineDir)C7/Lua/**" LinkBase="Lua" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="RequireEngine" BeforeTargets="Restore;CollectPackageReferences;Build" Condition="!Exists('$(EngineDir)C7Engine/C7Engine.csproj')">
+    <Error Text="build/engine is missing: run scripts/prepare-engine.sh (scripts/build-bridge.sh does it for you)." />
+  </Target>
 </Project>

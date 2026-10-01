@@ -1,0 +1,13 @@
+Player.DeclareWarOn: draw refuseContactUntilTurn from the seeded GameData.rng so games stay deterministic.
+
+--- a/C7Engine/C7GameData/Player.cs
++++ b/C7Engine/C7GameData/Player.cs
+@@ -307,7 +307,7 @@
+ 			// elapsed. The exact civ3 mechanism here is unknown, so we just
+ 			// pick some reasonable random number. To penalize sneak attacks we
+ 			// use a higher upper bound.
+-			int refuseContactUntilTurn = currentTurn + new Random().Next(5, isSneakAttack ? 16 : 12);
++			int refuseContactUntilTurn = currentTurn + GameData.rng.Next(5, isSneakAttack ? 16 : 12);
+ 
+ 			DeclareWar(this, other, isSneakAttack, refuseContactUntilTurn);
+ 

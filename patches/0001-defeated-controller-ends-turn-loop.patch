@@ -1,0 +1,18 @@
+TurnHandling.PlayPlayerTurns: hand control back when the UI controller is defeated, instead of skipping it and looping in AdvanceTurn forever.
+
+--- a/C7Engine/EntryPoints/TurnHandling.cs
++++ b/C7Engine/EntryPoints/TurnHandling.cs
+@@ -102,6 +102,13 @@
+ 			// Order players: Human -> AI -> Barbarian AI
+ 			var orderedPlayers = gameData.players.OrderByDescending(p => !p.isBarbarians).ThenByDescending(p => p.isHuman).ToList();
+ 			foreach (Player player in orderedPlayers) {
++				// A defeated controller never plays again, so skipping it would
++				// loop forever. Hand control back once per turn instead.
++				if (player.id == EngineStorage.uiControllerID && player.defeated && !player.hasPlayedThisTurn) {
++					new MsgStartTurn().send();
++					return true;
++				}
++
+ 				if (player.hasPlayedThisTurn || player.defeated) {
+ 					continue;
+ 				}

@@ -1,0 +1,336 @@
+using System.Text.Json.Nodes;
+using C7Engine;
+using C7Engine.Lua;
+using C7GameData;
+using C7GameData.Save;
+
+namespace CivBridge;
+
+/// <summary>One game, driven by protocol commands. Everything here runs on the engine thread.</summary>
+sealed partial class Session(string luaDir, Watchdog watchdog) {
+	public const string Version = "0.1.0";
+
+	static readonly string[] Commands =
+		["new_game", "state", "map", "city_sites", "unit_order", "city", "set_production", "techs", "set_research", "end_turn", "autoplay", "score"];
+	static readonly string[] Policies = ["null", "found_capital", "engine_ai"];
+
+	GameMode mode;
+	GameData gd;
+	Player human;
+	int seed, turnLimit;
+	readonly Ids ids = new();
+	readonly Dictionary<MapUnit, Order> orders = [];
+	List<JsonObject> lastEvents = [];
+	List<JsonObject> uiEvents = [];
+	List<JsonObject> autos = [];
+	int eventTurn;
+
+	bool GameOver => human.defeated || gd.turn >= turnLimit;
+
+	public async Task<JsonNode> Run(string cmd, Args a) {
+		if (cmd == "new_game") return NewGame(a);
+		if (!Commands.Contains(cmd))
+			throw new BridgeError("unknown_command", $"'{cmd}' is not a CivBridge command.", BridgeError.Names(Commands));
+		if (gd == null) throw new BridgeError("no_game", "No game is running yet; send new_game first.");
+		ids.Sync(gd, human);
+		PruneOrders();
+		return cmd switch {
+			"state" => State(),
+			"map" => Map(a),
+			"city_sites" => CitySites(a),
+			"unit_order" => await UnitOrder(a),
+			"city" => CityInfo(a),
+			"set_production" => SetProduction(a),
+			"techs" => Techs(),
+			"set_research" => SetResearch(a),
+			"end_turn" => await EndTurn(a),
+			"autoplay" => await Autoplay(a),
+			_ => ScoreAll(),
+		};
+	}
+
+	JsonObject NewGame(Args a) {
+		if (gd != null)
+			throw new BridgeError("already_started", $"A game (seed {seed}) is already running; a bridge plays one game. Restart the bridge to start another.");
+		int seedArg = a.Int("seed", min: 0);
+		mode ??= GameMode.Load(luaDir, new GameMode.Config("civ3", ["standalone"]));
+		SaveGame save = mode.GetSave();
+		Civilization civ = Pick(save.Civilizations.Where(c => !c.isBarbarian), c => c.name, a.Str("civ", "Rome"), "civ");
+		int opponents = a.Int("opponents", 3, 1, 11);
+		WorldSize size = Pick(save.WorldSizes, w => w.name, a.Str("size", "Tiny"), "size");
+		Difficulty difficulty = Pick(save.Difficulties, d => d.Name, a.Str("difficulty", "Regent"), "difficulty");
+		var barbarians = Pick(Enum.GetValues<BarbarianActivity>(), b => b.ToString(), a.Str("barbarians", "Sedentary"), "barbarians");
+		var landform = Pick(Enum.GetValues<WorldCharacteristics.Landform>(), l => l.ToString(), a.Str("landform", "Pangaea"), "landform");
+		var ocean = Pick(Enum.GetValues<WorldCharacteristics.OceanCoverage>(), o => ((int)o).ToString(), a.Int("ocean", 70).ToString(), "ocean");
+		int limit = a.Int("turn_limit", 60, 1);
+
+		var world = new WorldSize {
+			name = size.name, width = size.width, height = size.height, numberOfCivs = opponents + 1,
+			distanceBetweenCivs = size.distanceBetweenCivs, techRate = size.techRate, optimalNumberOfCities = size.optimalNumberOfCities,
+		};
+		var setup = new GameSetup {
+			playerCivilization = civ,
+			difficulty = difficulty,
+			worldCharacteristics = new WorldCharacteristics(save) {
+				landform = landform, oceanCoverage = ocean, barbarianActivity = barbarians, worldSize = world, mapSeed = seedArg,
+				age = WorldCharacteristics.Age.Billion_4, climate = WorldCharacteristics.Climate.Normal,
+				temperature = WorldCharacteristics.Temperature.Temperate,
+			},
+			opponents = Enumerable.Repeat(new SelectedOpponent { isRandom = true }, opponents).ToList(),
+		};
+		try {
+			setup.Populate(save);
+		} catch (ArgumentOutOfRangeException) {
+			throw new BridgeError("bad_args",
+				$"The {size.name} {landform} map has room for {save.Map.startingLocations.Count} civilizations, not {opponents + 1}; use fewer opponents or a larger size.");
+		}
+
+		Player player = CreateGame.createGame(save, _ => mode.behaviors).GetAwaiter().GetResult();
+		(gd, human, seed, turnLimit) = (EngineStorage.gameData, player, seedArg, limit);
+		foreach (Player p in gd.players) TurnHandling.InitTurnData(p, p.SitsOutFirstTurn());
+		TurnHandling.OnBeginTurn();
+		DrainUi();
+		ids.Sync(gd, human);
+
+		return new JsonObject {
+			["turn"] = gd.turn,
+			["turn_limit"] = turnLimit,
+			["seed"] = seed,
+			["civ"] = human.civilization.name,
+			["opponents"] = Json.Strings(Rivals().Select(p => p.civilization.name)),
+			["map"] = new JsonObject { ["width"] = gd.map.numTilesWide, ["height"] = gd.map.numTilesTall, ["wrap_x"] = gd.map.wrapHorizontally },
+		};
+	}
+
+	static T Pick<T>(IEnumerable<T> items, Func<T, string> name, string wanted, string arg) {
+		foreach (T item in items) if (string.Equals(name(item), wanted.Trim(), StringComparison.OrdinalIgnoreCase)) return item;
+		throw new BridgeError("bad_args", $"Unknown {arg} '{wanted}'.", BridgeError.Names(items.Select(name)));
+	}
+
+	async Task<JsonNode> EndTurn(Args a) {
+		bool skipIdle = a.Bool("skip_idle", false), untilAttention = a.Bool("until_attention", false);
+		int maxTurns = Math.Clamp(a.Int("max_turns", 1), 1, 20);
+		EnsurePlaying();
+		JsonArray blockers = Blockers();
+		if (blockers.Count > 0 && !skipIdle) return new JsonObject { ["blocked"] = true, ["blockers"] = blockers };
+
+		autos = [];
+		var events = new List<JsonObject>();
+		int advanced = 0;
+		do {
+			events.AddRange(await AdvanceTurn(engineAi: false));
+			advanced++;
+		} while (untilAttention && advanced < maxTurns && !GameOver && Blockers().Count == 0);
+		lastEvents = events;
+
+		return new JsonObject {
+			["blocked"] = false,
+			["turns_advanced"] = advanced,
+			["turn"] = gd.turn,
+			["game_over"] = GameOver,
+			["defeated"] = human.defeated,
+			["events"] = Json.Array(events, e => e.DeepClone()),
+			["auto"] = Json.Array(autos, e => e.DeepClone()),
+		};
+	}
+
+	async Task<JsonNode> Autoplay(Args a) {
+		int turns = a.Int("turns", min: 1, max: 10000);
+		string policy = a.Has("policy") ? a.Str("policy") : "null";
+		if (!Policies.Contains(policy)) throw new BridgeError("bad_args", $"Unknown autoplay policy '{policy}'.", BridgeError.Names(Policies));
+		bool record = a.Bool("record", false);
+
+		autos = [];
+		var trajectory = new JsonArray();
+		if (record) trajectory.Add(Point());
+		// Unlike end_turn this keeps going after a defeat, so baselines always cover the requested turns.
+		for (int i = 0; i < turns && gd.turn < turnLimit; i++) {
+			if (policy == "found_capital" && !human.defeated) await FoundCapitalAndAutomate();
+			lastEvents = await AdvanceTurn(engineAi: policy == "engine_ai");
+			if (record) trajectory.Add(Point());
+		}
+
+		var result = new JsonObject {
+			["turn"] = gd.turn,
+			["game_over"] = GameOver,
+			["defeated"] = human.defeated,
+			["score"] = ScoreOf(human),
+		};
+		if (record) result["trajectory"] = trajectory;
+		return result;
+	}
+
+	JsonObject Point() => new() { ["turn"] = gd.turn, ["score"] = ScoreOf(human) };
+
+	async Task FoundCapitalAndAutomate() {
+		if (human.cities.Count == 0) {
+			MapUnit settler = HumanUnits().FirstOrDefault(u => u.unitType.isSettler);
+			if (settler != null && !orders.ContainsKey(settler)) {
+				if (settler.movementPoints.canMove && FoundSite(settler.location) == null) await Found(settler);
+				else if (RankSites(settler.location, settler, 1).FirstOrDefault() is (Tile site, _)) {
+					try { await Settle(settler, site); } catch (BridgeError) { /* no route yet: try again next turn */ }
+				}
+			}
+		}
+		if (human.cities.Count == 0) return;
+		foreach (MapUnit u in HumanUnits())
+			if (u.unitType.isWorker && !u.isAutomated && u.WorkerJob == null && !orders.ContainsKey(u)) u.Automate();
+		DrainUi();
+	}
+
+	/// <summary>
+	/// Ends the human's turn and plays everyone else's, then does what the Godot client does when the
+	/// human's next turn starts. Returns the events of the ended turn.
+	/// </summary>
+	async Task<List<JsonObject>> AdvanceTurn(bool engineAi) {
+		eventTurn = gd.turn;
+		uiEvents = [];
+		if (engineAi) {
+			// Option A baseline: the engine AI plays the human seat during the human's own turn only, so
+			// human-side rules (costs, support, trade offers) still apply during everyone else's turns.
+			orders.Clear();
+			human.isHuman = false;
+			try { await Pump(PlayerAI.PlayTurn(human, gd)); } finally { human.isHuman = true; }
+		} else {
+			foreach (MapUnit u in human.units.ToList()) if (NeedsOrders(u)) u.SkipTurn();
+		}
+		PickResearch();
+
+		Snapshot before = Take();
+		var events = new List<JsonObject>();
+		var jobs = human.units.Where(u => u.WorkerJob != null && !u.isAutomated).Select(u => (u, u.WorkerJob, u.location)).ToList();
+		TurnHandling.OnEndTurn(human);
+		foreach (var (u, job, at) in jobs)
+			if (Alive(u) && u.WorkerJob == null) events.Add(Event("job_done", $"{Label(u)} finished {job.Name} at {At(at)}.", at));
+		human.units.Sort((x, y) => x.IsBusy().CompareTo(y.IsBusy()));
+		human.hasPlayedThisTurn = true;
+		await Pump(TurnHandling.AdvanceTurn());
+		watchdog.Kick();
+
+		PlayerRelationship.CheckForObsoleteDeals(human, gd.players, gd.turn);
+		PickGovernment();
+		events.AddRange(Diff(before));
+		events.AddRange(uiEvents);
+		if (!engineAi && !human.defeated) await RunStandingOrders(events);
+		events.AddRange(Threats());
+		DrainUi();
+		ids.Sync(gd, human);
+		PruneOrders();
+		return events;
+	}
+
+	void PruneOrders() {
+		foreach (MapUnit gone in orders.Keys.Where(u => !Alive(u)).ToList()) orders.Remove(gone);
+	}
+
+	void PickResearch() {
+		if (human.cities.Count == 0 || human.currentlyResearchedTech != null) return;
+		PlayerAI.MaybePickTechToResearch(human, gd.techs);
+		if (gd.GetTech(human.currentlyResearchedTech) is Tech t)
+			autos.Add(Auto("research_picked", $"Nothing was being researched, so research was set to {t.Name}."));
+	}
+
+	void PickGovernment() {
+		if (!human.government.transitionType || gd.turn < human.inAnarchyUntilTurn) return;
+		var options = human.GetAvailableGovernments(gd);
+		Government g = options.FirstOrDefault(x => x.name == "Monarchy") ?? options.FirstOrDefault(x => x.defaultType) ?? options.FirstOrDefault();
+		if (g == null) return;
+		human.government = g;
+		autos.Add(Auto("government_picked", $"Anarchy ended and the government became {g.name}."));
+	}
+
+	void EnsurePlaying() {
+		if (!GameOver) return;
+		string why = human.defeated
+			? "Your civilization has no cities or settlers left, so it is defeated"
+			: $"The game reached its turn limit ({turnLimit})";
+		throw new BridgeError("game_over", $"{why}; the game is over and no more orders are accepted.");
+	}
+
+	/// <summary>Runs an engine task to completion, answering whatever the engine asks of the UI meanwhile.</summary>
+	async Task Pump(Task task) {
+		while (!task.IsCompleted) {
+			DrainUi();
+			EngineStorage.ProcessNextMessageToEngine();
+			await Task.Yield();
+		}
+		DrainUi();
+		await task;
+	}
+
+	void DrainUi() {
+		while (EngineStorage.TryDequeueNextMessageToUI(out MessageToUI m)) {
+			switch (m) {
+				case MsgShowTradeOffer o:
+					// The AI's turn is suspended until the "diplomacy screen" closes: decline right away.
+					autos.Add(Auto("trade_declined",
+						$"Declined a trade from {o.aiPlayer.civilization.name}: they asked for {Describe(o.aiWant)} and offered {Describe(o.aiGive)}."));
+					new MsgDiplomacyCompleted().send();
+					EngineStorage.ProcessNextMessageToEngine();
+					break;
+				case MsgWarDeclaration w when Knows(w.aggressor) || Knows(w.opponent):
+					uiEvents.Add(Event("war_declared", $"{w.aggressor.civilization.name} declared war on {w.opponent.civilization.name}."));
+					break;
+				case MsgCityDestroyed d when d.city.owner == human || human.tileKnowledge.isTileKnown(d.city.location):
+					uiEvents.Add(Event("city_destroyed", $"{d.city.name} ({d.city.owner.civilization.name}) was destroyed.", d.city.location));
+					break;
+				case MsgCivilizationDestroyed d:
+					uiEvents.Add(Event("civ_destroyed", $"{d.civilization.name} has been destroyed."));
+					break;
+			}
+		}
+		while (EngineStorage.TryDequeueNextAnimationMessage(out AnimationMessage a)) a.markCompleted();
+	}
+
+	bool Knows(Player p) => p == human || human.playerRelationships.ContainsKey(p.id);
+
+	static string Describe(TradeOffer offer) {
+		var parts = offer.techs.Select(t => t.Name).ToList();
+		if (offer.gold is int gold and > 0) parts.Add($"{gold} gold");
+		if (offer.partOfPeaceTreaty) parts.Add("peace");
+		return parts.Count == 0 ? "nothing" : string.Join(", ", parts);
+	}
+
+	JsonObject ScoreOf(Player p) {
+		int cities = p.cities.Count(c => c.residents.Count > 0);
+		int pop = p.cities.Sum(c => c.residents.Count);
+		int tiles = gd.map.tiles.Count(t => t.OwningPlayer() == p && t.IsCountedForScore());
+		int techs = p.knownTechs.Count;
+		return new JsonObject {
+			["total"] = 10 * cities + 3 * pop + tiles + 4 * techs, ["cities"] = cities, ["pop"] = pop, ["tiles"] = tiles, ["techs"] = techs,
+		};
+	}
+
+	JsonObject ScoreAll() => new() {
+		["turn"] = gd.turn,
+		["human"] = ScoreOf(human),
+		["players"] = Json.Array(gd.players.Where(p => !p.isBarbarians), p => new JsonObject {
+			["civ"] = p.civilization.name, ["is_human"] = p == human, ["defeated"] = p.defeated, ["score"] = ScoreOf(p),
+		}),
+	};
+
+	IEnumerable<Player> Rivals() => gd.players.Where(p => !p.isBarbarians && p != human);
+}
+
+sealed record Order(string Kind, Tile Target);
+
+/// <summary>Short ids (u1, c1, ...) for the human's units and cities, in order of first sight, never reused.</summary>
+sealed class Ids {
+	readonly Dictionary<object, string> byObject = new(ReferenceEqualityComparer.Instance);
+	readonly Dictionary<string, object> byId = [];
+	int units, cities;
+
+	// Scanning after every step (not only when observed) keeps ids independent of which observations were made.
+	public void Sync(GameData gd, Player human) {
+		foreach (MapUnit u in gd.mapUnits) if (u.owner == human && !byObject.ContainsKey(u)) Add(u, $"u{++units}");
+		foreach (City c in gd.cities) if (c.owner == human && !byObject.ContainsKey(c)) Add(c, $"c{++cities}");
+	}
+
+	void Add(object o, string id) => (byObject[o], byId[id]) = (id, o);
+
+	public string Of(object o) => byObject.GetValueOrDefault(o);
+
+	public T Find<T>(string id) where T : class => byId.GetValueOrDefault(id.Trim().ToLowerInvariant()) as T;
+
+	public static int Number(string id) => int.Parse(id.AsSpan(1));
+}
