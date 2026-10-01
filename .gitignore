@@ -230,3 +230,6 @@ dist/
 __pycache__/
 .pytest_cache/
 playtest/runs/
+
+# agent-env local config and stores (may name credentials)
+.agentenv/

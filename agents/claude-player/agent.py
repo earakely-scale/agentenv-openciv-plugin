@@ -172,6 +172,8 @@ class ClaudePlayer(AgentEnvAgent):
         await proc.wait()
         if not result:
             return TaskResult.failure("claude_failed", f"Claude Code exited ({proc.returncode}) without a result.")
+        if result.get("is_error") and calls == 0:
+            return TaskResult.failure("claude_error", (result.get("result") or reply or "Claude Code failed.").strip())
         usage = result.get("usage") or {}
         where = "GAME OVER" if over else f"turn {turn}/{limit}" if turn is not None else "no turn seen"
         cost = result.get("total_cost_usd") or 0

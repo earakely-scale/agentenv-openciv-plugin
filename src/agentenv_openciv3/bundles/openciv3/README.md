@@ -23,9 +23,32 @@ in parallel: the outcome verifier and `save_env_recording`.
 
   To have an LLM play without an A2A agent, use the playtest harness in the repository
   (`playtest/run.py`, Claude Code).
+- `full-game` is the full game at Civilization III's own settings: seed 1, a Standard map, 7 AIs, Regent,
+  roaming barbarians and 540 turns.
+  - **Sessions:** it is played as six `prompt_agent` sessions of 90 turns. Each is a fresh conversation
+    that starts from the brief and the plan the env keeps, so no session's context outgrows the game.
+  - **Order:** a session that stops early or times out does not fail the task; the next one takes the
+    game from wherever it is. Grading and the recording follow the last session.
+  - **Time:** allow an hour or two.
+
+**The Claude player agent.** The repository ships an agent for these tasks: `agents/claude-player`, an A2A
+agent that runs Claude Code against the env's MCP tools, one session per prompt.
+- It plays until the turn its prompt names ("until turn 180") or GAME OVER, nudging as the playtest harness
+  does.
+- `agent-env openciv3 setup --agent` builds and registers it as `openciv3-claude`.
+- Then set, in `.agentenv/config.toml`:
+
+  ```toml
+  [agents]
+  default_a2a_agent_id = "openciv3-claude"
+
+  [model]
+  base_url = "https://api.anthropic.com"   # or a LiteLLM endpoint
+  api_key = "secret:OPENCIV3_MODEL_KEY"     # an Anthropic API key, a LiteLLM key, or a `claude setup-token` token
+  ```
 
 `artifacts/outcome-verifier/verify.py` reads the env's `data/get` summary, waits for the baselines
-to reach the game's turn, and scores, by weighted average:
+to reach the game's turn, and scores `smoke` and `play`, by weighted average:
 
 | Criterion | Weight |
 |---|---|
@@ -37,6 +60,17 @@ to reach the game's turn, and scores, by weighted average:
 | gate: in a game the agent played, the harness autoplayed none of its turns | a failure makes the grade 0 |
 
 An env that cannot report a game is a grade of 0, not a crashed step.
+
+`artifacts/full-game-verifier/verify.py` scores `full-game` against the engine's own AI in the agent's seat:
+
+| Criterion | Weight |
+|---|---|
+| reached the turn limit | 1 |
+| not defeated | 1 |
+| score as a fraction of `engine_ai`'s at the same turn | 2 |
+| rank among the civilizations, as a fraction from last (0) to first (1) | 1 |
+| the smaller of the land and population shares, as a fraction of Civ III's domination bar (two thirds of each) | 1 |
+| the same two gates | a failure makes the grade 0 |
 
 `save_env_recording` stores each file the env's `urn:openciv3:recording/v1` extension returns (an
 mp4 and an HTML replay) as a `file` artifact named `<task id>-recording-<instance id>.<ext>`, records
