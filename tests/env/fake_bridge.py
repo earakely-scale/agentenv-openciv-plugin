@@ -1,0 +1,593 @@
+"""A stand-in for CivBridge: speaks the docs/protocol.md JSON-lines protocol over a small scripted game.
+
+The world is hand-made around the start at (12,10): coast to the west, a river, a few resources, a Greek
+city to the northeast and a barbarian that shows up on turn 3. Shapes follow protocol.md exactly.
+Test hooks: FAKE_BRIDGE_STDERR_KB (log noise before ready), FAKE_BRIDGE_STDOUT_NOISE (a stray non-JSON
+line), and the commands `_sleep`, `_big`, `_crash`.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import os
+import sys
+import time
+
+OUT = sys.stdout
+DIRS = ["E", "NE", "N", "NW", "W", "SW", "S", "SE"]
+START = (12, 10)
+WIDTH = HEIGHT = 60
+RIVER = {(13, 9), (14, 10), (15, 11), (16, 12), (17, 13)}
+RESOURCES = {(13, 9): "Wheat", (16, 8): "Horses", (10, 14): "Gems", (8, 8): "Fish"}
+OVERLAY = {(14, 8): "Hills", (15, 7): "Forest", (11, 13): "Forest", (16, 10): "Mountains", (10, 12): "Marsh"}
+SIZES = ["Tiny", "Small", "Standard", "Large", "Huge"]
+CITY_NAMES = ["Rome", "Veii", "Antium", "Cumae", "Neapolis", "Ravenna"]
+TECHS = {  # name: (cost, prerequisites, unlocks)
+    "Alphabet": (20, [], ["Writing", "Code of Laws"]),
+    "Bronze Working": (16, [], ["Colossus", "Currency"]),
+    "Masonry": (24, [], ["Great Wall", "Pyramids", "Walls"]),
+    "Pottery": (16, [], ["Granary", "Hanging Gardens"]),
+    "Ceremonial Burial": (16, [], ["Temple"]),
+    "Warrior Code": (20, [], ["Archer"]),
+    "Horseback Riding": (20, [], ["Horseman"]),
+    "Writing": (40, ["Alphabet"], ["Library"]),
+    "Code of Laws": (36, ["Alphabet"], ["Courthouse"]),
+    "Currency": (36, ["Bronze Working"], ["Marketplace"]),
+    "Iron Working": (36, ["Bronze Working", "Warrior Code"], ["Swordsman"]),
+    "Monarchy": (60, ["Ceremonial Burial", "Code of Laws"], ["Monarchy government"]),
+}
+ITEMS = {  # name: (kind, cost, required tech)
+    "Settler": ("unit", 30, None), "Worker": ("unit", 10, None), "Warrior": ("unit", 10, None),
+    "Archer": ("unit", 20, "Warrior Code"), "Barracks": ("building", 40, None), "Granary": ("building", 60, "Pottery"),
+    "Temple": ("building", 40, "Ceremonial Burial"), "Walls": ("building", 30, "Masonry"),
+    "Wealth": ("wealth", 0, None),
+}
+ORDERS = {
+    "Settler": ["settle", "found_city", "goto", "hold", "disband"],
+    "Worker": ["auto_work", "goto", "build_road", "build_mine", "irrigate", "hold", "disband"],
+    "Warrior": ["explore", "goto", "fortify", "hold", "disband"],
+}
+UNIT_STATS = {"Settler": (1, 3), "Worker": (1, 3), "Warrior": (1, 3)}  # moves, hp
+
+
+class Refused(Exception):
+    def __init__(self, code, message, alternatives=None, suggest=None):
+        super().__init__(message)
+        self.error = {"code": code, "message": message}
+        if alternatives:
+            self.error["alternatives"] = alternatives
+        if suggest:
+            self.error["suggest"] = suggest
+
+
+def dist(a, b) -> int:
+    return (abs(a[0] - b[0]) + abs(a[1] - b[1])) // 2
+
+
+def direction(src, dst) -> str:
+    dx, dy = dst[0] - src[0], dst[1] - src[1]
+    if (dx, dy) == (0, 0):
+        return "here"
+    return DIRS[round(math.atan2(-dy, dx) / (math.pi / 4)) % 8]
+
+
+def rel(src, dst) -> dict:
+    return {"dist": dist(src, dst), "dir": direction(src, dst)}
+
+
+def terrain(x, y) -> str:
+    if x <= 5:
+        return "Ocean" if x <= 3 else "Coast"
+    return "Plains" if (x * 3 + y) % 5 == 0 else "Grassland"
+
+
+def is_land(p) -> bool:
+    return terrain(*p) not in ("Coast", "Ocean", "Sea")
+
+
+def on_map(p) -> bool:
+    return 0 <= p[0] < WIDTH and 0 <= p[1] < HEIGHT and (p[0] + p[1]) % 2 == 0
+
+
+def area(c, r):
+    return [(x, y) for x in range(c[0] - 2 * r, c[0] + 2 * r + 1) for y in range(c[1] - 2 * r, c[1] + 2 * r + 1)
+            if on_map((x, y)) and dist(c, (x, y)) <= r]
+
+
+def tile_yield(p) -> dict:
+    if not is_land(p):
+        return {"food": 1, "shields": 0, "commerce": 2}
+    food, shields = {"Grassland": (2, 0), "Plains": (1, 1)}[terrain(*p)]
+    if OVERLAY.get(p) in ("Hills", "Forest", "Mountains"):
+        food, shields = (1 if OVERLAY[p] == "Hills" else 0 if OVERLAY[p] == "Mountains" else 1), 2
+    if RESOURCES.get(p) == "Wheat":
+        food += 2
+    return {"food": food, "shields": shields, "commerce": 1 if p in RIVER else 0}
+
+
+class Game:
+    def __init__(self, args):
+        self.seed = args["seed"]
+        self.turn_limit = args.get("turn_limit", 60)
+        self.civ = args.get("civ", "Rome")
+        self.opponents = ["Greece", "Egypt", "Babylon", "Germany", "Persia"][: args.get("opponents", 3)]
+        self.turn = 1
+        self.units = {}
+        self.next_unit = self.next_city = 1
+        for kind, p in (("Settler", START), ("Worker", START), ("Settler", (13, 11)), ("Warrior", (14, 10))):
+            self.add_unit(kind, p)
+        self.cities = {}
+        self.known = ["Alphabet", "Bronze Working"]
+        self.research, self.queue, self.beakers = None, [], 0
+        self.gold = 10
+        self.last_events = []
+        self.explored = set(area(START, 5))
+        self.foreign_city = {"name": "Athens", "owner": "Greece", "size": 2, "pos": (18, 6)}
+        self.met = False
+
+    # ---- units ----
+
+    def add_unit(self, kind, p):
+        uid = f"u{self.next_unit}"
+        self.next_unit += 1
+        moves, hp = UNIT_STATS[kind]
+        self.units[uid] = {"id": uid, "type": kind, "pos": p, "moves": float(moves), "hp": hp, "status": "idle",
+                           "target": None, "steps": 0}
+        return uid
+
+    def can_found(self, p) -> dict:
+        if not is_land(p) or OVERLAY.get(p) in ("Mountains", "Marsh"):
+            what = OVERLAY.get(p) or terrain(*p)
+            return {"ok": False, "reason": f"cities cannot be built on {what}"}
+        for c in self.cities.values():
+            if dist(c["pos"], p) <= 1:
+                where = f"{c['name']} ({c['pos'][0]},{c['pos'][1]})"
+                return {"ok": False, "reason": f"adjacent to {where}; cities need one empty tile between them"}
+        if dist(self.foreign_city["pos"], p) <= 1:
+            return {"ok": False, "reason": "adjacent to Athens"}
+        return {"ok": True, "reason": None}
+
+    def unit_view(self, u) -> dict:
+        moves, hp = UNIT_STATS[u["type"]]
+        status = u["status"] if u["status"] != "idle" or u["moves"] > 0 else "done"
+        orders = list(ORDERS[u["type"]]) + (["wake"] if u["status"] not in ("idle", "done") else [])
+        target = None
+        if u["target"]:
+            target = {"x": u["target"][0], "y": u["target"][1], **rel(u["pos"], u["target"])}
+        return {"id": u["id"], "type": u["type"], "x": u["pos"][0], "y": u["pos"][1], "moves_left": u["moves"],
+                "moves_max": moves, "hp": u["hp"], "hp_max": hp, "status": status, "target": target,
+                "can_found_city": self.can_found(u["pos"]) if u["type"] == "Settler" else None,
+                "orders": orders, "needs_orders": u["status"] == "idle" and u["moves"] > 0}
+
+    def unit(self, uid):
+        if uid not in self.units:
+            raise Refused("unknown_unit", f"you have no unit {uid!r}.", sorted(self.units))
+        return self.units[uid]
+
+    # ---- cities ----
+
+    def found(self, u) -> dict:
+        cid = f"c{self.next_city}"
+        self.next_city += 1
+        name = CITY_NAMES[len(self.cities) % len(CITY_NAMES)]
+        self.cities[cid] = {"id": cid, "name": name, "pos": u["pos"], "size": 1, "food": 0, "shields": 0,
+                            "producing": None, "buildings": ["Palace"] if not self.cities else []}
+        del self.units[u["id"]]
+        return self.cities[cid]
+
+    def city_view(self, c) -> dict:
+        food_pt, spt = 2, 1 + c["size"]
+        needed = 10 + 5 * c["size"]
+        item = c["producing"]
+        cost = ITEMS[item][1] if item else None
+        return {"id": c["id"], "name": c["name"], "x": c["pos"][0], "y": c["pos"][1], "size": c["size"],
+                "capital": "Palace" in c["buildings"], "food_stored": c["food"], "food_needed": needed,
+                "food_per_turn": food_pt, "turns_to_grow": -(-(needed - c["food"]) // food_pt),
+                "shields_per_turn": spt, "producing": item, "production_stored": c["shields"],
+                "production_cost": cost,
+                "turns_to_complete": -(-(cost - c["shields"]) // spt) if item and cost else None,
+                "disorder": False, "buildings": c["buildings"]}
+
+    def city(self, cid):
+        if cid not in self.cities:
+            raise Refused("unknown_city", f"you have no city {cid!r}.", sorted(self.cities))
+        return self.cities[cid]
+
+    def options(self, c) -> list:
+        spt = 1 + c["size"]
+        return [{"name": n, "kind": k, "cost": cost, "turns": -(-cost // spt) if cost else None}
+                for n, (k, cost, tech) in ITEMS.items() if tech is None or tech in self.known]
+
+    # ---- research ----
+
+    def available(self):
+        return [t for t, (_, pre, _u) in TECHS.items() if t not in self.known and all(p in self.known for p in pre)]
+
+    def bpt(self) -> int:
+        return 2 + 2 * len(self.cities)
+
+    def tech_turns(self, t) -> int:
+        return -(-(TECHS[t][0] - (self.beakers if t == self.research else 0)) // self.bpt())
+
+    # ---- views ----
+
+    def score(self) -> dict:
+        tiles = {p for c in self.cities.values() for p in area(c["pos"], 1) if is_land(p)}
+        cities, pop = len(self.cities), sum(c["size"] for c in self.cities.values())
+        return {"total": 10 * cities + 3 * pop + len(tiles) + 4 * len(self.known), "cities": cities, "pop": pop,
+                "tiles": len(tiles), "techs": len(self.known)}
+
+    def blockers(self) -> list:
+        out = []
+        if self.cities and not self.research:
+            out.append({"kind": "no_research", "message": "nothing is being researched"})
+        out += [{"kind": "no_production", "id": c["id"], "message": f"{c['name']} is producing nothing"}
+                for c in self.cities.values() if not c["producing"]]
+        out += [{"kind": "idle_unit", "id": u["id"], "message": f"{u['id']} {u['type']} has moves and no orders"}
+                for u in self.units.values() if self.unit_view(u)["needs_orders"]]
+        return out
+
+    def game_over(self) -> bool:
+        return self.turn >= self.turn_limit
+
+    def state(self) -> dict:
+        r = self.research
+        return {
+            "turn": self.turn, "turn_limit": self.turn_limit, "game_over": self.game_over(), "defeated": False,
+            "civ": self.civ, "government": "Despotism", "anarchy_until": None,
+            "gold": self.gold, "gold_per_turn": len(self.cities), "rates": {"tax": 4, "science": 6, "luxury": 0},
+            "research": {"current": r, "turns_left": self.tech_turns(r) if r else None, "beakers": self.beakers,
+                         "cost": TECHS[r][0] if r else None, "queue": list(self.queue)},
+            "known_techs": list(self.known), "score": self.score(),
+            "explored_pct": round(100 * len(self.explored) / (WIDTH * HEIGHT / 2), 1),
+            "cities": [self.city_view(c) for c in self.cities.values()],
+            "units": [self.unit_view(u) for u in self.units.values()],
+            "rivals": [{"civ": o, "met": o == "Greece" and self.met, "at_war": False,
+                        "cities_seen": 1 if o == "Greece" else 0} for o in self.opponents],
+            "blockers": self.blockers(), "last_events": self.last_events,
+        }
+
+    def barbarian(self):
+        return (18, 12) if self.turn >= 3 else None
+
+    def map(self, a) -> dict:
+        c, radius = (a["x"], a["y"]), min(a.get("radius", 3), 8)
+        if not on_map(c):
+            raise Refused("bad_target", f"({c[0]},{c[1]}) is not a tile; x+y must be even and on the map.")
+        visible = {p for u in self.units.values() for p in area(u["pos"], 2)} | \
+                  {p for ci in self.cities.values() for p in area(ci["pos"], 2)}
+        tiles = []
+        for p in sorted(area(c, radius), key=lambda q: (q[1], q[0])):
+            if p not in self.explored:
+                continue
+            city = next(({"name": ci["name"], "owner": self.civ, "size": ci["size"], "id": ci["id"]}
+                         for ci in self.cities.values() if ci["pos"] == p), None)
+            if p == self.foreign_city["pos"]:
+                city = {k: self.foreign_city[k] for k in ("name", "owner", "size")}
+            units = [{"owner": self.civ, "type": u["type"], "count": 1, "id": u["id"]}
+                     for u in self.units.values() if u["pos"] == p]
+            if p in visible and p == self.barbarian():
+                units.append({"owner": "Barbarians", "type": "Warrior", "count": 1})
+            tiles.append({"x": p[0], "y": p[1], **rel(c, p), "visible": p in visible, "terrain": terrain(*p),
+                          "overlay": OVERLAY.get(p), "resource": RESOURCES.get(p), "river": p in RIVER,
+                          "improvements": [], "owner": self.civ if any(dist(p, ci["pos"]) <= 1 for ci in
+                                                                     self.cities.values()) else None,
+                          "city": city, "units": units, "yield": tile_yield(p), "city_site": self.can_found(p)})
+        return {"center": {"x": c[0], "y": c[1]}, "radius": radius, "tiles": tiles}
+
+    def sites(self, origin, top, with_turns=True) -> list:
+        cands = [p for p in self.explored if is_land(p) and self.can_found(p)["ok"]
+                 and all(dist(p, ci["pos"]) >= 3 for ci in self.cities.values())]
+
+        def score(p):
+            ys = [tile_yield(q) for q in area(p, 1)]
+            return sum(2 * y["food"] + y["shields"] + y["commerce"] for y in ys) + (5 if p in RIVER else 0)
+
+        ranked = sorted(cands, key=lambda p: (-score(p), dist(origin, p), p))[:top]
+        out = []
+        for p in ranked:
+            ys = [tile_yield(q) for q in area(p, 1)]
+            out.append({"x": p[0], "y": p[1], "score": score(p), **rel(origin, p),
+                        "turns": dist(origin, p) if with_turns else None, "terrain": terrain(*p), "river": p in RIVER,
+                        "coastal": any(not is_land(q) for q in area(p, 1)),
+                        "yield": {k: sum(y[k] for y in ys) for k in ("food", "shields", "commerce")}})
+        return out
+
+    # ---- orders ----
+
+    def unit_order(self, a) -> dict:
+        if self.game_over():
+            raise Refused("game_over", "the game is over.")
+        u = self.unit(a["unit"])
+        order = a["order"]
+        view = self.unit_view(u)
+        if order not in view["orders"]:
+            raise Refused("invalid_order", f"{u['id']} {u['type']} cannot {order}.", view["orders"])
+        target = (a["x"], a["y"]) if "x" in a and "y" in a else None
+        if order in ("settle", "goto"):
+            if target is None or not on_map(target) or target not in self.explored:
+                raise Refused("bad_target", f"{target} is not an explored tile; x+y must be even.")
+            if order == "settle" and not self.can_found(target)["ok"]:
+                self.raise_cannot_found(u, target)
+        if order in ("found_city", "build_road", "build_mine", "irrigate") and u["moves"] <= 0:
+            raise Refused("no_moves", f"{u['id']} {u['type']} has no moves left this turn; give the order next turn.")
+        city, path, msg = None, None, ""
+        if order == "found_city" or (order == "settle" and target == u["pos"]):
+            if not self.can_found(u["pos"])["ok"]:
+                self.raise_cannot_found(u, u["pos"])
+            c = self.found(u)
+            city, msg = self.city_view(c), f"Founded {c['name']} at ({c['pos'][0]},{c['pos'][1]})."
+        elif order in ("settle", "goto"):
+            d = dist(u["pos"], target)
+            u.update(status=order, target=target, steps=d, moves=0.0)
+            path = {"length": d, "turns": d}
+            msg = (f"{u['id']} {u['type']} will walk to ({target[0]},{target[1]})"
+                   + (" and found a city on arrival." if order == "settle" else "."))
+        elif order == "disband":
+            del self.units[u["id"]]
+            msg = f"{u['id']} {u['type']} disbanded."
+        else:
+            status = {"explore": "exploring", "auto_work": "auto_work", "fortify": "fortified", "wake": "idle",
+                      "hold": "idle"}.get(order, f"working:{order}")
+            u.update(status=status, target=None, steps=3)
+            if order == "hold":
+                u["moves"] = 0.0
+            msg = f"{u['id']} {u['type']}: {order}."
+        return {"message": msg, "unit": self.unit_view(u) if u["id"] in self.units else None, "city": city,
+                "path": path}
+
+    def raise_cannot_found(self, u, p):
+        sites = self.sites(u["pos"], 3)
+        suggest = (f'unit_order(unit="{u["id"]}", order="settle", x={sites[0]["x"]}, y={sites[0]["y"]})'
+                   if sites else None)
+        raise Refused("cannot_found", f"cannot found a city at ({p[0]},{p[1]}): {self.can_found(p)['reason']}.",
+                      sites, suggest)
+
+    # ---- turns ----
+
+    def advance(self, policy=None) -> tuple[list, list]:
+        events, auto = [], []
+        if not self.research and self.available():
+            self.research = self.available()[0]
+            auto.append({"kind": "research_picked", "text": f"research picked: {self.research}"})
+        if policy == "engine_ai":
+            self.play_ai()
+        elif policy == "found_capital" and not self.cities:
+            settler = next(u for u in self.units.values() if u["type"] == "Settler")
+            self.found(settler)
+        for c in self.cities.values():
+            if c["producing"] is None and policy:
+                c["producing"] = "Warrior"
+        t = self.turn
+        for u in list(self.units.values()):
+            if u["status"] in ("settle", "goto"):
+                u["steps"] -= 1
+                if u["steps"] <= 0:
+                    u["pos"] = u["target"]
+                    self.explored |= set(area(u["pos"], 2))
+                    if u["status"] == "settle":
+                        if self.can_found(u["pos"])["ok"]:
+                            c = self.found(u)
+                            events.append({"turn": t, "kind": "city_founded", "text": f"{c['name']} founded",
+                                           "x": c["pos"][0], "y": c["pos"][1]})
+                            continue
+                        events.append({"turn": t, "kind": "settle_failed", "text": f"{u['id']} could not found a city "
+                                       f"at ({u['pos'][0]},{u['pos'][1]})", "x": u["pos"][0], "y": u["pos"][1]})
+                    u.update(status="idle", target=None)
+            elif u["status"] == "exploring":
+                self.explored |= set(area(u["pos"], 4))
+                u["steps"] -= 1
+                if u["steps"] <= 0:
+                    u["status"] = "idle"
+                    events.append({"turn": t, "kind": "explore_done", "text": f"{u['id']} {u['type']} has nothing "
+                                   "reachable left to explore", "x": u["pos"][0], "y": u["pos"][1]})
+            elif u["status"].startswith("working:"):
+                u["steps"] -= 1
+                if u["steps"] <= 0:
+                    job, u["status"] = u["status"].split(":", 1)[1], "idle"
+                    events.append({"turn": t, "kind": "job_done", "text": f"{u['id']} Worker finished {job}",
+                                   "x": u["pos"][0], "y": u["pos"][1]})
+        for c in list(self.cities.values()):
+            view = self.city_view(c)
+            c["food"] += view["food_per_turn"]
+            if c["food"] >= view["food_needed"]:
+                c["food"], c["size"] = 0, c["size"] + 1
+                events.append({"turn": t, "kind": "city_grew", "text": f"{c['name']} grew to size {c['size']}"})
+            if c["producing"]:
+                c["shields"] += view["shields_per_turn"]
+                cost = ITEMS[c["producing"]][1]
+                need = {"Settler": 3, "Worker": 2}.get(c["producing"], 1)
+                if cost and c["shields"] >= cost and c["size"] >= need:
+                    c["shields"] = 0
+                    if ITEMS[c["producing"]][0] == "unit":
+                        c["size"] -= need - 1
+                        self.add_unit(c["producing"], c["pos"])
+                    else:
+                        c["buildings"].append(c["producing"])
+                    events.append({"turn": t, "kind": "built", "text": f"{c['name']} completed {c['producing']}"})
+        if self.research:
+            self.beakers += self.bpt()
+            if self.beakers >= TECHS[self.research][0]:
+                events.append({"turn": t, "kind": "tech_learned", "text": f"learned {self.research}"})
+                self.known.append(self.research)
+                self.beakers = 0
+                self.queue = [q for q in self.queue if q != self.research]
+                self.research = self.queue[0] if self.queue else None
+        if self.turn + 1 == 3 and self.cities:
+            events.append({"turn": t + 1, "kind": "threat", "text": "Barbarian Warrior 3 tiles E of Rome",
+                           "x": 18, "y": 12})
+        if not self.met and any(dist(u["pos"], self.foreign_city["pos"]) <= 4 for u in self.units.values()):
+            self.met = True
+            events.append({"turn": t, "kind": "contact", "text": "met Greece"})
+        self.turn += 1
+        self.gold += len(self.cities)
+        for u in self.units.values():
+            u["moves"] = float(UNIT_STATS[u["type"]][0])
+        return events, auto
+
+    def play_ai(self):
+        for u in list(self.units.values()):
+            if u["type"] == "Settler" and u["status"] == "idle":
+                if self.can_found(u["pos"])["ok"] and all(dist(u["pos"], c["pos"]) >= 3 for c in self.cities.values()):
+                    self.found(u)
+                elif sites := self.sites(u["pos"], 1):
+                    d = dist(u["pos"], (sites[0]["x"], sites[0]["y"]))
+                    u.update(status="settle", target=(sites[0]["x"], sites[0]["y"]), steps=d)
+            elif u["status"] == "idle":
+                u["status"] = "auto_work" if u["type"] == "Worker" else "fortified"
+        for c in self.cities.values():
+            c["producing"] = "Settler" if c["size"] >= 2 else "Warrior"
+
+    def end_turn(self, a) -> dict:
+        if self.game_over():
+            raise Refused("game_over", "the game is over.")
+        blockers = self.blockers()
+        if blockers and not a.get("skip_idle"):
+            return {"blocked": True, "blockers": blockers}
+        max_turns = min(a.get("max_turns", 1), 20) if a.get("until_attention") else 1
+        events, auto, n = [], [], 0
+        while True:
+            for u in self.units.values():
+                if self.unit_view(u)["needs_orders"]:
+                    u["moves"] = 0.0
+            ev, au = self.advance()
+            events += ev
+            auto += au
+            n += 1
+            if self.game_over() or n >= max_turns or self.blockers():
+                break
+        self.last_events = events
+        return {"blocked": False, "turns_advanced": n, "turn": self.turn, "game_over": self.game_over(),
+                "defeated": False, "events": events, "auto": auto}
+
+    def autoplay(self, a) -> dict:
+        trajectory = []
+        for _ in range(a["turns"]):
+            if self.game_over():
+                break
+            for u in self.units.values():
+                if self.unit_view(u)["needs_orders"]:
+                    u["moves"] = 0.0
+            self.last_events, _ = self.advance(policy=a.get("policy", "null"))
+            trajectory.append({"turn": self.turn, "score": self.score()})
+        out = {"turn": self.turn, "game_over": self.game_over(), "defeated": False, "score": self.score()}
+        if a.get("record"):
+            out["trajectory"] = trajectory
+        return out
+
+    def handle(self, cmd, a) -> dict:
+        if cmd == "state":
+            return self.state()
+        if cmd == "map":
+            return self.map(a)
+        if cmd == "city_sites":
+            if "unit" in a:
+                origin, with_turns = self.unit(a["unit"])["pos"], True
+            else:
+                settler = next((u for u in self.units.values() if u["type"] == "Settler"), None)
+                capital = next(iter(self.cities.values()), None)
+                origin = settler["pos"] if settler else capital["pos"] if capital else START
+                with_turns = settler is not None
+            return {"origin": {"x": origin[0], "y": origin[1]},
+                    "sites": self.sites(origin, a.get("top", 5), with_turns),
+                    "note": "only sites on the unit's continent are scored"}
+        if cmd == "unit_order":
+            return self.unit_order(a)
+        if cmd == "city":
+            c = self.city(a["city"])
+            return {**self.city_view(c), "options": self.options(c),
+                    "tiles_worked": [{"x": p[0], "y": p[1]} for p in area(c["pos"], 1)[: c["size"] + 1]]}
+        if cmd == "set_production":
+            c = self.city(a["city"])
+            names = [o["name"] for o in self.options(c)]
+            item = next((n for n in names if n.lower() == a["item"].lower()), None)
+            if item is None:
+                raise Refused("unknown_item", f"{c['name']} cannot build {a['item']!r}.", names)
+            c["producing"] = item
+            return {"message": f"{c['name']} now builds {item}.", "city": self.city_view(c)}
+        if cmd == "techs":
+            r = self.research
+            return {"current": r, "turns_left": self.tech_turns(r) if r else None, "known": list(self.known),
+                    "available": [{"name": t, "cost": TECHS[t][0], "turns": self.tech_turns(t), "era": "Ancient",
+                                   "unlocks": TECHS[t][2]} for t in self.available()]}
+        if cmd == "set_research":
+            tech = next((t for t in TECHS if t.lower() == a["tech"].lower()), None)
+            if tech is None:
+                raise Refused("unknown_tech", f"there is no tech {a['tech']!r}.", self.available())
+            if tech in self.known:
+                raise Refused("already_known", f"you already know {tech}.")
+            queue, todo = [], [tech]
+            while todo:
+                t = todo.pop()
+                if t in self.known or t in queue:
+                    continue
+                missing = [p for p in TECHS[t][1] if p not in self.known and p not in queue]
+                if missing:
+                    todo += [t] + missing
+                    continue
+                queue.append(t)
+            self.queue, self.research = queue, queue[0]
+            return {"message": f"Researching {queue[0]} ({self.tech_turns(queue[0])} turns).", "current": queue[0],
+                    "queue": queue}
+        if cmd == "end_turn":
+            return self.end_turn(a)
+        if cmd == "autoplay":
+            return self.autoplay(a)
+        if cmd == "score":
+            return {"turn": self.turn, "human": self.score(),
+                    "players": [{"civ": self.civ, "is_human": True, "defeated": False, "score": self.score()}]
+                    + [{"civ": o, "is_human": False, "defeated": False,
+                        "score": {"total": 30 + self.turn, "cities": 1, "pop": 2, "tiles": 9, "techs": 3}}
+                       for o in self.opponents]}
+        raise Refused("unknown_cmd", f"unknown command {cmd!r}.")
+
+
+def reply(rid, result=None, error=None):
+    msg = {"id": rid, "ok": error is None}
+    msg["result" if error is None else "error"] = result if error is None else error
+    OUT.write(json.dumps(msg) + "\n")
+    OUT.flush()
+
+
+def main():
+    noise_kb = int(os.environ.get("FAKE_BRIDGE_STDERR_KB", "0"))
+    for _ in range(noise_kb):
+        sys.stderr.write("[INF] engine log line padding padding padding padding padding padding padding pad\n" * 13)
+    sys.stderr.flush()
+    if os.environ.get("FAKE_BRIDGE_STDOUT_NOISE"):
+        OUT.write("Loading ruleset civ3...\n")
+    reply(0, {"ready": True, "version": "fake-1"})
+    game = None
+    for line in sys.stdin:
+        req = json.loads(line)
+        rid, cmd, a = req["id"], req["cmd"], req.get("args") or {}
+        try:
+            if cmd == "_sleep":
+                time.sleep(a["seconds"])
+                result = {}
+            elif cmd == "_big":
+                result = {"blob": "x" * a["size"]}
+            elif cmd == "_crash":
+                sys.stderr.write("Unhandled exception. System.NullReferenceException: boom\n")
+                sys.stderr.flush()
+                os._exit(3)
+            elif cmd == "new_game":
+                if game is not None:
+                    raise Refused("already_started", "a game is already running in this process.")
+                if a.get("size", "Tiny") not in SIZES:
+                    raise Refused("invalid_args", f"unknown size {a['size']!r}.", SIZES)
+                game = Game(a)
+                result = {"turn": game.turn, "turn_limit": game.turn_limit, "seed": game.seed, "civ": game.civ,
+                          "opponents": game.opponents, "map": {"width": WIDTH, "height": HEIGHT, "wrap_x": True}}
+            elif game is None:
+                raise Refused("no_game", "no game has been started; send new_game first.")
+            else:
+                result = game.handle(cmd, a)
+            reply(rid, result)
+        except Refused as e:
+            reply(rid, error=e.error)
+
+
+if __name__ == "__main__":
+    main()
