@@ -181,6 +181,8 @@ async def test_set_production(tools):
     err = await tools.error("set_production", city="c1", item="Pyramids")
     assert "Rome cannot build 'Pyramids'." in err and "Valid: Settler, Worker, Warrior, Barracks, Wealth" in err
     assert FOOTER.search(err)
+    text = await tools("set_production", city="c1", item="warriors")
+    assert text.splitlines()[0] == "(read 'warriors' as 'Warrior') Rome now builds Warrior."
 
 
 async def test_research(tools):
@@ -192,6 +194,8 @@ async def test_research(tools):
     assert "Monarchy" in text.splitlines()[0] and FOOTER.search(text)
     err = await tools.error("research", tech="Alchemy")
     assert "there is no tech 'Alchemy'." in err and "Valid: Masonry, Pottery" in err
+    text = await tools("research", tech="potery")
+    assert text.startswith("(read 'potery' as 'Pottery') ")
     assert "you already know Alphabet." in await tools.error("research", tech="Alphabet")
 
 

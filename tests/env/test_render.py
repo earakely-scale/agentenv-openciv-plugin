@@ -230,3 +230,14 @@ def test_city_detail_and_techs():
          "available": [{"name": "Masonry", "cost": 24, "turns": 6, "era": "Ancient", "unlocks": ["Walls"]}]}
     assert render.techs_list(t).splitlines()[:3] == [
         "RESEARCH current: Pottery → 2t · known 1: Alphabet", "AVAILABLE", "  Masonry 24 beakers 6t → Walls"]
+
+
+def test_resolve_name_takes_only_unambiguous_matches():
+    from agentenv_openciv3.server import resolve_name
+    options = ["Settler", "Worker", "Warrior", "Archer", "Barracks", "Wealth"]
+    assert resolve_name("Warriors", options) == "Warrior"
+    assert resolve_name("barracks", options) == "Barracks"
+    assert resolve_name("Setler", options) == "Settler"
+    assert resolve_name("Pyramids", options) is None
+    assert resolve_name("Bronze working", ["Bronze Working", "Iron Working"]) == "Bronze Working"
+    assert resolve_name("Working", ["Bronze Working", "Iron Working"]) is None

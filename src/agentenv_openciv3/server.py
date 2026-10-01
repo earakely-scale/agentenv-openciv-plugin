@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
+import re
 import logging
 import os
 import time
@@ -55,6 +57,20 @@ def merge_scenario(base: dict, update: dict) -> dict:
     if unknown:
         raise ValueError(f"unknown scenario keys {sorted(unknown)}; valid: {', '.join(SCENARIO_KEYS)}")
     return {**base, **{k: v for k, v in update.items() if v is not None}}
+
+
+def _norm(name: str) -> str:
+    n = re.sub(r"[^a-z0-9]", "", name.lower())
+    return n[:-2] if n.endswith("es") and len(n) > 4 else n[:-1] if n.endswith("s") and len(n) > 3 else n
+
+
+def resolve_name(given: str, options: list[str]) -> str | None:
+    """The one option `given` plainly means (case, plural or a close spelling), or None if unclear."""
+    exact = [o for o in options if _norm(o) == _norm(given)]
+    if len(exact) == 1:
+        return exact[0]
+    close = difflib.get_close_matches(_norm(given), [_norm(o) for o in options], n=2, cutoff=0.85)
+    return next(o for o in options if _norm(o) == close[0]) if len(close) == 1 else None
 
 
 @environment_card(name="openciv3")
@@ -292,14 +308,24 @@ class OpenCiv3Env(AgentEnvEnvironment):
             return "\n".join(details) + '\nChange production: set_production(city="...", item="...")'
         return await self._run("city_info", {"city": city}, body)
 
+    async def _call_resolving(self, cmd: str, code: str, key: str, value: str, **args) -> tuple[dict, str]:
+        """Call `cmd`; if the name is unknown but plainly means one of the alternatives, retry with that name."""
+        try:
+            return await self.bridge.call(cmd, **{key: value}, **args), ""
+        except BridgeError as e:
+            match = resolve_name(value, [str(a) for a in e.alternatives or []]) if e.code == code else None
+            if match is None:
+                raise
+            return await self.bridge.call(cmd, **{key: match}, **args), f"(read {value!r} as {match!r}) "
+
     @tool()
     async def set_production(self, city: CityId, item: Annotated[str, Field(
             description='What to build, as named by city_info, e.g. "Settler".')]):
         """Set what a city builds. A Settler costs 2 population and completes only at city size 3 or more; a Worker
         needs size 2."""
         async def body():
-            res = await self.bridge.call("set_production", city=city, item=item)
-            return "\n".join([res.get("message", "done"), render.city_line(res["city"]), await self._footer()])
+            res, read_as = await self._call_resolving("set_production", "unknown_item", "item", item, city=city)
+            return "\n".join([read_as + res.get("message", "done"), render.city_line(res["city"]), await self._footer()])
         return await self._run("set_production", {"city": city, "item": item}, body, mutating=True)
 
     @tool()
@@ -310,9 +336,9 @@ class OpenCiv3Env(AgentEnvEnvironment):
         async def body():
             if tech is None:
                 return render.techs_list(await self.bridge.call("techs"))
-            res = await self.bridge.call("set_research", tech=tech)
+            res, read_as = await self._call_resolving("set_research", "unknown_tech", "tech", tech)
             queue = [t for t in res.get("queue", []) if t != res.get("current")]
-            return "\n".join([res.get("message", f"researching {res.get('current')}")
+            return "\n".join([read_as + res.get("message", f"researching {res.get('current')}")
                               + (f" (queue: {', '.join(queue)})" if queue else ""), await self._footer()])
         return await self._run("research", {"tech": tech}, body, mutating=tech is not None)
 
