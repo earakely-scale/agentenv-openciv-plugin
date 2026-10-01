@@ -85,7 +85,7 @@ async def test_documented_result_keys(bridge):
     bought = await bridge.call("hurry", city="c1")
     assert set(bought) == {"message", "gold_cost", "pop_cost", "city"}
     score = await bridge.call("score")
-    assert set(score) == {"turn", "human", "players"}
+    assert set(score) == {"turn", "human", "players", "human_share"} and set(score["human_share"]) == {"land", "pop"}
     assert set(score["players"][0]) == {"civ", "is_human", "defeated", "score"}
 
 

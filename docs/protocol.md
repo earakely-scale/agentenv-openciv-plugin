@@ -203,7 +203,9 @@ false). Result: `{"turn", "game_over", "defeated", "score": {...}, "trajectory":
 "score": {...}}]}` (trajectory only when `record`).
 
 ### `score`
-Result: `{"turn", "human": {score}, "players": [{"civ", "is_human", "defeated", "score": {...}}]}`.
+Result: `{"turn", "human": {score}, "players": [{"civ", "is_human", "defeated", "score": {...}}], "human_share":
+{"land", "pop"}}`: the human's fractions of the world's land tiles and of its population (Civ III's domination
+victory needs two thirds of each).
 
 ### `revolution`
 Args: `government` (a name from `state.governments`). Starts anarchy (the engine's own transition: 2 to 6 turns,

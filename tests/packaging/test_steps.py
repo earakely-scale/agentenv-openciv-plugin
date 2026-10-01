@@ -126,7 +126,7 @@ def test_registered_under_its_type_and_round_trips(local_stores):
                                                                                             False)
 
 
-@pytest.mark.parametrize("task", ["smoke", "play"])
+@pytest.mark.parametrize("task", ["smoke", "play", "full-game"])
 def test_every_bundle_task_records_after_the_game_alongside_grading(local_stores, task):
     steps = json.loads(files("agentenv_openciv3.bundles").joinpath(f"openciv3/tasks/{task}.json").read_text())
     by_type = {s["type"]: s for s in steps}

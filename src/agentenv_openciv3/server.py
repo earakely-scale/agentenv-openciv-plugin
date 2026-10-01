@@ -621,6 +621,10 @@ class OpenCiv3Env(AgentEnvEnvironment):
                     s = await self._state()
                 else:
                     s = self.last_state
+            try:
+                world = await self.bridge.call("score") if not self.failed else {}
+            except BridgeError:
+                world = {}
         score = s["score"]
         return [DataPart(data={
             "turn": s["turn"], "turn_limit": s["turn_limit"], "game_over": s["game_over"], "defeated": s["defeated"],
@@ -634,6 +638,10 @@ class OpenCiv3Env(AgentEnvEnvironment):
             "actions": self.actions.summary(),
             "harness": dict(self.harness),
             "engine_failed": self.failed is not None,
+            "standings": [{"civ": p["civ"], "you": p["is_human"], "defeated": p["defeated"],
+                           "score": p["score"]["total"]}
+                          for p in sorted(world.get("players", []), key=lambda p: -p["score"]["total"])],
+            "share": world.get("human_share"),
         })]
 
     # ---- extensions (harness only; every call is counted in data/get's harness) ----

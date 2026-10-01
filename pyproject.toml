@@ -26,7 +26,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<10", "httpx>=0.27,<1", "ruff>=0.16,<0.17"]
+dev = ["pytest>=8,<10", "httpx>=0.27,<1", "ruff>=0.16,<0.17", "agentenv-framework-protocol[agent]>=0.1.275,<0.2"]
 
 [project.urls]
 Source = "https://github.com/earakely-scale/agentenv-openciv-plugin"

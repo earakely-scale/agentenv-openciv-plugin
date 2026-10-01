@@ -830,7 +830,8 @@ class Game:
                     "players": [{"civ": self.civ, "is_human": True, "defeated": False, "score": self.score()}]
                     + [{"civ": o, "is_human": False, "defeated": False,
                         "score": {"total": 30 + self.turn, "cities": 1, "pop": 2, "tiles": 9, "techs": 3}}
-                       for o in self.opponents]}
+                       for o in self.opponents],
+                    "human_share": {"land": 0.05, "pop": 0.2}}
         if cmd == "_city":
             c = self.city(a.pop("id"))
             c.update(a)

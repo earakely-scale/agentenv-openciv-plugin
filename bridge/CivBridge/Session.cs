@@ -356,13 +356,22 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 		};
 	}
 
-	JsonObject ScoreAll() => new() {
-		["turn"] = gd.turn,
-		["human"] = ScoreOf(human),
-		["players"] = Json.Array(gd.players.Where(p => !p.isBarbarians), p => new JsonObject {
-			["civ"] = p.civilization.name, ["is_human"] = p == human, ["defeated"] = p.defeated, ["score"] = ScoreOf(p),
-		}),
-	};
+	JsonObject ScoreAll() {
+		var land = gd.map.tiles.Where(t => t.IsLand()).ToList();
+		int pop = gd.players.Where(p => !p.isBarbarians).Sum(p => p.cities.Sum(c => c.residents.Count));
+		return new JsonObject {
+			["turn"] = gd.turn,
+			["human"] = ScoreOf(human),
+			["players"] = Json.Array(gd.players.Where(p => !p.isBarbarians), p => new JsonObject {
+				["civ"] = p.civilization.name, ["is_human"] = p == human, ["defeated"] = p.defeated, ["score"] = ScoreOf(p),
+			}),
+			// Civ III's domination victory needs two thirds of each: the world's land, and its population.
+			["human_share"] = new JsonObject {
+				["land"] = land.Count == 0 ? 0 : Math.Round((double)land.Count(t => t.OwningPlayer() == human) / land.Count, 4),
+				["pop"] = pop == 0 ? 0 : Math.Round((double)human.cities.Sum(c => c.residents.Count) / pop, 4),
+			},
+		};
+	}
 
 	IEnumerable<Player> Rivals() => gd.players.Where(p => !p.isBarbarians && p != human);
 }

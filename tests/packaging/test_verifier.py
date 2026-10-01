@@ -6,10 +6,17 @@ from importlib.resources import as_file, files
 import pytest
 from agent_env.task_step.task_steps.verifiers.scoring import ScoreAggregator, aggregate_score
 
-with as_file(files("agentenv_openciv3.bundles").joinpath("openciv3/artifacts/outcome-verifier/verify.py")) as path:
-    spec = importlib.util.spec_from_file_location("outcome_verifier", path)
-    verifier = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(verifier)
+
+def load(artifact: str):
+    with as_file(files("agentenv_openciv3.bundles").joinpath(f"openciv3/artifacts/{artifact}/verify.py")) as path:
+        spec = importlib.util.spec_from_file_location(artifact.replace("-", "_"), path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    return module
+
+
+verifier = load("outcome-verifier")
+full_game = load("full-game-verifier")
 
 
 def summary(total=100, cities=4, agent_calls=0, autoplay_turns=30, engine_failed=False, **baselines) -> dict:
@@ -24,6 +31,13 @@ def summary(total=100, cities=4, agent_calls=0, autoplay_turns=30, engine_failed
         "harness": {"autoplay_turns": autoplay_turns, "new_games": 1, "extension_calls": 2, "engine_restarts": 0},
         "engine_failed": engine_failed,
     }
+
+
+def full_summary(total=4106, rank=1, land=0.58, pop=0.62, engine_ai=667) -> dict:
+    standings = [{"civ": f"AI {i}", "you": False, "defeated": False, "score": 1000 - i} for i in range(7)]
+    standings.insert(rank - 1, {"civ": "Rome", "you": True, "defeated": False, "score": total})
+    return summary(total=total, agent_calls=1499, autoplay_turns=0, engine_ai=engine_ai) | {
+        "turn": 540, "turn_limit": 540, "standings": standings, "share": {"land": land, "pop": pop}}
 
 
 def score(rows: list[dict]) -> float:
@@ -63,3 +77,16 @@ async def test_an_env_that_cannot_report_is_a_failed_grade_not_an_error():
     assert [r["result"] for r in rows] == [False]
     assert "ConnectError" in rows[0]["error"]
     assert score(rows) == 0.0
+
+
+def test_a_full_game_is_graded_on_the_engine_ai_its_rank_and_its_share_of_the_world():
+    rows = full_game.grade(full_summary())
+    assert [r["result"] for r in rows] == [True, True, True, True, False, True, True]
+    assert rows[4]["score"] == pytest.approx(0.58 / (2 / 3))
+    assert score(rows) == pytest.approx((1 + 1 + 2 + 1 + 0.58 / (2 / 3)) / 6)
+
+
+def test_a_full_game_behind_the_engine_ai_and_third_scores_partially():
+    rows = full_game.grade(full_summary(total=500, rank=3, land=0.1, pop=0.1))
+    assert rows[2]["score"] == pytest.approx(500 / 667) and rows[3]["score"] == pytest.approx(5 / 7)
+    assert rows[3]["rank"] == 3 and not rows[3]["result"]

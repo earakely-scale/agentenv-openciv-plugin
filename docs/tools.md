@@ -98,6 +98,8 @@ Implemented. These extend the sections above; folding them in is still to do.
 - `decisions`, as in `state.decisions`;
 - `harness`: `{"autoplay_turns", "new_games", "extension_calls"}`. A graded agent game must have `autoplay_turns == 0`.
 - `baselines` gains `settler_bot`.
+- `standings`: every civ, best first, `{"civ", "you", "defeated", "score"}`;
+- `share`: `{"land", "pop"}`, your fractions of the world's land and population (Civ III's domination victory needs two thirds of each).
 
 **Robustness:**
 - If the bridge dies, the env restarts it from the last autosave and reports an event: "the engine restarted from the start of turn N".
