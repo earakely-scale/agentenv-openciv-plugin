@@ -1,0 +1,60 @@
+# Agent tools
+
+The env (`agentenv_openciv3.server.OpenCiv3Env`, card name `openciv3`) exposes ten MCP tools. They
+return compact text, not JSON: briefs are under about 600 tokens, a radius-3 map under about 700.
+Every tool that changes the game ends with a one-line footer: `[T23/60 · needs orders: u7, c1]`.
+
+Invalid actions **raise**, so the agent sees `isError: true`, with a message that gives the reason,
+the valid alternatives and the exact call to make instead.
+
+| Tool | Args | Returns |
+|---|---|---|
+| `get_turn_brief` | — | Turn and limit, gold, research and ETA, score, a pace line against the targets and both baselines (null and built-in AI on the same seed), what needs orders, standing orders, one line per city, the last turn's events, and the agent's plan. Self-contained: "lost context? call get_turn_brief". |
+| `list_units` | `filter`: `needs_orders` (default) or `all` | One line per unit: id, type, `(x,y)`, moves, status or standing order, valid orders, and why `found_city` is or isn't possible here. |
+| `view_map` | `x`, `y`, `radius` (default 3, max 6), or `around` (`"u7"`, `"c1"`) | Staggered ASCII of the explored tiles, a legend, then a "notable" list (resources, rivers, foreign units, cities, good sites) with distance and direction. Unexplored tiles are blank. |
+| `find_city_sites` | `unit` (optional), `top` (default 5) | Ranked sites: `(x,y)`, score, distance and direction, travel turns, yields, river or coast. |
+| `unit_order` | `unit`, `order`, `x`, `y` | Result line plus footer. `settle` walks to the site and founds the city on arrival. |
+| `city_info` | `city` (optional; all cities when omitted) | Size, food, growth ETA, production and ETA, and what it can build with cost and turns. |
+| `set_production` | `city`, `item` | Result line plus footer. |
+| `research` | `tech` (optional) | With no tech: researchable techs with turns and what each unlocks. With a tech: sets it, queuing any prerequisites. |
+| `end_turn` | `skip_idle` (default false), `until_attention` (default false), `max_turns` (default 5) | Either END TURN BLOCKED with each blocker and the call that resolves it, or the turn report plus the next brief. At the turn limit: `GAME OVER` and final metrics. |
+| `plan` | `text` (optional) | Reads, or replaces, the agent's plan (at most 1,000 characters), which every brief shows back. |
+
+## Anti-stuck rules (server side)
+
+- When the same call fails 3 times in a turn, the error adds: "same error 3x — try one of: …".
+- After 25 calls in one turn, every response adds: "consider end_turn(skip_idle=true)".
+- When a standing order can't make progress, it becomes an event and the unit goes back to idle.
+- At the turn limit, `end_turn` returns `GAME OVER` with final metrics, and further game actions fail
+  with "the game is over".
+
+## Action log
+
+When `OPENCIV_ACTION_LOG` is set, the env appends one JSON line per tool call to that file:
+`{"ts", "turn", "tool", "args", "ok", "error_code", "ms"}`. For `end_turn` the line also has
+`"idle_units"` and `"turns_advanced"`. The playtest harness reads this log; it is the
+authoritative record of what the agent did.
+
+## Configuration (environment variables)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CIVBRIDGE_CMD` | `/opt/civbridge/CivBridge` | Command that starts the bridge (split on spaces) |
+| `OPENCIV_SEED` | `1` | Seed for the first game |
+| `OPENCIV_TURN_LIMIT` | `60` | Turn limit |
+| `OPENCIV_SIZE`, `OPENCIV_OPPONENTS`, `OPENCIV_DIFFICULTY`, `OPENCIV_BARBARIANS` | as in `new_game` | Scenario |
+| `OPENCIV_BASELINES` | `1` | Compute the null and built-in-AI baselines for the same seed in the background |
+| `OPENCIV_ACTION_LOG` | unset | Path of the action log |
+| `MCP_HOST`, `MCP_PORT` | `0.0.0.0`, `18765` | HTTP bind (AgentEnv SDK) |
+
+## Data plane and extensions
+
+- `data/reset`: start a new game from the current scenario.
+- `data/add`: a `DataPart` with `{"scenario": {...}}` updates the scenario and starts a new game.
+- `data/get`: one `DataPart` with the summary: `turn`, `turn_limit`, `game_over`, `defeated`, `seed`,
+  `civ`, `score`, `metrics` (cities, pop, techs, tiles, units, gold, explored_pct), `baselines`
+  (`null` and `engine_ai`, each with the score at the same turn and at the turn limit when known), and
+  `actions` (`ok`, `invalid`, `max_consecutive_errors`).
+- Extensions (REST, for harnesses and `apply_server_config`):
+  - `urn:openciv3:new-game/v1`: scenario args.
+  - `urn:openciv3:autoplay/v1`: `turns`, `policy` (`null`, `found_capital`, `engine_ai`).

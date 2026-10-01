@@ -221,3 +221,12 @@ __marimo__/
 bin/
 obj/
 *.user
+
+# Build outputs
+build/
+dist/
+*.egg-info/
+.venv/
+__pycache__/
+.pytest_cache/
+playtest/runs/
