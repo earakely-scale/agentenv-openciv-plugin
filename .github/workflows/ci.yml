@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      CIVBRIDGE_CMD: ${{ github.workspace }}/build/bridge/CivBridge
+    steps:
+      # vendor/OpenCiv3 only: its nested art submodule is not needed (and is SSH-only).
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: scripts/build-bridge.sh
+      - run: pip install -e '.[dev]'
+      - run: pytest tests/bridge tests/env
+      - run: agent-env plugin check
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - run: docker build -t openciv3 .
+      - name: Start a game in the image
+        run: |
+          docker run -d --name env -p 127.0.0.1:18765:18765 openciv3
+          for _ in $(seq 60); do curl -fso /dev/null http://127.0.0.1:18765/.well-known/agent-env.json && break; sleep 2; done
+          rpc() { curl -fs -X POST http://127.0.0.1:18765/agentenv -H 'content-type: application/json' \
+                    -d "{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"$1\", \"params\": {}}" | tee /dev/stderr | grep '"result"' >/dev/null; }
+          rpc data/reset && rpc data/get
+      - if: failure()
+        run: docker logs env

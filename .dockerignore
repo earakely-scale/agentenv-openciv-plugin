@@ -1,0 +1,16 @@
+*
+!vendor/OpenCiv3/C7Engine
+!vendor/OpenCiv3/QueryCiv3
+!vendor/OpenCiv3/Blast
+!vendor/OpenCiv3/C7/Lua
+!bridge
+!patches
+!scripts
+!src
+!pyproject.toml
+!README.md
+!LICENSE
+**/bin
+**/obj
+**/__pycache__
+**/*.pyc

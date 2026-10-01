@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentenv-openciv3"
+version = "0.1.0"
+description = "OpenCiv3 as an AgentEnv environment: an LLM agent plays a Civilization III remake through MCP tools."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+keywords = ["agentenv", "mcp", "reinforcement-learning", "llm-agents", "openciv3", "civilization"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Games/Entertainment :: Turn Based Strategy",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "agentenv-framework>=0.9.1258",
+    "agentenv-framework-protocol>=0.1.272",
+    "mcp>=1.25,<2",
+    "pydantic>=2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[project.urls]
+Source = "https://github.com/earakely-scale/agentenv-openciv-plugin"
+OpenCiv3 = "https://github.com/C7-Game/OpenCiv3"
+
+[project.entry-points."agent_env.bundles"]
+openciv3 = "agentenv_openciv3.bundles"
+
+[project.entry-points."agent_env.cli_plugins"]
+openciv3 = "agentenv_openciv3.cli:openciv3"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentenv_openciv3"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/tests", "/README.md", "/LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

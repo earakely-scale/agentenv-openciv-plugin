@@ -1,0 +1,11 @@
+[
+  {"id": "deploy", "type": "deploy_env", "env_id": "openciv3"},
+  {"id": "new-game", "type": "apply_server_config", "env_id": "openciv3", "timeout_seconds": 120,
+   "directives": [{"service": "openciv3", "uri": "urn:openciv3:new-game/v1",
+                   "args": {"seed": 7, "size": "Tiny", "turn_limit": 30}}]},
+  {"id": "autoplay", "type": "apply_server_config", "env_id": "openciv3", "timeout_seconds": 600,
+   "directives": [{"service": "openciv3", "uri": "urn:openciv3:autoplay/v1",
+                   "args": {"turns": 30, "policy": "engine_ai"}}]},
+  {"id": "grade", "type": "env_outcome_verifier", "env_id": "openciv3", "file_artifact_id": "outcome-verifier",
+   "verifier_id": "outcome", "score_aggregator": "weighted_average"}
+]
