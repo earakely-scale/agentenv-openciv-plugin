@@ -13,6 +13,7 @@ python playtest/baseline.py --seeds 1,2,3 --turns 60 --out baselines.json  # bas
 python playtest/analyze.py playtest/runs/<batch>/seed-1                    # re-analyze one run
 python playtest/batch.py --name <batch> --report-only                      # re-analyze a batch
 python playtest/replay.py playtest/runs/<batch>                            # rebuild recordings
+python playtest/longgame.py <run dir> --baseline engine_ai=<record dir>    # report on one long game
 ```
 
 `--server-cmd` takes the placeholders `{port}`, `{seed}`, `{turns}` and `{run_dir}`, so a Docker image
@@ -36,13 +37,33 @@ works too:
    `Game not over (turn X/Y). Continue playing.` Stop on game over, an exhausted budget,
    `--max-nudges`, `--max-stalled-nudges` segments in a row without the turn advancing, or
    `--timeout-min`.
+4a. **Long games:** with `--context-cap N`, a session whose context has passed N tokens at a result
+   ends, and a new `claude -p` takes over. It gets the game prompt, `prompt.md`'s resume prompt and,
+   in every session, its handoff, which asks the agent to keep the plan current. The env keeps the
+   game, the brief and the plan, so nothing else is carried over. Budget and timeout are for the whole
+   game. `meta.json` lists the sessions (turns, calls, cost, peak context, why each ended), and the
+   cost in `meta.json` and `metrics.json` is the sum. The cap acts only at a segment's end, so a session
+   can run up to `--max-agent-turns` requests past it.
 5. Final `data/get`, then the env's `urn:openciv3:recording/v1` extension (skip with
-   `--no-recording`), stop the env's process group, remove claude's `~/.claude/projects/<slug>`.
+   `--no-recording`; `--recording-formats mp4,html,client_mp4` adds the real client's view in the
+   client image), stop the env's process group, remove claude's `~/.claude/projects/<slug>`.
 
 Run directory: `transcript.jsonl` (claude's stream), `actions.jsonl` (the env's action log),
 `summary.json` (final `data/get`), `meta.json` (including the scenario), `metrics.json`,
 `server.log`, `claude.stderr`, and the recording: `recording.mp4` (`recording.gif` when the env has
-no ffmpeg) and `replay.html`. The batch report links them.
+no ffmpeg), `replay.html` and, when asked for, `client.mp4`. The batch report links them.
+
+**Long-game report (`longgame.py`):** where the agent got to, from the env's per-turn snapshots. It
+includes:
+- score, cities, pop, tiles and techs at checkpoints;
+- the agent's rank among the civs;
+- the same-seed baselines in its seat;
+- the final standings and notable events;
+- a table of sessions.
+
+For the snapshots to outlive the env, give the env a `TMPDIR` inside the run directory. A baseline is
+the record directory of a game the bridge played in the agent's seat: `CivBridge --record <dir>`, then
+`new_game` and `autoplay` with that policy.
 
 ## Metrics and gates (`analyze.py`)
 
