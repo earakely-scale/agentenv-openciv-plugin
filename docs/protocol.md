@@ -60,7 +60,9 @@ The human player's full situation. Result:
 ```json
 {
   "turn": 12, "turn_limit": 60, "game_over": false, "defeated": false,
-  "civ": "Rome", "government": "Despotism", "anarchy_until": null, "governments": ["Monarchy"],
+  "civ": "Rome", "government": "Despotism", "anarchy_until": null, "tile_penalty": true,
+  "governments": [{"name": "Monarchy", "corruption": "problematic", "hurry": "gold", "tile_penalty": false,
+                   "trade_bonus": false, "unit_cost": 1, "free_units_per_city": 3}],
   "revolution_target": null, "gold": 34, "gold_per_turn": 3, "rates": {"tax": 4, "science": 6, "luxury": 0},
   "research": {"current": "Bronze Working", "turns_left": 3, "beakers": 8, "cost": 20, "queue": ["Bronze Working"]},
   "known_techs": ["Alphabet", "Pottery"],
@@ -90,8 +92,9 @@ The human player's full situation. Result:
 - `target` is `{"x", "y", "dist", "dir"}` for `goto`/`settle`, else null.
 - `orders` lists the orders `unit_order` would accept for this unit right now. A unit with moves next to an
   enemy also has `attack_targets` (see `unit_order`).
-- `governments` lists the governments a revolution can change to now; `revolution_target` is the one a revolution
-  under way ends in. `rivals[].peace_price` is the gold that civ asks for peace while at war (null at peace, or
+- `governments` lists the governments a revolution can change to now, as in `revolution`'s result;
+  `tile_penalty` is true when the current government takes 1 from any tile yield above 2 (Despotism);
+  `revolution_target` is the one a revolution under way ends in. `rivals[].peace_price` is the gold that civ asks for peace while at war (null at peace, or
   while it refuses to talk).
 - `needs_orders` is true when the unit can move, is not under a standing order, and is not fortified.
 - `blockers` lists what stops `end_turn`: `no_research` (has a city, nothing being researched),

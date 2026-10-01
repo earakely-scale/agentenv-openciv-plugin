@@ -42,10 +42,12 @@ async def test_fourteen_tools_with_descriptions(env):
 async def test_revolution_changes_government_after_anarchy(env, tools):
     await found_capital(tools)
     brief = await tools("get_turn_brief")
-    assert 'GOVERNMENT Despotism · can choose Monarchy → revolution(government="Monarchy")' in brief
+    assert ("GOVERNMENT Despotism: -1 on any tile yield above 2 · can choose Monarchy (no tile penalty, hurry with "
+            'gold, corruption problematic) → revolution(government="Monarchy") after a few turns of anarchy') in brief
     text = await tools("revolution", government="monarchy")
     assert text.startswith("(read 'monarchy' as 'Monarchy') Revolution: anarchy until turn 3, then Monarchy.")
     assert "Government: Anarchy, anarchy until T3, then Monarchy" in text
+    assert "  Monarchy: no tile penalty, hurry with gold, corruption problematic, 3 free units per city" in text
     assert "GOVERNMENT anarchy, then Monarchy" in await tools("get_turn_brief")
     await tools("end_turn", skip_idle=True)
     await tools("end_turn", skip_idle=True)

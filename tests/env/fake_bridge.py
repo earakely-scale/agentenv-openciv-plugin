@@ -306,7 +306,9 @@ class Game:
         return {
             "turn": self.turn, "turn_limit": self.turn_limit, "game_over": self.game_over(), "defeated": False,
             "civ": self.civ, "government": self.government, "anarchy_until": self.anarchy_until,
-            "governments": [g for g in GOVERNMENTS if g != self.government and not self.anarchy_until],
+            "tile_penalty": self.government == "Despotism",
+            "governments": [g for g in self.governments_view()["available"]
+                            if g["name"] != self.government and not self.anarchy_until],
             "revolution_target": self.revolution_target,
             "gold": self.gold, "gold_per_turn": self.gpt(),
             "rates": {"tax": 10 - self.rates["science"] - self.rates["luxury"], **self.rates},

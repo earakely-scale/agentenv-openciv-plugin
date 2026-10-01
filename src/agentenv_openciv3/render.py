@@ -410,8 +410,11 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
     if s.get("revolution_target"):
         lines.append(f"GOVERNMENT anarchy, then {s['revolution_target']}")
     elif s.get("governments"):
-        lines.append(f"GOVERNMENT {s.get('government')} · can choose {', '.join(s['governments'])} → "
-                     + call("revolution", government=s["governments"][0]))
+        penalty = ": -1 on any tile yield above 2" if s.get("tile_penalty") else ""
+        options = "; ".join(f"{g['name']} ({government_traits(g)})" for g in s["governments"])
+        better = next((g for g in s["governments"] if not g.get("tile_penalty")), s["governments"][0])
+        lines.append(f"GOVERNMENT {s.get('government')}{penalty} · can choose {options} → "
+                     + call("revolution", government=better["name"]) + " after a few turns of anarchy")
     lines.append(f"SCORE {score_text(s['score'])} · explored {num(s.get('explored_pct', 0))}%")
     lines.append(pace_line(s, start_techs))
     if baselines:
@@ -460,16 +463,22 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
 
 # ---- government and diplomacy ----
 
+def government_traits(o: dict) -> str:
+    traits = ["tile penalty" if o.get("tile_penalty") else "no tile penalty",
+              "+1 commerce on tiles with commerce" if o.get("trade_bonus") else None,
+              f"hurry with {o['hurry']}" if o.get("hurry") and o["hurry"] != "none" else "no hurrying",
+              f"corruption {o['corruption']}" if o.get("corruption") else None]
+    return ", ".join(t for t in traits if t)
+
+
 def governments(g: dict) -> str:
     head = f"Government: {g.get('current', '?')}"
     head += f", anarchy until T{g['anarchy_until']}" if g.get("anarchy_until") else ""
     head += f", then {g['revolution_target']}" if g.get("revolution_target") else ""
     lines = [head]
     for o in g.get("available", []):
-        traits = [f"corruption {o['corruption']}", f"hurry with {o['hurry']}",
-                  "tile penalty" if o.get("tile_penalty") else None, "trade bonus" if o.get("trade_bonus") else None,
-                  f"{o['free_units_per_city']} free units per city" if o.get("free_units_per_city") else None]
-        lines.append(f"  {o['name']}: " + ", ".join(t for t in traits if t))
+        free = f", {o['free_units_per_city']} free units per city" if o.get("free_units_per_city") else ""
+        lines.append(f"  {o['name']}: {government_traits(o)}{free}")
     return "\n".join(lines)
 
 

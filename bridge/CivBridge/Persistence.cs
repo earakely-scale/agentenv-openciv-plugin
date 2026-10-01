@@ -92,6 +92,7 @@ sealed partial class Session {
 			["threats_seen"] = Json.Strings(threatsSeen.Where(gd.mapUnits.Contains).Select(EngineId)),
 			["bot_explorer"] = botExplorer == null ? null : ids.Of(botExplorer),
 			["revolution_target"] = revolutionTarget?.name,
+			["rates_before_anarchy"] = ratesBeforeAnarchy is var (science, luxury) ? new JsonArray(science, luxury) : null,
 			["rng"] = RngState.Get(GameData.rng),
 		};
 	}
@@ -174,6 +175,7 @@ sealed partial class Session {
 		threatsSeen = [.. gd.mapUnits.Where(u => seen.Contains(u.id.ToString()))];
 		botExplorer = s["bot_explorer"] is JsonNode explorer ? UnitOf(explorer) : null;
 		revolutionTarget = s["revolution_target"] is JsonNode target ? gd.governments.FirstOrDefault(g => g.name == (string)target) : null;
+		ratesBeforeAnarchy = s["rates_before_anarchy"] is JsonArray r ? ((int)r[0], (int)r[1]) : null;
 		if (s["rng"] is JsonObject rng && !RngState.Set(GameData.rng, rng))
 			Log.Warning("could not restore the engine's random state; the restored game continues from a fresh one");
 	}

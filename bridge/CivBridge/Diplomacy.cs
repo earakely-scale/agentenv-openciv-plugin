@@ -10,23 +10,28 @@ sealed partial class Session {
 	/// <summary>The government the revolution under way ends in; null leaves the pick to the bridge's default.</summary>
 	Government revolutionTarget;
 
+	/// <summary>The science and luxury rates before anarchy (which allows none), restored when it ends.</summary>
+	(int Science, int Luxury)? ratesBeforeAnarchy;
+
 	JsonObject Governments() => new() {
 		["current"] = human.government.name,
 		["anarchy_until"] = human.government.transitionType ? (JsonNode)human.inAnarchyUntilTurn : null,
 		["revolution_target"] = revolutionTarget?.name,
-		["available"] = Json.Array(human.GetAvailableGovernments(gd), g => new JsonObject {
-			["name"] = g.name,
-			["corruption"] = g.corruptionType.ToString().ToLowerInvariant(),
-			["hurry"] = g.hurryingType switch {
-				Government.HurryProductionType.ForcedLabor => "population",
-				Government.HurryProductionType.PaidLabor => "gold",
-				_ => "none",
-			},
-			["tile_penalty"] = g.hasTilePenalty,
-			["trade_bonus"] = g.hasTradeBonus,
-			["unit_cost"] = g.unitCost,
-			["free_units_per_city"] = g.freeUnitsPerCity,
-		}),
+		["available"] = Json.Array(human.GetAvailableGovernments(gd), GovernmentJson),
+	};
+
+	static JsonObject GovernmentJson(Government g) => new() {
+		["name"] = g.name,
+		["corruption"] = g.corruptionType.ToString().ToLowerInvariant(),
+		["hurry"] = g.hurryingType switch {
+			Government.HurryProductionType.ForcedLabor => "population",
+			Government.HurryProductionType.PaidLabor => "gold",
+			_ => "none",
+		},
+		["tile_penalty"] = g.hasTilePenalty,
+		["trade_bonus"] = g.hasTradeBonus,
+		["unit_cost"] = g.unitCost,
+		["free_units_per_city"] = g.freeUnitsPerCity,
 	};
 
 	JsonObject Revolution(Args a) {
@@ -43,6 +48,7 @@ sealed partial class Session {
 		if (human.government.transitionType) {
 			message = $"Anarchy already lasts until turn {human.inAnarchyUntilTurn}; then the government becomes {g.name}.";
 		} else {
+			ratesBeforeAnarchy = (human.scienceRate, human.luxuryRate);
 			new StartGovernmentTransitionMsg(human).process();
 			DrainUi();
 			int turns = human.inAnarchyUntilTurn - gd.turn;
@@ -60,7 +66,15 @@ sealed partial class Session {
 		if (g == null) return;
 		human.government = g;
 		revolutionTarget = null;
-		autos.Add(Auto("government_picked", $"Anarchy ended and the government became {g.name}."));
+		string rates = "";
+		if (ratesBeforeAnarchy is var (science, luxury)) {
+			luxury = Math.Clamp(luxury, human.minLuxuryRate, human.maxLuxuryRate);
+			science = Math.Clamp(Math.Min(science, 10 - luxury), human.minScienceRate, human.maxScienceRate);
+			(human.scienceRate, human.luxuryRate, human.taxRate) = (science, luxury, 10 - science - luxury);
+			rates = $"; rates are back to science {science * 10}%, luxury {luxury * 10}%";
+			ratesBeforeAnarchy = null;
+		}
+		autos.Add(Auto("government_picked", $"Anarchy ended and the government became {g.name}{rates}."));
 	}
 
 	JsonObject Diplomacy() => new() {

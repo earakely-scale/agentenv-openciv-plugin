@@ -461,7 +461,9 @@ def test_revolution_ends_in_the_chosen_government(launch):
     b = launch()
     b.call("new_game", seed=SEED, turn_limit=400)
     state = until(b, lambda s: s["governments"], 300)
-    target = state["governments"][-1]
+    target = state["governments"][-1]["name"]
+    assert state["tile_penalty"] and set(state["governments"][0]) == {
+        "name", "corruption", "hurry", "tile_penalty", "trade_bonus", "unit_cost", "free_units_per_city"}
     assert b.error("revolution", government="Fascism")["code"] == "unknown_government"
     res = b.call("revolution", government=target)
     assert res["government"]["revolution_target"] == target and res["government"]["anarchy_until"] > state["turn"]
@@ -472,8 +474,12 @@ def test_revolution_ends_in_the_chosen_government(launch):
         if b.call("state")["government"] == target:
             break
         autos += b.call("end_turn", skip_idle=True)["auto"]
-    assert b.call("state")["government"] == target and b.call("state")["revolution_target"] is None
-    assert any(x["kind"] == "government_picked" and target in x["text"] for x in autos)
+    after = b.call("state")
+    assert after["government"] == target and after["revolution_target"] is None
+    assert any(x["kind"] == "government_picked" and target in x["text"] and "rates are back" in x["text"]
+               for x in autos)
+    assert after["rates"]["science"] == state["rates"]["science"]
+    assert after["rates"]["luxury"] == state["rates"]["luxury"]
 
 
 def test_war_then_peace_at_the_asked_price(launch):
