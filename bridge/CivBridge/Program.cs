@@ -16,36 +16,55 @@ Console.SetOut(Console.Error);
 Log.Logger = new LoggerConfiguration().MinimumLevel.Warning()
 	.WriteTo.Console(standardErrorFromLevel: LogEventLevel.Verbose).CreateLogger();
 
-string luaDir = Path.Combine(AppContext.BaseDirectory, "Lua");
+const string Usage = "usage: CivBridge [--lua-dir <dir>] [--timeout <seconds per turn>] [--autosave <dir>] [--record <dir>]";
+string luaDir = Path.Combine(AppContext.BaseDirectory, "Lua"), autosaveDir = null, recordDir = null;
 double timeout = 60;
 for (int i = 0; i < args.Length; i++) {
-	if (args[i] == "--lua-dir" && i + 1 < args.Length) luaDir = args[++i];
-	else if (args[i] == "--timeout" && i + 1 < args.Length) timeout = double.Parse(args[++i], CultureInfo.InvariantCulture);
-	else {
-		Console.Error.WriteLine("usage: CivBridge [--lua-dir <dir>] [--timeout <seconds per turn>]");
-		return 2;
+	string value = i + 1 < args.Length ? args[i + 1] : null;
+	switch (args[i]) {
+		case "--lua-dir" when value != null: luaDir = args[++i]; break;
+		case "--autosave" when value != null: autosaveDir = args[++i]; break;
+		case "--record" when value != null: recordDir = args[++i]; break;
+		case "--timeout" when double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out timeout) && timeout > 0: i++; break;
+		default: return Fail(2, "bad_args", $"Unknown or incomplete argument '{args[i]}'. {Usage}");
 	}
 }
 
-if (!File.Exists(Path.Combine(luaDir, "civ3", "ruleset.json"))) {
-	output.Write(Json.Error(0, new BridgeError("no_lua", $"No OpenCiv3 game modes at {luaDir}; pass --lua-dir <dir with civ3/ and standalone/>.")));
-	return 1;
+if (!File.Exists(Path.Combine(luaDir, "civ3", "ruleset.json")))
+	return Fail(1, "no_lua", $"No OpenCiv3 game modes at {luaDir}; pass --lua-dir <dir with civ3/ and standalone/>.");
+// Without --autosave the saves go to a fresh temp directory, removed again when the bridge exits normally.
+bool ownAutosaveDir = autosaveDir == null;
+try {
+	autosaveDir = ownAutosaveDir ? Directory.CreateTempSubdirectory("civbridge-").FullName : Directory.CreateDirectory(autosaveDir).FullName;
+	if (recordDir != null) recordDir = Directory.CreateDirectory(recordDir).FullName;
+} catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) {
+	return Fail(2, "bad_args", $"Cannot create the --autosave or --record directory: {e.Message}");
 }
 
 var watchdog = new Watchdog(output, TimeSpan.FromSeconds(timeout));
 var input = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false));
-return EngineContext.Run(async () => {
+int status = EngineContext.Run(async () => {
 	// Animation waits never complete without a UI, so switch them off before anything runs.
 	new MsgSetAnimationsEnabled(false).send();
 	EngineStorage.ProcessNextMessageToEngine();
 
-	var session = new Session(luaDir, watchdog);
-	output.Write(Json.Ok(0, new JsonObject { ["ready"] = true, ["version"] = Session.Version }));
+	var session = new Session(luaDir, watchdog, autosaveDir, recordDir);
+	output.Write(Json.Ok(0, new JsonObject { ["ready"] = true, ["version"] = Session.Version, ["autosave"] = session.AutosavePath }));
 	while (await Task.Run(input.ReadLine) is string line) {
 		if (line.Trim().Length > 0) output.Write(await Handle(session, line));
 	}
 	return 0;
 });
+if (ownAutosaveDir) {
+	try { Directory.Delete(autosaveDir, recursive: true); } catch (IOException) { /* best effort */ }
+}
+return status;
+
+// Startup failures answer the ready line (id 0) with an error, then exit.
+int Fail(int exitCode, string code, string message) {
+	output.Write(Json.Error(0, new BridgeError(code, message)));
+	return exitCode;
+}
 
 async Task<JsonObject> Handle(Session session, string line) {
 	JsonNode id = null;

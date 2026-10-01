@@ -1,0 +1,39 @@
+TurnHandling.PlayPlayerTurns: an exception in one AI or barbarian player's turn is logged and ends that player's turn, instead of aborting everyone else's moves (or stalling the game on that turn forever). DefenderAI.FindAtRiskCityToDefend: skip a destination city that has changed hands (the KeyNotFoundException that stalled long games).
+
+--- a/C7Engine/EntryPoints/TurnHandling.cs
++++ b/C7Engine/EntryPoints/TurnHandling.cs
+@@ -117,10 +117,16 @@
+ 					continue;
+ 				}
+ 
+-				if (player.isBarbarians) {
+-					await BarbarianAI.PlayTurn(player, gameData);
+-				} else if (!player.isHuman) {
+-					await PlayerAI.PlayTurn(player, gameData);
++				// One AI's bug must neither abort everyone else's moves nor stall
++				// the game on this turn forever: log it and end that player's turn.
++				try {
++					if (player.isBarbarians) {
++						await BarbarianAI.PlayTurn(player, gameData);
++					} else if (!player.isHuman) {
++						await PlayerAI.PlayTurn(player, gameData);
++					}
++				} catch (System.Exception e) {
++					log.Error(e, $"{player} failed during its turn; its turn ends here");
+ 				}
+ 
+ 				if (player.id != EngineStorage.uiControllerID) {
+--- a/C7Engine/AI/UnitAI/DefenderAI.cs
++++ b/C7Engine/AI/UnitAI/DefenderAI.cs
+@@ -96,8 +96,9 @@
+ 			// way.
+ 			foreach (MapUnit u in player.units) {
+ 				if (u.currentAI is DefenderAI defenderAi) {
+-					if (defenderAi.data.destination.cityAtTile != null) {
+-						cityScores[defenderAi.data.destination.cityAtTile] -= 3f;
++					// The destination may have changed hands since the order was given.
++					if (defenderAi.data.destination.cityAtTile is City target && cityScores.ContainsKey(target)) {
++						cityScores[target] -= 3f;
+ 					}
+ 				}
+ 			}

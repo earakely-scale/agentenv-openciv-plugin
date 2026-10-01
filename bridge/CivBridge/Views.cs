@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using C7Engine;
 using C7GameData;
+using Serilog;
 
 namespace CivBridge;
 
@@ -20,8 +21,9 @@ sealed partial class Session {
 			["anarchy_until"] = h.government.transitionType ? (JsonNode)h.inAnarchyUntilTurn : null,
 			["gold"] = h.gold,
 			["gold_per_turn"] = h.CalculateGoldPerTurn(),
-			["rates"] = new JsonObject { ["tax"] = h.taxRate, ["science"] = h.scienceRate, ["luxury"] = h.luxuryRate },
+			["rates"] = Rates(),
 			["research"] = Research(),
+			["decisions"] = Decisions(),
 			["known_techs"] = Json.Strings(gd.techs.Where(t => h.knownTechs.Contains(t.id)).Select(t => t.Name)),
 			["score"] = ScoreOf(h),
 			["explored_pct"] = Math.Round(100.0 * h.tileKnowledge.knownTiles.Count / gd.map.tiles.Count, 1),
@@ -43,9 +45,13 @@ sealed partial class Session {
 
 	JsonObject Research() {
 		Tech t = gd.GetTech(human.currentlyResearchedTech);
-		if (t == null) return new JsonObject { ["current"] = null, ["turns_left"] = null, ["beakers"] = human.beakers, ["cost"] = null, ["queue"] = new JsonArray() };
+		if (t == null)
+			return new JsonObject {
+				["current"] = null, ["source"] = null, ["turns_left"] = null, ["beakers"] = human.beakers, ["cost"] = null, ["queue"] = new JsonArray(),
+			};
 		return new JsonObject {
 			["current"] = t.Name,
+			["source"] = researchSource,
 			["turns_left"] = Json.Turns(human.EstimateTurnsToResearch(gd, t)),
 			["beakers"] = human.beakers,
 			["cost"] = gd.TechCostFor(t, human) + human.beakers,
@@ -56,18 +62,39 @@ sealed partial class Session {
 	JsonArray Blockers() {
 		var blockers = new JsonArray();
 		if (GameOver) return blockers;
-		if (human.cities.Count > 0 && human.currentlyResearchedTech == null && human.GetAvailableTechsToResearch(gd.techs).Count > 0)
-			blockers.Add(new JsonObject { ["kind"] = "no_research", ["message"] = "Nothing is being researched." });
-		foreach (City c in HumanCities().Where(c => c.itemBeingProduced == null))
-			blockers.Add(new JsonObject { ["kind"] = "no_production", ["id"] = ids.Of(c), ["message"] = $"{c.name} is producing nothing." });
+		JsonObject Blocker(string kind, string id, string message) {
+			var b = new JsonObject { ["kind"] = kind };
+			if (id != null) b["id"] = id;
+			b["message"] = message;
+			return b;
+		}
+		Tech research = gd.GetTech(human.currentlyResearchedTech);
+		if (human.cities.Count > 0 && research == null && human.GetAvailableTechsToResearch(gd.techs).Count > 0)
+			blockers.Add(Blocker("no_research", null, "Nothing is being researched."));
+		if (research != null && researchPending)
+			blockers.Add(Blocker("choose_research", null,
+				$"The engine picked {research.Name} to research next; keep it with end_turn(skip_idle=true) or choose with research(tech=...)."));
+		foreach (City c in HumanCities()) {
+			string id = ids.Of(c);
+			if (c.itemBeingProduced == null) blockers.Add(Blocker("no_production", id, $"{c.name} is producing nothing."));
+			else if (pendingProduction.Contains(c))
+				blockers.Add(Blocker("choose_production", id,
+					$"The engine picked {c.itemBeingProduced.name} for {c.name}; keep it with end_turn(skip_idle=true) or choose with set_production(city=\"{id}\", item=...)."));
+			if (Moods(c).Riots)
+				blockers.Add(Blocker("disorder", id, (c.isInCivilDisorder
+					? $"{c.name} is in civil disorder and produces nothing: "
+					: $"{c.name} will fall into civil disorder when the turn ends: ") + DisorderFixes(c) + "."));
+		}
 		foreach (MapUnit u in HumanUnits().Where(NeedsOrders))
-			blockers.Add(new JsonObject { ["kind"] = "idle_unit", ["id"] = ids.Of(u), ["message"] = $"{Label(u)} has moves and no orders" });
+			blockers.Add(Blocker("idle_unit", ids.Of(u), $"{Label(u)} has moves and no orders"));
 		return blockers;
 	}
 
 	JsonObject CityJson(City c) {
 		IProducible item = c.itemBeingProduced;
 		int food = c.FoodGrowthPerTurn();
+		Mood mood = EngineMoods(c), model = Moods(c);
+		if (mood != model) Log.Warning("mood model {Model} differs from the engine's {Engine} in {City}", model, mood, c.name);
 		return new JsonObject {
 			["id"] = ids.Of(c),
 			["name"] = c.name,
@@ -81,10 +108,18 @@ sealed partial class Session {
 			["turns_to_grow"] = food > 0 ? Json.Turns(c.TurnsUntilGrowth()) : null,
 			["shields_per_turn"] = c.CurrentProductionYield().useful,
 			["producing"] = item?.name,
+			["producing_source"] = item == null ? null : ProducingSource(c),
 			["production_stored"] = c.shieldsStored,
 			["production_cost"] = item == null ? null : (JsonNode)human.ShieldCost(item),
 			["turns_to_complete"] = ProductionEta(c),
+			["capped"] = Capped(c),
+			["shields_lost_last_turn"] = shieldsLost.GetValueOrDefault(c),
 			["disorder"] = c.isInCivilDisorder,
+			["happy"] = mood.Happy,
+			["content"] = mood.Content,
+			["unhappy"] = mood.Unhappy,
+			["defenders"] = Defenders(c),
+			["riot_risk"] = RiotRisk(c),
 			["buildings"] = Json.Strings(c.GetBuildings().Select(b => b.building.name)),
 		};
 	}
@@ -211,6 +246,7 @@ sealed partial class Session {
 	}
 
 	JsonObject SetProduction(Args a) {
+		EnsurePlaying();
 		City c = CityArg(a);
 		string wanted = a.Str("item");
 		var options = c.ListProductionOptions(gd).ToList();
@@ -221,11 +257,14 @@ sealed partial class Session {
 			string why = known == null ? $"'{wanted}' is not something a city can build"
 				: missing != null ? $"{known.name} requires {missing.Name}"
 				: $"{c.name} cannot build {known.name} now";
+			IProducible close = known == null ? options.FirstOrDefault(o => Close(o.name, wanted)) : null;
 			throw new BridgeError("unknown_item", $"{why}. {c.name} can build: {string.Join(", ", options.Select(o => o.name))}.",
 				BridgeError.Names(options.Select(o => o.name)),
-				missing != null ? $"research(tech=\"{missing.Name}\")" : $"set_production(city=\"{ids.Of(c)}\", item=\"{options.First().name}\")");
+				missing != null ? $"research(tech=\"{missing.Name}\")"
+				: close != null ? $"set_production(city=\"{ids.Of(c)}\", item=\"{close.name}\")" : null);
 		}
 		c.SetItemBeingProduced(p);
+		AgentPickedProduction(c);
 		string message = p is Inflow
 			? $"{c.name} now converts its shields into {p.name}."
 			: $"{c.name} now builds {p.name} ({human.ShieldCost(p)} shields, {Eta(ProductionEta(c))}).";
@@ -269,6 +308,7 @@ sealed partial class Session {
 	static string EraName(Tech t) => EraNames[Math.Clamp(EraUtils.GetEraIndex(t.EraCivilopediaName), 0, EraNames.Length - 1)];
 
 	JsonObject SetResearch(Args a) {
+		EnsurePlaying();
 		string wanted = a.Str("tech");
 		var available = human.GetAvailableTechsToResearch(gd.techs);
 		string first = available.FirstOrDefault()?.Name;
@@ -285,6 +325,7 @@ sealed partial class Session {
 		foreach (Tech t in plan) human.AddTechItemToResearchQueue(t);
 		// Switching away loses the beakers spent so far; staying on the same tech keeps them.
 		if (human.currentlyResearchedTech != plan[0].id) human.SetCurrentlyResearchedTech(plan[0].id);
+		AgentPickedResearch(plan);
 
 		Tech now = gd.GetTech(human.currentlyResearchedTech);
 		string message = plan.Count == 1
@@ -338,6 +379,25 @@ sealed partial class Session {
 		t.overlayTerrainType != t.baseTerrainType ? $"{t.overlayTerrainType.DisplayName} on {t.baseTerrainType.DisplayName}" : t.baseTerrainType.DisplayName;
 
 	static bool Same(string a, string b) => string.Equals(a?.Trim(), b?.Trim(), StringComparison.OrdinalIgnoreCase);
+
+	/// <summary>A near miss worth suggesting: a plural, a prefix, or one typo.</summary>
+	static bool Close(string name, string wanted) {
+		string a = name.ToLowerInvariant(), b = wanted.Trim().ToLowerInvariant().TrimEnd('s');
+		if (b.Length < 3) return false;
+		if (a.StartsWith(b) || b.StartsWith(a)) return true;
+		if (Math.Abs(a.Length - b.Length) > 1) return false;
+		int[] row = Enumerable.Range(0, b.Length + 1).ToArray();
+		for (int i = 1; i <= a.Length; i++) {
+			int diag = row[0];
+			row[0] = i;
+			for (int j = 1; j <= b.Length; j++) {
+				int up = row[j];
+				row[j] = Math.Min(Math.Min(row[j] + 1, row[j - 1] + 1), diag + (a[i - 1] == b[j - 1] ? 0 : 1));
+				diag = up;
+			}
+		}
+		return row[b.Length] <= 1;
+	}
 
 	/// <summary>{"dist", "dir"} from one tile to another, plus the target's x, y when asked.</summary>
 	static JsonObject Relative(Tile from, Tile to, bool withXY = false) {

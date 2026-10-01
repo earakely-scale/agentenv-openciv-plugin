@@ -1,18 +1,27 @@
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using C7Engine;
 using C7Engine.Lua;
 using C7GameData;
 using C7GameData.Save;
+using Serilog;
 
 namespace CivBridge;
 
 /// <summary>One game, driven by protocol commands. Everything here runs on the engine thread.</summary>
-sealed partial class Session(string luaDir, Watchdog watchdog) {
-	public const string Version = "0.1.0";
+sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDir, string recordDir) {
+	public const string Version = "0.2.0";
+	public const int MaxTurnLimit = 1000;
 
-	static readonly string[] Commands =
-		["new_game", "state", "map", "city_sites", "unit_order", "city", "set_production", "techs", "set_research", "end_turn", "autoplay", "score"];
-	static readonly string[] Policies = ["null", "found_capital", "engine_ai"];
+	static readonly string[] Commands = [
+		"new_game", "load", "state", "map", "city_sites", "unit_order", "city", "set_production", "set_rates", "hurry",
+		"techs", "set_research", "end_turn", "autoplay", "score", "world",
+	];
+	static readonly string[] Policies = ["null", "found_capital", "settler_bot", "engine_ai"];
+
+	/// <summary>Events that end an end_turn(until_attention) run even when no blocker appears.</summary>
+	static readonly HashSet<string> AttentionEvents =
+		["disorder_started", "riot_risk", "unit_lost", "city_destroyed", "gold_stolen", "war_declared", "defenseless", "threat"];
 
 	GameMode mode;
 	GameData gd;
@@ -21,17 +30,20 @@ sealed partial class Session(string luaDir, Watchdog watchdog) {
 	readonly Ids ids = new();
 	readonly Dictionary<MapUnit, Order> orders = [];
 	List<JsonObject> lastEvents = [];
+	List<JsonObject> turnEvents = [];
 	List<JsonObject> uiEvents = [];
 	List<JsonObject> autos = [];
+	List<int> thefts = [];
 	int eventTurn;
 
 	bool GameOver => human.defeated || gd.turn >= turnLimit;
 
 	public async Task<JsonNode> Run(string cmd, Args a) {
 		if (cmd == "new_game") return NewGame(a);
+		if (cmd == "load") return Load(a);
 		if (!Commands.Contains(cmd))
 			throw new BridgeError("unknown_command", $"'{cmd}' is not a CivBridge command.", BridgeError.Names(Commands));
-		if (gd == null) throw new BridgeError("no_game", "No game is running yet; send new_game first.");
+		if (gd == null) throw new BridgeError("no_game", "No game is running yet; send new_game (or load) first.");
 		ids.Sync(gd, human);
 		PruneOrders();
 		return cmd switch {
@@ -41,17 +53,24 @@ sealed partial class Session(string luaDir, Watchdog watchdog) {
 			"unit_order" => await UnitOrder(a),
 			"city" => CityInfo(a),
 			"set_production" => SetProduction(a),
+			"set_rates" => SetRates(a),
+			"hurry" => Hurry(a),
 			"techs" => Techs(),
 			"set_research" => SetResearch(a),
 			"end_turn" => await EndTurn(a),
 			"autoplay" => await Autoplay(a),
+			"world" => World(),
 			_ => ScoreAll(),
 		};
 	}
 
-	JsonObject NewGame(Args a) {
+	void EnsureFresh() {
 		if (gd != null)
 			throw new BridgeError("already_started", $"A game (seed {seed}) is already running; a bridge plays one game. Restart the bridge to start another.");
+	}
+
+	JsonObject NewGame(Args a) {
+		EnsureFresh();
 		int seedArg = a.Int("seed", min: 0);
 		mode ??= GameMode.Load(luaDir, new GameMode.Config("civ3", ["standalone"]));
 		SaveGame save = mode.GetSave();
@@ -62,7 +81,7 @@ sealed partial class Session(string luaDir, Watchdog watchdog) {
 		var barbarians = Pick(Enum.GetValues<BarbarianActivity>(), b => b.ToString(), a.Str("barbarians", "Sedentary"), "barbarians");
 		var landform = Pick(Enum.GetValues<WorldCharacteristics.Landform>(), l => l.ToString(), a.Str("landform", "Pangaea"), "landform");
 		var ocean = Pick(Enum.GetValues<WorldCharacteristics.OceanCoverage>(), o => ((int)o).ToString(), a.Int("ocean", 70).ToString(), "ocean");
-		int limit = a.Int("turn_limit", 60, 1);
+		int limit = a.Int("turn_limit", 60, 1, MaxTurnLimit);
 
 		var world = new WorldSize {
 			name = size.name, width = size.width, height = size.height, numberOfCivs = opponents + 1,
@@ -91,16 +110,19 @@ sealed partial class Session(string luaDir, Watchdog watchdog) {
 		TurnHandling.OnBeginTurn();
 		DrainUi();
 		ids.Sync(gd, human);
-
-		return new JsonObject {
-			["turn"] = gd.turn,
-			["turn_limit"] = turnLimit,
-			["seed"] = seed,
-			["civ"] = human.civilization.name,
-			["opponents"] = Json.Strings(Rivals().Select(p => p.civilization.name)),
-			["map"] = new JsonObject { ["width"] = gd.map.numTilesWide, ["height"] = gd.map.numTilesTall, ["wrap_x"] = gd.map.wrapHorizontally },
-		};
+		Autosave();
+		Record();
+		return GameInfo();
 	}
+
+	JsonObject GameInfo() => new() {
+		["turn"] = gd.turn,
+		["turn_limit"] = turnLimit,
+		["seed"] = seed,
+		["civ"] = human.civilization.name,
+		["opponents"] = Json.Strings(Rivals().Select(p => p.civilization.name)),
+		["map"] = new JsonObject { ["width"] = gd.map.numTilesWide, ["height"] = gd.map.numTilesTall, ["wrap_x"] = gd.map.wrapHorizontally },
+	};
 
 	static T Pick<T>(IEnumerable<T> items, Func<T, string> name, string wanted, string arg) {
 		foreach (T item in items) if (string.Equals(name(item), wanted.Trim(), StringComparison.OrdinalIgnoreCase)) return item;
@@ -113,14 +135,18 @@ sealed partial class Session(string luaDir, Watchdog watchdog) {
 		EnsurePlaying();
 		JsonArray blockers = Blockers();
 		if (blockers.Count > 0 && !skipIdle) return new JsonObject { ["blocked"] = true, ["blockers"] = blockers };
+		if (skipIdle) AcceptEnginePicks();
 
 		autos = [];
 		var events = new List<JsonObject>();
 		int advanced = 0;
+		bool attention;
 		do {
-			events.AddRange(await AdvanceTurn(engineAi: false));
+			List<JsonObject> turn = await AdvanceTurn(engineAi: false);
+			events.AddRange(turn);
 			advanced++;
-		} while (untilAttention && advanced < maxTurns && !GameOver && Blockers().Count == 0);
+			attention = turn.Any(e => AttentionEvents.Contains((string)e["kind"]));
+		} while (untilAttention && advanced < maxTurns && !GameOver && !attention && Blockers().Count == 0);
 		lastEvents = events;
 
 		return new JsonObject {
@@ -135,7 +161,7 @@ sealed partial class Session(string luaDir, Watchdog watchdog) {
 	}
 
 	async Task<JsonNode> Autoplay(Args a) {
-		int turns = a.Int("turns", min: 1, max: 10000);
+		int turns = a.Int("turns", min: 1, max: MaxTurnLimit);
 		string policy = a.Has("policy") ? a.Str("policy") : "null";
 		if (!Policies.Contains(policy)) throw new BridgeError("bad_args", $"Unknown autoplay policy '{policy}'.", BridgeError.Names(Policies));
 		bool record = a.Bool("record", false);
@@ -145,7 +171,10 @@ sealed partial class Session(string luaDir, Watchdog watchdog) {
 		if (record) trajectory.Add(Point());
 		// Unlike end_turn this keeps going after a defeat, so baselines always cover the requested turns.
 		for (int i = 0; i < turns && gd.turn < turnLimit; i++) {
-			if (policy == "found_capital" && !human.defeated) await FoundCapitalAndAutomate();
+			if (!human.defeated) {
+				if (policy == "found_capital") await FoundCapitalAndAutomate();
+				else if (policy == "settler_bot") await SettlerBotTurn();
+			}
 			lastEvents = await AdvanceTurn(engineAi: policy == "engine_ai");
 			if (record) trajectory.Add(Point());
 		}
@@ -185,12 +214,22 @@ sealed partial class Session(string luaDir, Watchdog watchdog) {
 	async Task<List<JsonObject>> AdvanceTurn(bool engineAi) {
 		eventTurn = gd.turn;
 		uiEvents = [];
+		thefts = [];
 		if (engineAi) {
-			// Option A baseline: the engine AI plays the human seat during the human's own turn only, so
-			// human-side rules (costs, support, trade offers) still apply during everyone else's turns.
+			// The engine AI plays the human seat during the human's own turn only, so human-side rules
+			// (costs, support, trade offers) still apply during everyone else's turns.
 			orders.Clear();
+			ID research = human.currentlyResearchedTech;
 			human.isHuman = false;
-			try { await Pump(PlayerAI.PlayTurn(human, gd)); } finally { human.isHuman = true; }
+			try {
+				await Pump(PlayerAI.PlayTurn(human, gd));
+			} catch (Exception e) {
+				// The same containment patches/0004 gives every other AI player.
+				Log.Error(e, "the engine AI failed while playing the human seat; its turn ends here");
+			} finally {
+				human.isHuman = true;
+			}
+			if (human.currentlyResearchedTech != research) researchSource = Source.Engine;
 		} else {
 			foreach (MapUnit u in human.units.ToList()) if (NeedsOrders(u)) u.SkipTurn();
 		}
@@ -211,11 +250,15 @@ sealed partial class Session(string luaDir, Watchdog watchdog) {
 		PickGovernment();
 		events.AddRange(Diff(before));
 		events.AddRange(uiEvents);
+		events.AddRange(Thefts(before));
 		if (!engineAi && !human.defeated) await RunStandingOrders(events);
-		events.AddRange(Threats());
+		events.AddRange(Watch());
 		DrainUi();
 		ids.Sync(gd, human);
 		PruneOrders();
+		turnEvents = events;
+		Autosave();
+		Record();
 		return events;
 	}
 
@@ -226,8 +269,10 @@ sealed partial class Session(string luaDir, Watchdog watchdog) {
 	void PickResearch() {
 		if (human.cities.Count == 0 || human.currentlyResearchedTech != null) return;
 		PlayerAI.MaybePickTechToResearch(human, gd.techs);
-		if (gd.GetTech(human.currentlyResearchedTech) is Tech t)
-			autos.Add(Auto("research_picked", $"Nothing was being researched, so research was set to {t.Name}."));
+		if (gd.GetTech(human.currentlyResearchedTech) is Tech t) {
+			researchSource = Source.Engine;
+			autos.Add(Auto("research_picked", $"Nothing was being researched, so the engine picked {t.Name}."));
+		}
 	}
 
 	void PickGovernment() {
@@ -258,13 +303,15 @@ sealed partial class Session(string luaDir, Watchdog watchdog) {
 		await task;
 	}
 
+	static readonly Regex Stolen = new(@"stolen (\d+) gold", RegexOptions.Compiled);
+
 	void DrainUi() {
 		while (EngineStorage.TryDequeueNextMessageToUI(out MessageToUI m)) {
 			switch (m) {
 				case MsgShowTradeOffer o:
 					// The AI's turn is suspended until the "diplomacy screen" closes: decline right away.
 					autos.Add(Auto("trade_declined",
-						$"Declined a trade from {o.aiPlayer.civilization.name}: they asked for {Describe(o.aiWant)} and offered {Describe(o.aiGive)}."));
+						$"Declined {o.aiPlayer.civilization.name}'s offer of {Describe(o.aiGive)} for {Describe(o.aiWant)}: the env declines every trade."));
 					new MsgDiplomacyCompleted().send();
 					EngineStorage.ProcessNextMessageToEngine();
 					break;
@@ -276,6 +323,9 @@ sealed partial class Session(string luaDir, Watchdog watchdog) {
 					break;
 				case MsgCivilizationDestroyed d:
 					uiEvents.Add(Event("civ_destroyed", $"{d.civilization.name} has been destroyed."));
+					break;
+				case MsgShowMilitaryAdvisorPopup p when !p.happy && Stolen.Match(p.message) is { Success: true } s:
+					thefts.Add(int.Parse(s.Groups[1].Value));
 					break;
 			}
 		}
@@ -326,11 +376,22 @@ sealed class Ids {
 		foreach (City c in gd.cities) if (c.owner == human && !byObject.ContainsKey(c)) Add(c, $"c{++cities}");
 	}
 
-	void Add(object o, string id) => (byObject[o], byId[id]) = (id, o);
+	public void Add(object o, string id) => (byObject[o], byId[id]) = (id, o);
 
 	public string Of(object o) => byObject.GetValueOrDefault(o);
 
 	public T Find<T>(string id) where T : class => byId.GetValueOrDefault(id.Trim().ToLowerInvariant()) as T;
 
 	public static int Number(string id) => int.Parse(id.AsSpan(1));
+
+	/// <summary>The last unit and city numbers handed out, so a restored game never reuses an id.</summary>
+	public (int Units, int Cities) Counters {
+		get => (units, cities);
+		set => (units, cities) = value;
+	}
+
+	/// <summary>Id pairs for live objects only: what a save can carry over to the restored game.</summary>
+	public IEnumerable<(object Object, string Id)> Live(GameData gd, Player human) =>
+		gd.mapUnits.Where(u => u.owner == human).Cast<object>().Concat(gd.cities.Where(c => c.owner == human))
+			.Where(byObject.ContainsKey).Select(o => (o, byObject[o]));
 }

@@ -1,7 +1,9 @@
+using System.Reflection;
 using System.Text.Json.Nodes;
 using C7Engine;
 using C7Engine.Pathing;
 using C7GameData;
+using C7GameData.AIData;
 using MoonSharp.Interpreter;
 
 namespace CivBridge;
@@ -125,6 +127,7 @@ sealed partial class Session {
 	async Task<(string, City, JsonObject)> Settle(MapUnit u, Tile target) {
 		if (!u.unitType.isSettler) throw Invalid(u, $"{Label(u)} cannot found cities.");
 		if (FoundSite(target) is string why) throw CannotFound(u, target, why);
+		if (Occupant(target) is string who) throw Occupied(u, target, who);
 		if (u.location == target) {
 			if (u.movementPoints.canMove) {
 				City here = await Found(u);
@@ -160,19 +163,20 @@ sealed partial class Session {
 		City c = await u.BuildCity(string.IsNullOrWhiteSpace(name) ? human.GetNextCityName() : name.Trim());
 		DrainUi();
 		ids.Sync(gd, human);
+		EnginePickedProduction(c);
 		return c;
 	}
 
 	string Founded(MapUnit u, City c) =>
-		$"{Label(u)} founded {c.name} ({ids.Of(c)}) at {At(c.location)}; it is building {c.itemBeingProduced?.name ?? "nothing"}."
+		$"{Label(u)} founded {c.name} ({ids.Of(c)}) at {At(c.location)}; the engine picked {c.itemBeingProduced?.name ?? "nothing"} for it to build"
+		+ $" (change it with set_production(city=\"{ids.Of(c)}\", item=...))."
 		+ (human.currentlyResearchedTech == null ? " Nothing is being researched yet: pick a tech with research(tech=...)." : "");
 
 	async Task<(string, JsonObject)> Goto(MapUnit u, Tile target) {
 		if (!u.unitType.actions.Contains(UnitAction.Goto)) throw Invalid(u, $"{Label(u)} cannot move on its own.");
 		if (target == u.location) throw new BridgeError("bad_target", $"{Label(u)} is already at {At(target)}.");
 		if (u.IsLandUnit() && !target.IsLand()) throw new BridgeError("bad_target", $"{At(target)} is {target.baseTerrainType.DisplayName}; {Label(u)} moves on land.");
-		if (target.unitsOnTile.Any(x => x.owner != human) || (target.HasCity(out City c) && c.owner != human))
-			throw new BridgeError("bad_target", $"{At(target)} is occupied by {Owner(target.unitsOnTile.FirstOrDefault()?.owner ?? target.cityAtTile.owner)}; goto only moves peacefully.");
+		if (Occupant(target) is string who) throw Occupied(u, target, who);
 		TilePath p = Path(u, target) ?? throw NoPath(u, target);
 		var info = PathInfo(u, p);
 		orders[u] = new Order("goto", target);
@@ -185,22 +189,23 @@ sealed partial class Session {
 			+ (stuck != null ? $" It stopped early: {stuck}; it will retry next turn." : ""), info);
 	}
 
+	// Both check feasibility before Stop(u), so a refused order leaves the unit's orders as they were.
 	string Explore(MapUnit u) {
 		if (!u.canExplore()) throw Invalid(u, $"{Label(u)} cannot explore.");
+		if (ExplorerAI.MaybeMakeAiData(u, human) == null) throw Invalid(u, $"There is nothing left that {Label(u)} can reach and explore.");
 		Stop(u);
 		u.Explore();
 		DrainUi();
-		if (!u.isAutomated) throw Invalid(u, $"There is nothing left that {Label(u)} can reach and explore.");
 		return $"{Label(u)} is exploring automatically; it is now at {At(u.location)}.";
 	}
 
 	string AutoWork(MapUnit u) {
 		if (!u.canAutomate()) throw Invalid(u, $"{Label(u)} cannot work automatically.");
+		if (WorkerAI.MakeAiData(u, human) == null)
+			throw Invalid(u, human.cities.Count == 0 ? "There is no work to automate before you have a city." : $"There is no tile in your territory that {Label(u)} can improve right now.");
 		Stop(u);
 		u.Automate();
 		DrainUi();
-		if (!u.isAutomated)
-			throw Invalid(u, human.cities.Count == 0 ? "There is no work to automate before you have a city." : $"There is no tile in your territory that {Label(u)} can improve right now.");
 		return $"{Label(u)} works automatically from now on.";
 	}
 
@@ -252,10 +257,12 @@ sealed partial class Session {
 	/// </summary>
 	async Task<string> Walk(MapUnit u, Tile target) {
 		for (int step = 0; step < 64 && u.movementPoints.canMove && u.location != target; step++) {
+			if (Occupant(target) is string who) return $"{At(target)} is occupied by {who}";
 			TilePath p = Path(u, target);
 			if (p == null) return $"there is no route from {At(u.location)} to {At(target)}";
 			Tile next = p.PeekNext(), from = u.location;
-			if (!u.CanEnterPeacefully(next)) return $"{At(next)} is blocked";
+			if (!u.CanEnterPeacefully(next))
+				return Occupant(next) is string blocker ? $"{At(next)} is occupied by {blocker}" : $"{At(next)} cannot be entered peacefully (foreign territory)";
 			await u.Move(from.DirectionTo(next), true);
 			DrainUi();
 			if (!Alive(u)) return "the unit was lost";
@@ -320,8 +327,21 @@ sealed partial class Session {
 		return new JsonObject {
 			["origin"] = new JsonObject { ["x"] = origin.XCoordinate, ["y"] = origin.YCoordinate },
 			["sites"] = Json.Array(RankSites(origin, u, top), s => SiteJson(origin, u, s.tile, s.score)),
-			["note"] = "only sites on the unit's continent are scored",
+			["nearby"] = Json.Array(NearbySites(origin), s => SiteJson(origin, u, s.tile, s.score)),
+			["note"] = "sites ranks known sites on the unit's continent at least 2 tiles from any city, best first; "
+				+ "nearby lists every legal site within 4 tiles (cities need one empty tile between them)",
 		};
+	}
+
+	static readonly MethodInfo ScoreTiles = typeof(SettlerLocationAI).GetMethod("AssignTileScores", BindingFlags.NonPublic | BindingFlags.Static)
+		?? throw new MissingMethodException(nameof(SettlerLocationAI), "AssignTileScores");
+
+	/// <summary>Every explored tile within 4 tiles where a city may be founded, scored like the ranked sites.</summary>
+	List<(Tile tile, float score)> NearbySites(Tile origin) {
+		var legal = human.tileKnowledge.AllKnownTiles().Where(t => t.DistanceTo(origin) <= 4 && FoundSite(t) == null).ToList();
+		var scores = (Dictionary<Tile, float>)ScoreTiles.Invoke(null, [origin, human, legal, new List<MapUnit>()]);
+		return legal.Select(t => (t, scores.GetValueOrDefault(t)))
+			.OrderByDescending(s => s.Item2).ThenBy(s => s.t.YCoordinate).ThenBy(s => s.t.XCoordinate).ToList();
 	}
 
 	/// <summary>The engine AI's settler scoring, minus sites another settler of ours is already heading to.</summary>
@@ -363,6 +383,16 @@ sealed partial class Session {
 			sites.Select(s => (JsonNode)SiteJson(u.location, u, s.tile, s.score)),
 			sites.Count == 0 ? null : SettleCall(u, sites[0].tile));
 	}
+
+	/// <summary>"a Barbarians Warrior" or "Babylon (Babylonians' city)" when a foreign unit or city holds the tile, else null.</summary>
+	string Occupant(Tile t) {
+		if (t.HasCity(out City c) && c.owner != human) return $"{c.name}, a {c.owner.civilization.name} city";
+		var foes = t.unitsOnTile.Where(x => x.owner != human).ToList();
+		return foes.Count == 0 ? null : $"a {Owner(foes[0].owner)} {foes[0].unitType.name}{(foes.Count > 1 ? $" and {foes.Count - 1} more" : "")}";
+	}
+
+	BridgeError Occupied(MapUnit u, Tile t, string who) =>
+		new("occupied", $"{At(t)} is occupied by {who}; {Label(u)} only moves peacefully. Pick a free tile.");
 
 	BridgeError NoPath(MapUnit u, Tile t) {
 		var sites = u.unitType.isSettler ? RankSites(u.location, u, 5) : [];

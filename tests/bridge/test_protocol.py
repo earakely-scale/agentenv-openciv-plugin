@@ -108,7 +108,8 @@ def found_capital(b: Bridge) -> dict:
 
 def test_ready_new_game_and_already_started(launch):
     b = launch()
-    assert b.ready == {"id": 0, "ok": True, "result": {"ready": True, "version": b.ready["result"]["version"]}}
+    assert b.ready["id"] == 0 and b.ready["ok"] and b.ready["result"]["ready"] is True
+    assert set(b.ready["result"]) == {"ready", "version", "autosave"}
     assert b.error("state")["code"] == "no_game"
     assert b.error("fly")["code"] == "unknown_command"
     game = b.call("new_game", seed=SEED)
@@ -122,7 +123,8 @@ def test_new_game_validates_scenario(launch):
     b = launch()
     err = b.error("new_game", seed=1, civ="Atlantis")
     assert err["code"] == "bad_args" and "Greece" in err["alternatives"]
-    assert b.error("new_game", seed=1, size="Enormous")["alternatives"] == ["Tiny", "Small", "Standard", "Large", "Huge"]
+    sizes = ["Tiny", "Small", "Standard", "Large", "Huge"]
+    assert b.error("new_game", seed=1, size="Enormous")["alternatives"] == sizes
     assert b.error("new_game", seed=1, opponents=12)["code"] == "bad_args"
     assert b.error("new_game")["code"] == "bad_args"
     game = b.call("new_game", seed=4, civ="greece", opponents=1, size="Small", difficulty="Chieftain",
@@ -144,8 +146,10 @@ def test_initial_state(game):
     assert (s["turn"], s["turn_limit"], s["game_over"], s["defeated"]) == (0, 60, False, False)
     assert s["civ"] == "Rome" and s["government"] == "Despotism" and s["anarchy_until"] is None
     assert set(s["rates"]) == {"tax", "science", "luxury"} and sum(s["rates"].values()) == 10
-    assert s["research"] == {"current": None, "turns_left": None, "beakers": 0, "cost": None, "queue": []}
-    assert s["score"] == {"total": 4 * len(s["known_techs"]), "cities": 0, "pop": 0, "tiles": 0, "techs": len(s["known_techs"])}
+    assert s["research"] == {
+        "current": None, "turns_left": None, "beakers": 0, "cost": None, "queue": [], "source": None}
+    techs = len(s["known_techs"])
+    assert s["score"] == {"total": 4 * techs, "cities": 0, "pop": 0, "tiles": 0, "techs": techs}
     assert s["cities"] == [] and s["last_events"] == []
     assert [(u["id"], u["type"]) for u in s["units"]] == [("u1", "Settler"), ("u2", "Worker")]
     settler = unit(s, "u1")
@@ -195,7 +199,8 @@ def test_settle_walks_and_founds_on_arrival(game):
     site = next(s for s in game.call("city_sites", top=30)["sites"] if s["dist"] >= 2)
     res = game.call("unit_order", unit="u1", order="settle", x=site["x"], y=site["y"])
     assert res["path"]["length"] >= 2 and res["path"]["turns"] >= 1 and res["city"] is None
-    assert res["unit"]["status"] == "settle" and res["unit"]["target"]["x"] == site["x"] and not res["unit"]["needs_orders"]
+    assert res["unit"]["status"] == "settle" and not res["unit"]["needs_orders"]
+    assert res["unit"]["target"]["x"] == site["x"]
     events = []
     for _ in range(10):
         r = game.call("end_turn", skip_idle=True)
@@ -224,14 +229,15 @@ def test_found_city_production_and_city(game):
     city = found_capital(game)
     assert city["size"] == 1 and city["producing"] and city["buildings"] == ["Palace"]
     s = game.call("state")
-    assert [b["kind"] for b in s["blockers"]] == ["no_research", "idle_unit"]
+    assert [b["kind"] for b in s["blockers"]] == ["no_research", "choose_production", "idle_unit"]
     info = game.call("city", city="c1")
     options = {o["name"]: o for o in info["options"]}
     assert options["Warrior"]["kind"] == "unit" and options["Wealth"]["kind"] == "wealth"
     assert info["tiles_worked"] and set(info["tiles_worked"][0]) == {"x", "y", "terrain", "yield"}
     assert game.call("city", city="rome")["id"] == "c1"
     err = game.error("set_production", city="c1", item="Granary")
-    assert err["code"] == "unknown_item" and "Pottery" in err["message"] and err["suggest"] == 'research(tech="Pottery")'
+    assert err["code"] == "unknown_item" and "Pottery" in err["message"]
+    assert err["suggest"] == 'research(tech="Pottery")'
     assert set(err["alternatives"]) == set(options)
     res = game.call("set_production", city="c1", item="warrior")
     assert res["city"]["producing"] == "Warrior" and res["city"]["production_cost"] == options["Warrior"]["cost"]
@@ -331,7 +337,8 @@ def test_unit_order_errors(game):
     assert unexplored["code"] == "bad_target" and "explored" in unexplored["message"]
     game.call("unit_order", unit="u1", order="hold")
     err = game.error("unit_order", unit="u1", order="found_city")
-    assert err["code"] == "no_moves" and err["suggest"] == f'unit_order(unit="u1", order="settle", x={u["x"]}, y={u["y"]})'
+    assert err["code"] == "no_moves"
+    assert err["suggest"] == f'unit_order(unit="u1", order="settle", x={u["x"]}, y={u["y"]})'
     res = game.call("unit_order", unit="u1", order="settle", x=u["x"], y=u["y"])
     assert res["unit"]["status"] == "settle" and res["city"] is None
     r = game.call("end_turn", skip_idle=True)
@@ -375,7 +382,8 @@ def test_autoplay_policies(launch, policy):
     else:
         assert res["score"]["cities"] >= 2
     assert "trajectory" not in b.call("autoplay", turns=1)
-    assert b.error("autoplay", turns=1, policy="random")["alternatives"] == ["null", "found_capital", "engine_ai"]
+    policies = ["null", "found_capital", "settler_bot", "engine_ai"]
+    assert b.error("autoplay", turns=1, policy="random")["alternatives"] == policies
 
 
 def test_engine_ai_beats_found_capital_beats_null(launch):

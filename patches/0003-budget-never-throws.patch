@@ -1,0 +1,23 @@
+Player.DoPerTurnFinanceUpdates: when disbanding units and zeroing the sliders still cannot balance the budget, keep gold at 0 instead of throwing (which aborted the turn for every player after the turn counter had advanced).
+
+--- a/C7Engine/C7GameData/Player.cs
++++ b/C7Engine/C7GameData/Player.cs
+@@ -790,12 +790,15 @@
+ 					continue;
+ 				}
+ 
+-				// If the budget still isn't under control, something is wrong.
+-				throw new Exception($"{this} was unable to get the budget under control despite being under the unit support cap and zeroing out the sliders (gold={gold}, gpt={CalculateGoldPerTurn()})");
++				// Nothing is left to cut (e.g. building upkeep alone exceeds the
++				// income). Throwing here would abort the turn for every player,
++				// so clamp the treasury at zero instead.
++				log.Warning($"{this} cannot balance its budget (gold={gold}, gpt={CalculateGoldPerTurn()}); gold stays at 0");
++				break;
+ 			}
+ 
+ 			lastGoldPerTurn = CalculateGoldPerTurn();
+-			gold += lastGoldPerTurn;
++			gold = Math.Max(0, gold + lastGoldPerTurn);
+ 		}
+ 
+ 		public void HandleCityUpdates(GameData gameData) {
