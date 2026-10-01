@@ -58,3 +58,38 @@ authoritative record of what the agent did.
 - Extensions (REST, for harnesses and `apply_server_config`):
   - `urn:openciv3:new-game/v1`: scenario args.
   - `urn:openciv3:autoplay/v1`: `turns`, `policy` (`null`, `found_capital`, `engine_ai`).
+
+## Round 2 additions (from the post-playtest audit)
+
+The env engineer folds these into the sections above while implementing them, and deletes this
+section.
+
+**New tools (12 in total):**
+- `set_rates(science, luxury)`: the luxury rate is the main fix for disorder, and science is how gold turns into techs.
+- `buy(city)`: rush the current production with gold.
+
+**The brief shows:**
+- every city in disorder or at riot risk, with the fix;
+- cities without a defender;
+- capped production, with the shields being lost;
+- unspent gold, with a hint to buy or raise science;
+- the engine's pending picks (`choose_production`, `choose_research`), with the call to change them.
+
+**`data/get` adds:**
+- `decisions`, as in `state.decisions`;
+- `harness`: `{"autoplay_turns", "new_games", "extension_calls"}`. A graded agent game must have `autoplay_turns == 0`.
+- `baselines` gains `settler_bot`.
+
+**Robustness:**
+- If the bridge dies, the env restarts it from the last autosave and reports an event: "the engine restarted from the start of turn N".
+- Read-only tools never return stale state as ok.
+- A failed `data/add` or new game leaves the running game untouched.
+- Plans are sanitised (lone surrogates are dropped).
+
+**Text fixes:**
+- No more "Nonet": a missing ETA renders as "no progress" with the reason.
+- Fix suggestions are only given when they would succeed.
+
+**Recording:** per `docs/recording.md`. The extension is `urn:openciv3:recording/v1`, and rendering lives in `agentenv_openciv3.recording`.
+
+**Prompt hygiene for harnesses:** refer to tools by name in prose (e.g. "the end_turn tool"), never with call syntax that a model might copy as a bare tool name.

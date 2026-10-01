@@ -201,3 +201,61 @@ submodule itself stays untouched):
    forever.
 2. `0002-declare-war-uses-game-rng.patch`: `Player.DeclareWarOn` draws `refuseContactUntilTurn` from
    `GameData.rng`, so games stay deterministic.
+
+## Round 2 additions (from the post-playtest audit)
+
+These extend the commands above. The bridge engineer folds them into the sections above while
+implementing them, and deletes this section.
+
+### Levers the agent was missing
+- `set_rates {science, luxury}`:
+  - tax is `10 - science - luxury`;
+  - each rate is checked against the government's maximum; bad values give `bad_rates`, listing the allowed range;
+  - result: `{"message", "rates", "gold_per_turn", "turns_left_research"}`.
+- `hurry {city}`: buys the current production with gold (or population, where the government uses forced labour).
+  - Before acting, it uses `GetHurryProductionDetails`; refusals give `cannot_hurry` with the engine's reason and the cost.
+  - Result: `{"message", "gold_cost", "pop_cost", "city"}`.
+- **Trades stay auto-declined.** Every declined offer is an `auto` entry, `trade_declined`, that says what was offered.
+- **Defenders keep order.** Under Despotism, each military unit in a city suppresses one unhappy citizen (up to 2). `state` reports it and the disorder hints say so.
+
+### Who decides
+- **Engine picks are reported.** When the engine picks production after a completion, or the next research after a tech, the bridge reports it rather than hiding it:
+  - `state.cities[].producing_source` and `state.research.source` are `agent` or `engine`;
+  - a new blocker `choose_production` (per city) or `choose_research` asks the agent to confirm or change the pick;
+  - `end_turn(skip_idle=true)` accepts the engine's picks.
+- **`state.decisions`:** `{"production": {"agent": n, "engine": n}, "research": {"agent": n, "engine": n}}`. It counts completed items and learned techs by who chose them.
+
+### Order, waste and threats
+- **New city fields in `state`:**
+  - `happy`, `content`, `unhappy`, `defenders` (military units in the city), `riot_risk` (true when one more citizen would put the city in disorder at the current luxury rate and garrison);
+  - `capped` (true when production is full but waiting for population, e.g. a Settler at size 1 or 2), `shields_lost_last_turn`.
+- **New blocker `disorder`** (per city in disorder). Its message names the fixes: raise luxury (`set_rates`), move a military unit into the city, or let it shrink.
+- **New events:**
+  - `disorder_started`, `disorder_ended`, `riot_risk` (the turn the risk first appears);
+  - `production_capped` (once per item);
+  - `gold_stolen` (barbarians or capture took gold; amount);
+  - `defenseless` (a city with no defender while a hostile unit is within 3 tiles).
+- **`threat` is narrower.** It only covers hostile units (at war, or barbarian), and only once per unit until it leaves and returns. Peaceful passers-by are never threats.
+- **`until_attention` stops on more.** It stops on any blocker, and also on `disorder_started`, `riot_risk`, `unit_lost`, `city_destroyed`, `gold_stolen`, `war_declared`, `defenseless` and `threat`.
+
+### Sites and messages
+- **`city_sites`** also returns `nearby`: every legal site within 4 tiles of the unit, with its score, so agents never have to guess coordinates.
+- **Settle suggestions only for settlers.** For a non-settler, `suggest` is never a `settle` call.
+- **Precise movement errors.** A goto to a tile occupied by a foreign unit or city fails with `occupied`, naming the occupant, not `no_path`.
+
+### A scripted baseline
+- **`autoplay` gains `settler_bot`.** It follows the env's own suggestions, with no LLM:
+  - found the capital on turn 0;
+  - every settler: `settle` at `city_sites` top-1 from its position;
+  - workers: `auto_work`. The first warrior explores; the others fortify in the nearest city without a defender.
+  - each city builds a Warrior if it has no defender, else a Settler if size ≥ 2 and fewer than 8 cities, else a Worker if workers < cities, else Warrior;
+  - research: the cheapest available tech.
+- **It is the reference agents must beat.** It plays through the same standing orders and rules as the agent.
+
+### Robustness
+- **Engine patches:**
+  - `0003-budget-never-throws.patch`: when the budget can't be balanced, clamp instead of throwing.
+  - `0004-ai-turn-exceptions-are-contained.patch`: one AI player's exception is logged, and that player's turn ends, instead of aborting or stalling the turn.
+  - The exact sites are in the robustness audit.
+- **Autosave and `load`:** every human turn start writes `<autosave dir>/autosave.json`. The `--autosave <dir>` flag sets the directory; it defaults to a temp dir. A `load {path}` command restores a save (a new process plus `load`), so the env can recover from a bridge crash.
+- **Recording:** `--record <dir>` and the `world` command, as specified in `docs/recording.md`.
