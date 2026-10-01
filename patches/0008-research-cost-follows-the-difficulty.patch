@@ -1,0 +1,22 @@
+GameData.TechCostFor: the difficulty's AI cost factor multiplies the AI's research cost by AiCostFactor / HumanCostFactor, as Player.ShieldCost does for production, instead of dividing by it; the AI now pays 200% at Chieftain and 40% at Sid (it paid 50% and 250%). The human's costs and every cost at Regent are unchanged.
+
+--- a/C7Engine/C7GameData/GameData.cs
++++ b/C7Engine/C7GameData/GameData.cs
+@@ -377,9 +377,15 @@ namespace C7GameData {
+ 				}
+ 			}
+ 
+-			int difficultyFactor = player.isHuman ? gameDifficulty.HumanCostFactor : gameDifficulty.AiCostFactor;
++			// CF is the human's cost factor (10). The difficulty's AI cost
++			// factor then scales the AI's research the way Player.ShieldCost
++			// scales its production, by AiCostFactor / HumanCostFactor: the AI
++			// pays double at Chieftain (20) and 40% at Sid (4).
+ 			float knowledgeFactor = 1.0f - knownCivsThatKnowTheTech / (civsLeft * 1.75f);
+-			float researchCost = map.techRate * 10 * tech.Cost  * knowledgeFactor/ (difficultyFactor * 10);
++			float researchCost = map.techRate * 10 * tech.Cost  * knowledgeFactor/ (gameDifficulty.HumanCostFactor * 10);
++			if (!player.isHuman) {
++				researchCost *= gameDifficulty.AiCostFactor / (float)gameDifficulty.HumanCostFactor;
++			}
+ 
+ 			// Only include the progress factor if this is the tech actively
+ 			// being researched.

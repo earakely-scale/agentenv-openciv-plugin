@@ -1,0 +1,243 @@
+AI peace: Player.PeacePriceFor(gameData, other) is the gold an AI wants for peace (0 = free, int.MaxValue = refused: refuse-contact window, locked war, war under 10 turns old, longer after a broken treaty) and grows with its lead in the war, fading as the war drags on; WouldAcceptDealFrom accepts a partOfPeaceTreaty offer only at war and at that price; AIs sign peace with each other through ExecuteDeal (the loser paying the winner's price) and offer a human peace every 5 turns when their price is 0 (MsgShowTradeOffer, both sides flagged partOfPeaceTreaty); a war declared within 50 turns of a peace treaty is remembered (PlayerRelationship, saved with the game) and the AI keeps its own treaties that long.
+
+--- a/C7Engine/AI/PlayerAI.cs
++++ b/C7Engine/AI/PlayerAI.cs
+@@ -38,6 +38,8 @@ namespace C7Engine {
+ 			MaybePickTechToResearch(player, techs);
+ 			MaybeChangeGovernment(player, gameData);
+ 
++			await AttemptPeace(player, gameData);
++
+ 			// Roughly every 4 turns, see if there are trades to be made.
+ 			if (GameData.rng.Next(100) < 25) {
+ 				await AttemptTrading(player);
+@@ -324,6 +326,54 @@ namespace C7Engine {
+ 			return null;
+ 		}
+ 
++		// An AI offers a human peace this often, when it would accept peace for nothing.
++		public const int PeaceOfferInterval = 5;
++
++		// Ends wars both sides are willing to end: whoever wants a price
++		// (Player.PeacePriceFor) is paid it by the other, if the other would
++		// pay that much. A human is offered peace (MsgShowTradeOffer, both
++		// sides flagged partOfPeaceTreaty) only when we want nothing for it.
++		private static async Task AttemptPeace(Player us, GameData gameData) {
++			foreach (Player them in gameData.players.ToList()) {
++				if (them == us || them.isBarbarians || us.isBarbarians || them.defeated || !AtWar(us, them)
++					|| !us.playerRelationships.ContainsKey(them.id)) {
++					continue;
++				}
++
++				int ourPrice = us.PeacePriceFor(gameData, them);
++				if (ourPrice == int.MaxValue) {
++					continue;
++				}
++
++				if (them.isHuman) {
++					if (ourPrice == 0 && (gameData.turn - us.playerRelationships[them.id].warStartedOnTurn) % PeaceOfferInterval == 0) {
++						log.Information($"{us} offers {them} peace");
++						new MsgShowTradeOffer(us, them, new TradeOffer { partOfPeaceTreaty = true }, new TradeOffer { partOfPeaceTreaty = true }).send();
++						await EngineStorage.WaitForMessageToEngine<MsgDiplomacyCompleted>();
++					}
++					continue;
++				}
++
++				int theirPrice = them.PeacePriceFor(gameData, us);
++				if (theirPrice == int.MaxValue || (ourPrice > 0 && theirPrice > 0)) {
++					continue;
++				}
++
++				TradeOffer theyGive = new() { partOfPeaceTreaty = true, gold = ourPrice > 0 ? ourPrice : null };
++				TradeOffer weGive = new() { partOfPeaceTreaty = true, gold = theirPrice > 0 ? theirPrice : null };
++				bool weAccept = theirPrice > 0
++					? us.WouldPayForPeace(gameData, them, theirPrice)
++					: us.WouldAcceptDealFrom(gameData, them, theyGive, weGive);
++				bool theyAccept = ourPrice > 0
++					? them.WouldPayForPeace(gameData, us, ourPrice)
++					: them.WouldAcceptDealFrom(gameData, us, weGive, theyGive);
++				if (weAccept && theyAccept) {
++					log.Information($"{us} and {them} make peace ({us} gets {ourPrice} gold, {them} gets {theirPrice} gold)");
++					us.ExecuteDeal(gameData, them, theyGive, weGive);
++				}
++			}
++		}
++
+ 		private static async Task AttemptTrading(Player us) {
+ 			GameData gD = EngineStorage.gameData;
+ 
+--- a/C7Engine/AI/StrategicAI/WarPriority.cs
++++ b/C7Engine/AI/StrategicAI/WarPriority.cs
+@@ -100,6 +100,11 @@ namespace C7GameData.AIData {
+ 					continue;
+ 				}
+ 
++				// We honor a peace treaty we signed recently.
++				if (PlayerRelationship.HasRecentPeaceTreaty(player, p, EngineStorage.gameData.turn)) {
++					continue;
++				}
++
+ 				// Players we share a longer border with are more likely to be
+ 				// our enemy.
+ 				score += borderTileCount[p];
+--- a/C7Engine/C7GameData/MapUnit_Actions.cs
++++ b/C7Engine/C7GameData/MapUnit_Actions.cs
+@@ -56,6 +56,7 @@ public partial class MapUnit {
+ 					new MsgShowMilitaryAdvisorPopup($"Barbarians have stolen {goldTaken} gold from our cities!\nWe need a stronger military.", happy: false).send();
+ 				}
+ 			} else {
++				PlayerRelationship.RecordLoss(tile.cityAtTile.owner, owner, city: true);
+ 				CityInteractions.DestroyCity(tile);
+ 			}
+ 		}
+@@ -381,6 +382,7 @@ public partial class MapUnit {
+ 		if ((result == CombatResult.AttackerKilled) || (result == CombatResult.DefenderKilled)) {
+ 			var (dead, alive) = (result == CombatResult.AttackerKilled) ? (attacker, defender) : (defender, attacker);
+ 			alive.RollToPromote(dead);
++			PlayerRelationship.RecordLoss(dead.owner, alive.owner, city: false);
+ 			await dead.animateAsync(MapUnit.AnimatedAction.DEATH);
+ 			dead.RemoveFromPlay();
+ 		}
+--- a/C7Engine/C7GameData/Player.cs
++++ b/C7Engine/C7GameData/Player.cs
+@@ -478,18 +478,68 @@ namespace C7GameData {
+ 
+ 		public bool WouldAcceptDealFrom(GameData gameData, Player other, TradeOffer theirOffer, TradeOffer ourOffer) {
+ 			// TODO: consider any factors like trade reputations here and culture groups
+-			// TODO: figure out when peace is acceptable
+ 			int theirGoldValue = theirOffer.GoldEquivalentFor(gameData, this);
+ 			int ourGoldValue = ourOffer.GoldEquivalentFor(gameData, this);
++			if (theirOffer.partOfPeaceTreaty) {
++				int price = PeacePriceFor(gameData, other);
++				return AtWar(this, other) && price != int.MaxValue && theirGoldValue - ourGoldValue >= price;
++			}
+ 			return theirGoldValue >= ourGoldValue;
+ 		}
+ 
++		// A war lasts at least this many turns before peace is considered.
++		public const int MinimumWarTurns = 10;
++
++		// The gold this (AI) player wants from `other` for peace while the two
++		// are at war: 0 means peace for nothing, int.MaxValue a refusal (inside
++		// the refuse-contact window, a locked war, a war younger than
++		// MinimumWarTurns, longer after `other` broke a treaty with us).
++		// Otherwise the price grows with our lead in military strength, units
++		// killed and cities razed in this war, and fades to 0 over the 60 turns
++		// after the minimum, or right away when we are not ahead.
++		public int PeacePriceFor(GameData gameData, Player other) {
++			if (!TryGetRelationship(this, other, out PlayerRelationship ours) || !ours.AtWar()
++				|| !other.playerRelationships.TryGetValue(id, out PlayerRelationship theirs)) {
++				return 0;
++			}
++			if (!WillAcceptCommunicationFrom(other, gameData.turn)) {
++				return int.MaxValue;
++			}
++			int age = gameData.turn - ours.warStartedOnTurn;
++			int minimum = MinimumWarTurns * (1 + 2 * ours.treatiesBrokenByThem);
++			if (age < minimum) {
++				return int.MaxValue;
++			}
++
++			float strength = Math.Min(CalculateMilitaryStrength() / other.CalculateMilitaryStrength(), 3f);
++			float advantage = strength - 1f
++				+ (theirs.unitsLostToThem - ours.unitsLostToThem) / 10f
++				+ (theirs.citiesLostToThem - ours.citiesLostToThem) / 2f;
++			float fade = Math.Max(0f, 1f - (age - minimum) / 60f);
++			if (advantage <= 0 || fade <= 0) {
++				return 0;
++			}
++			return (int)Math.Ceiling(advantage * 100 * fade * (1 + ours.treatiesBrokenByThem));
++		}
++
++		// Whether this player, which accepts peace with `other` for nothing,
++		// would also pay `gold` for it: up to half its treasury, and nothing
++		// to a player that broke a peace treaty with it.
++		public bool WouldPayForPeace(GameData gameData, Player other, int gold) {
++			return PeacePriceFor(gameData, other) == 0 && gold <= this.gold / 2
++				&& playerRelationships[other.id].treatiesBrokenByThem == 0;
++		}
++
+ 		public void ExecuteDeal(GameData gameData, Player other, TradeOffer theirOffer, TradeOffer ourOffer) {
+ 			log.Information($"Executing trade between {this} and {other}");
+ 			log.Information($"  {this} gives {ourOffer.ToString()}, worth {ourOffer.GoldEquivalentFor(gameData, other)} gold");
+ 			log.Information($"  {other} gives {theirOffer.ToString()}, worth {theirOffer.GoldEquivalentFor(gameData, this)} gold)");
+ 			if (theirOffer.partOfPeaceTreaty) {
+ 				SignPeaceAfterWar(this, other, gameData);
++
++				// Peace changes what both should be doing.
++				turnsUntilPriorityReevaluation = 0;
++				other.turnsUntilPriorityReevaluation = 0;
+ 			}
+ 
+ 			if (ourOffer.gold.HasValue) {
+--- a/C7Engine/C7GameData/PlayerRelationship.cs
++++ b/C7Engine/C7GameData/PlayerRelationship.cs
+@@ -42,6 +42,22 @@ public class PlayerRelationship {
+ 
+ 	public bool declaredWarWithActiveRightOfPassage = false;
+ 
++	// The turn the current (or last) war between the two players began.
++	public int warStartedOnTurn = 0;
++
++	// p1.playerRelationships[p2].unitsLostToThem and citiesLostToThem count
++	// what p1 lost to p2 in the current war (cities are razed when taken).
++	public int unitsLostToThem = 0;
++	public int citiesLostToThem = 0;
++
++	// p1.playerRelationships[p2].treatiesBrokenByThem is the number of times
++	// p2 declared war on p1 within BrokenTreatyWindow turns of signing peace.
++	// It makes p1 refuse peace with p2 for longer (Player.PeacePriceFor).
++	public int treatiesBrokenByThem = 0;
++
++	// A war declared this soon after a peace treaty breaks it.
++	public const int BrokenTreatyWindow = 50;
++
+ 	public bool AtWar() {
+ 		return multiTurnDeals.Count == 0;
+ 	}
+@@ -117,6 +133,20 @@ public class PlayerRelationship {
+ 		// update whether the defender was sneak attacked
+ 		defenderRelationshipToAggressor.wasSneakAttacked = sneakAttack;
+ 
++		// Remember a peace treaty broken soon after it was signed. Peace from
++		// first contact starts on turn 0 and is not a treaty.
++		int currentTurn = EngineStorage.gameData.turn;
++		if (defenderRelationshipToAggressor.multiTurnDeals.Any(d => d.dealSubType == DealSubType.Peace
++				&& d.turnStartDeal > 0 && currentTurn - d.turnStartDeal < BrokenTreatyWindow)) {
++			defenderRelationshipToAggressor.treatiesBrokenByThem++;
++		}
++
++		foreach (PlayerRelationship pr in new[] { defenderRelationshipToAggressor, aggressorRelationshipToDefender }) {
++			pr.warStartedOnTurn = currentTurn;
++			pr.unitsLostToThem = 0;
++			pr.citiesLostToThem = 0;
++		}
++
+ 		// Set for how many turns the defender will refuse contact from the aggressor
+ 		defenderRelationshipToAggressor.refuseContactUntilTurn = refuseContactUntilTurn;
+ 
+@@ -136,6 +166,24 @@ public class PlayerRelationship {
+ 						$" ({refuseContactUntilTurn - EngineStorage.gameData.turn} turns)!");
+ 	}
+ 
++	// Keeps the score of a war: `loser` lost a unit (or a city) to `winner`.
++	public static void RecordLoss(Player loser, Player winner, bool city) {
++		if (TryGetRelationship(loser, winner, out var relationship) && relationship.AtWar()) {
++			if (city) {
++				relationship.citiesLostToThem++;
++			} else {
++				relationship.unitsLostToThem++;
++			}
++		}
++	}
++
++	// True while `player` honors a peace treaty it signed with `other` less
++	// than BrokenTreatyWindow turns ago.
++	public static bool HasRecentPeaceTreaty(Player player, Player other, int currentTurn) {
++		return TryGetRelationship(player, other, out var relationship) && relationship.multiTurnDeals.Any(d =>
++			d.dealSubType == DealSubType.Peace && d.turnStartDeal > 0 && currentTurn - d.turnStartDeal < BrokenTreatyWindow);
++	}
++
+ 	public static void SignPeaceAfterWar(Player left, Player right, GameData gameData) {
+ 		if (left.isBarbarians || left.defeated || right.isBarbarians || right.defeated || left.id == right.id)
+ 			throw new Exception($"Can't sign peace between {left} and {right}");

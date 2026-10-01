@@ -1,0 +1,16 @@
+Building.CanProduce: a building that needs another one (Bank, University, Cathedral and the other requiredBuilding entries in ruleset.json) is buildable once the city has that building; the check compared the city's buildings with the building itself, so none of them could ever be built.
+
+--- a/C7Engine/C7GameData/Building.cs
++++ b/C7Engine/C7GameData/Building.cs
+@@ -142,8 +142,10 @@ namespace C7GameData {
+ 				return false;
+ 			}
+ 
++			// The city itself must have the prerequisite (a Temple for a
++			// Cathedral, a Marketplace for a Bank, ...).
+ 			if (requiredBuilding != null &&
+-				!city.GetBuildings().Exists(cityBuilding => cityBuilding.building == this)) {
++				!city.GetBuildings().Exists(cityBuilding => cityBuilding.building == requiredBuilding)) {
+ 				return false;
+ 			}
+ 

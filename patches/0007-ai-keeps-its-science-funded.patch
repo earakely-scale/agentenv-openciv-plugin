@@ -1,0 +1,281 @@
+AI economy: the AI sliders run a deficit only while the treasury covers it (PlayerAI.BudgetIsTolerable); cities build no units the treasury cannot support, and build Wealth instead of buildings without a use while upkeep crowds out science (ChooseProducible); a broke AI gives up science and luxuries before units, then disbands its least useful unit one at a time, before its beakers are counted (Player.BalanceAiBudget; the human's path is unchanged); the AI leaves Despotism for the best government it knows, at most once per 50 turns (PlayerAI.MaybeChangeGovernment).
+
+--- a/C7Engine/AI/ChooseProducible.cs
++++ b/C7Engine/AI/ChooseProducible.cs
+@@ -14,7 +14,9 @@ namespace C7Engine {
+ 			float bestDefense,
+ 			float bestNonWonderCulture,
+ 			int numberOfReachableOpenCitySpots,
+-			bool inExpansionPhase
++			bool inExpansionPhase,
++			bool canAffordAnotherUnit,
++			bool scienceUnderfunded
+ 		);
+ 
+ 		public static IProducible Choose(City city, Player player) {
+@@ -61,6 +63,12 @@ namespace C7Engine {
+ 				return 100 - player.gold;
+ 			}
+ 
++			// While upkeep crowds out science, gold beats anything without
++			// a specific use.
++			if (stats.scienceUnderfunded) {
++				return 0;
++			}
++
+ 			return -1000f;
+ 		}
+ 
+@@ -135,6 +143,15 @@ namespace C7Engine {
+ 				return int.MinValue;
+ 			}
+ 
++			// Don't build units the treasury can't support (see
++			// CanAffordAnotherUnit), except a settler, a city's first defender,
++			// a settler's escort or a worker the empire still needs.
++			bool neededAnyway = isSettler || (unit.defense > 0 && (!cityGuarded || hasUnescortedSettler))
++				|| (isWorker && player.units.Count(x => x.unitType.isWorker) < player.cities.Count);
++			if (!stats.canAffordAnotherUnit && !neededAnyway) {
++				return int.MinValue;
++			}
++
+ 			// Penalize going over the unit support cap unless we're at war or
+ 			// still in the expansion phase.
+ 			if (unitSupportCost > 0 && !atWar && !stats.inExpansionPhase) {
+@@ -298,8 +315,9 @@ namespace C7Engine {
+ 			// Penalize buildings with higher maintenance costs.
+ 			score -= building.maintenanceCost;
+ 
+-			// Boost buildings a bit if we aren't at war and aren't expanding.
+-			if (!stats.inExpansionPhase && !atWar) {
++			// Boost buildings a bit if we aren't at war and aren't expanding,
++			// as long as their upkeep doesn't come out of science.
++			if (!stats.inExpansionPhase && !atWar && !(stats.scienceUnderfunded && building.maintenanceCost > 0)) {
+ 				score += 20;
+ 			}
+ 
+@@ -316,6 +334,8 @@ namespace C7Engine {
+ 				numberOfReachableOpenCitySpots = NumberOfReachableOpenCitySpots(city),
+ 			};
+ 			stats.inExpansionPhase = city.owner.cities.Count < 5 || stats.numberOfReachableOpenCitySpots > city.owner.cities.Count * 2;
++			stats.canAffordAnotherUnit = CanAffordAnotherUnit(city.owner, stats.inExpansionPhase);
++			stats.scienceUnderfunded = ScienceIsUnderfunded(city.owner);
+ 
+ 			foreach (IProducible option in options) {
+ 				if (option is UnitPrototype unit) {
+@@ -395,6 +415,28 @@ namespace C7Engine {
+ 			return result;
+ 		}
+ 
++		// Units past the free support cap cost gold every turn. A settled
++		// empire at peace stays within the cap; at war or while expanding the
++		// AI pays for at most a fifth of its commerce in support.
++		private static bool CanAffordAnotherUnit(Player player, bool inExpansionPhase) {
++			var (totalUnits, allowedUnits, unitSupportCost) = player.TotalUnitsAllowedUnitsAndSupportCost();
++			int supportWithOneMore = unitSupportCost + (totalUnits >= allowedUnits ? player.government.unitCost : 0);
++			if (supportWithOneMore == 0) {
++				return true;
++			}
++			if (!inExpansionPhase && !IsInAnyWar(player, EngineStorage.gameData.players)) {
++				return false;
++			}
++			PlayerCommerceBreakdown flows = player.AggregateFlows();
++			return supportWithOneMore * 5 <= flows.taxes + flows.taxmenTaxes + flows.beakers + flows.happiness;
++		}
++
++		// The sliders (PlayerAI.AdjustSliders) leave less than half of the
++		// commerce to science because upkeep needs it.
++		private static bool ScienceIsUnderfunded(Player player) {
++			return player.scienceRate + player.luxuryRate < 5;
++		}
++
+ 		public static bool HasWeakEconomy(Player player) {
+ 			return player.luxuryRate == 0 && player.scienceRate == 0 && player.gold < 100;
+ 		}
+--- a/C7Engine/AI/PlayerAI.cs
++++ b/C7Engine/AI/PlayerAI.cs
+@@ -36,6 +36,7 @@ namespace C7Engine {
+ 
+ 			MaybeDoPriorityReevaluation(player);
+ 			MaybePickTechToResearch(player, techs);
++			MaybeChangeGovernment(player, gameData);
+ 
+ 			// Roughly every 4 turns, see if there are trades to be made.
+ 			if (GameData.rng.Next(100) < 25) {
+@@ -75,6 +76,63 @@ namespace C7Engine {
+ 			}
+ 		}
+ 
++		// Like a Civ III AI, leave Despotism once a government that yields
++		// clearly more is known, and pick the best one when anarchy ends.
++		// Revolutions are at least 50 turns apart, so anarchy pays for itself.
++		private static void MaybeChangeGovernment(Player player, GameData gameData) {
++			if (player.government.transitionType) {
++				if (gameData.turn >= player.inAnarchyUntilTurn) {
++					player.government = BestGovernment(player, gameData).government;
++					player.DoCorruptionCalculations(gameData);
++					log.Information($"{player} ends anarchy under {player.government.name}");
++				}
++				return;
++			}
++
++			if (gameData.turn % 10 != 0 || gameData.turn < player.inAnarchyUntilTurn + 50) {
++				return;
++			}
++			(Government best, int bestValue) = BestGovernment(player, gameData);
++			int currentValue = GovernmentValue(player, gameData, player.government);
++			if (best == player.government || bestValue < currentValue * 5 / 4 + 10) {
++				return;
++			}
++			log.Information($"{player} starts a revolution: {player.government.name} yields {currentValue}, {best.name} {bestValue}");
++			player.government = gameData.governments.Find(g => g.transitionType);
++			player.inAnarchyUntilTurn = gameData.turn + player.GetTurnsOfAnarchyForTransition(gameData);
++			player.DoCorruptionCalculations(gameData);
++		}
++
++		private static (Government government, int value) BestGovernment(Player player, GameData gameData) {
++			Government best = null;
++			int bestValue = int.MinValue;
++			foreach (Government g in player.GetAvailableGovernments(gameData)) {
++				int value = GovernmentValue(player, gameData, g);
++				if (value > bestValue) {
++					(best, bestValue) = (g, value);
++				}
++			}
++			return (best, bestValue);
++		}
++
++		// The empire's useful commerce, shields and surplus food under a
++		// government, less the gold its units would cost.
++		private static int GovernmentValue(Player player, GameData gameData, Government government) {
++			Government current = player.government;
++			player.government = government;
++			player.DoCorruptionCalculations(gameData);
++			int value = 0;
++			foreach (City city in player.cities) {
++				CommerceBreakdown commerce = city.CurrentCommerceYieldRaw(respectCivilDisorder: false);
++				value += commerce.taxes + commerce.beakers + commerce.happiness;
++				value += city.CurrentProductionYield().useful + city.FoodGrowthPerTurn();
++			}
++			value -= player.TotalUnitsAllowedUnitsAndSupportCostRaw().Item3;
++			player.government = current;
++			player.DoCorruptionCalculations(gameData);
++			return value;
++		}
++
+ 		public static void MaybePickTechToResearch(Player player, List<Tech> techs) {
+ 			while (player.currentlyResearchedTech == null || player.knownTechs.Contains(player.currentlyResearchedTech)) {
+ 				Tech toResearch = player.GetAvailableTechsToResearch(techs).FirstOrDefault();
+@@ -442,10 +500,18 @@ namespace C7Engine {
+ 			}
+ 		}
+ 
++		// A deficit is tolerable while the treasury pays for it: whatever is
++		// above a reserve of half a turn's upkeep is spent over the next five
++		// turns. Below the reserve the budget must balance, so the treasury
++		// refills before science is funded from it again.
+ 		public static bool BudgetIsTolerable(Player player) {
+-			var gpt = player.CalculateGoldPerTurn();
+-			var tolerableDeficit = gpt > player.gold * -0.1;
+-			return gpt > 0 || tolerableDeficit;
++			PlayerCommerceBreakdown flows = player.AggregateFlows();
++			int gpt = flows.Netflows();
++			if (gpt >= 0) {
++				return true;
++			}
++			int reserve = Math.Max(20, (flows.maintenance + flows.unitSupport) / 2);
++			return player.gold + 5 * gpt >= reserve;
+ 		}
+ 	}
+ }
+--- a/C7Engine/C7GameData/Player.cs
++++ b/C7Engine/C7GameData/Player.cs
+@@ -754,6 +754,12 @@ namespace C7GameData {
+ 				return;
+ 			}
+ 
++			// The AI balances its budget before its cities' beakers are
++			// counted, so science it gives up is not also paid out.
++			if (!isHuman) {
++				BalanceAiBudget(gameData);
++			}
++
+ 			// Process per-city contributions.
+ 			//
+ 			// TODO: consider making this return a tuple too. Or maybe return all
+@@ -763,7 +769,7 @@ namespace C7GameData {
+ 			}
+ 
+ 			// Ensure we never go below 0 gold.
+-			while (gold + CalculateGoldPerTurn() < 0) {
++			while (isHuman && gold + CalculateGoldPerTurn() < 0) {
+ 				// Start by disbanding units to get things under control.
+ 				var (_, _, unitSupportCost) = TotalUnitsAllowedUnitsAndSupportCost();
+ 				if (unitSupportCost > 0) {
+@@ -793,7 +799,7 @@ namespace C7GameData {
+ 				// Nothing is left to cut (e.g. building upkeep alone exceeds the
+ 				// income). Throwing here would abort the turn for every player,
+ 				// so clamp the treasury at zero instead.
+-				log.Warning($"{this} cannot balance its budget (gold={gold}, gpt={CalculateGoldPerTurn()}); gold stays at 0");
++				LogUnbalancedBudget();
+ 				break;
+ 			}
+ 
+@@ -801,6 +807,57 @@ namespace C7GameData {
+ 			gold = Math.Max(0, gold + lastGoldPerTurn);
+ 		}
+ 
++		// The AI resets its sliders every turn, so it gives up science and
++		// luxuries before units, and then disbands its least useful units one
++		// at a time (settlers and workers last, never a city's last defender)
++		// rather than every unit over the support cap at random.
++		private void BalanceAiBudget(GameData gameData) {
++			while (gold + CalculateGoldPerTurn() < 0) {
++				if (scienceRate > 0) {
++					--scienceRate;
++					++taxRate;
++				} else if (luxuryRate > 0) {
++					--luxuryRate;
++					++taxRate;
++				} else if (TotalUnitsAllowedUnitsAndSupportCost().Item3 > 0
++					&& (LeastUsefulUnit(spareCivilians: true) ?? LeastUsefulUnit(spareCivilians: false)) is MapUnit unit) {
++					log.Information($"{this} is out of gold, disbanding {unit} at {unit.location} to bring unit support costs under control");
++					gameData.RemoveUnit(unit);
++				} else {
++					LogUnbalancedBudget();
++					return;
++				}
++			}
++		}
++
++		// Anarchy collects no taxes, so its upkeep empties the treasury as
++		// expected; anywhere else this is worth a warning.
++		private void LogUnbalancedBudget() {
++			string message = $"{this} cannot balance its budget (gold={gold}, gpt={CalculateGoldPerTurn()}); gold stays at 0";
++			if (government.transitionType) {
++				log.Information(message);
++			} else {
++				log.Warning(message);
++			}
++		}
++
++		private MapUnit LeastUsefulUnit(bool spareCivilians) {
++			MapUnit result = null;
++			foreach (MapUnit u in units) {
++				if (u.IsCaptive() || (spareCivilians && (u.unitType.isSettler || u.unitType.isWorker))) {
++					continue;
++				}
++				if (u.location.cityAtTile != null && u.CanDefendOnLand()
++					&& u.location.unitsOnTile.Count(x => x.owner == this && x.CanDefendOnLand()) == 1) {
++					continue;
++				}
++				if (result == null || u.unitType.attack + u.unitType.defense < result.unitType.attack + result.unitType.defense) {
++					result = u;
++				}
++			}
++			return result;
++		}
++
+ 		public void HandleCityUpdates(GameData gameData) {
+ 			foreach (City c in cities) {
+ 				// Ensure borders expand before we assign the new citizen, so that

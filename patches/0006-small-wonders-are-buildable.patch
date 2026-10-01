@@ -1,0 +1,67 @@
+Building.CanProduce: small wonders are buildable, once per civilization and by one city at a time (a Forbidden Palace not in the palace city; Heroic Epic and The Pentagon, which Civ III gates on armies the engine lacks, stay unbuildable; the Palace still cannot be moved). ChooseProducible scores a Forbidden Palace by the corruption it would remove.
+
+--- a/C7Engine/AI/ChooseProducible.cs
++++ b/C7Engine/AI/ChooseProducible.cs
+@@ -242,6 +242,12 @@ namespace C7Engine {
+ 				}
+ 			}
+ 
++			// A forbidden palace pays off in a city that loses a lot to
++			// corruption, i.e. one far from the palace.
++			if (building.isForbiddenPalace) {
++				score += (city.CurrentProductionYield().corrupt + city.CurrentCommerceYield().corrupted) * 2;
++			}
++
+ 			// Boost buildings that help with happiness if we have some unhappy
+ 			// citizens in the city or if we have a decently large value on the
+ 			// luxury slider.
+--- a/C7Engine/C7GameData/Building.cs
++++ b/C7Engine/C7GameData/Building.cs
+@@ -137,8 +137,12 @@ namespace C7GameData {
+ 				}
+ 			}
+ 
+-			// TODO: Add logic for wonders and the palace
+-			if (isSmallWonder || isCenterOfEmpire) {
++			// TODO: Add logic for moving the palace.
++			if (isCenterOfEmpire) {
++				return false;
++			}
++
++			if (isSmallWonder && !CanProduceSmallWonder(city)) {
+ 				return false;
+ 			}
+ 
+@@ -160,6 +164,32 @@ namespace C7GameData {
+ 			return true;
+ 		}
+ 
++		// A small wonder is built once per civilization, by one city at a time.
++		private bool CanProduceSmallWonder(City city) {
++			foreach (City c in city.owner.cities) {
++				if (c.GetBuildings().Exists(cityBuilding => cityBuilding.building == this)) {
++					return false;
++				}
++				if (c != city && c.itemBeingProduced != null && c.itemBeingProduced.name == name) {
++					return false;
++				}
++			}
++
++			// Civ III gates the small wonders that need no tech, building or
++			// resource here (Heroic Epic, The Pentagon) on armies, which the
++			// engine does not have yet.
++			if (requiredTech == null && requiredBuilding == null && requiredResources.Count == 0 && !isForbiddenPalace) {
++				return false;
++			}
++
++			// A second seat of government belongs away from the first.
++			if (isForbiddenPalace && city.GetBuildings().Exists(cb => cb.building.isCenterOfEmpire || cb.building.isForbiddenPalace)) {
++				return false;
++			}
++
++			return true;
++		}
++
+ 		public int ShieldCost(HashSet<Civilization.Trait> civTraits, float costFactor) {
+ 			foreach (Civilization.Trait trait in dataSource.traits) {
+ 				if (civTraits.Contains(trait)) {
