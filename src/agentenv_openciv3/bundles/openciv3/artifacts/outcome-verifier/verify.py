@@ -1,4 +1,8 @@
-"""Grade an OpenCiv3 game from the env's data/get summary against the same-seed baselines."""
+"""Grade an OpenCiv3 game from the env's data/get summary against the same-seed baselines.
+
+The graded bar is the scripted settler bot, which plays through the same standing orders and rules as
+the agent.
+"""
 
 import asyncio
 import time
@@ -6,6 +10,9 @@ import time
 from agentenv_protocol import client
 
 BASELINE_WAIT_SECONDS = 300
+REFERENCE = "settler_bot"
+# A failed gate outweighs every other criterion, so the weighted average is 0.
+GATE_WEIGHT = -100
 
 
 async def _summary(base_url: str) -> dict:
@@ -17,28 +24,38 @@ def _pending(summary: dict) -> bool:
     return any(b["status"] == "running" and b.get("at_turn") is None for b in summary["baselines"].values())
 
 
-def _baseline(summary: dict, policy: str) -> int | None:
-    at_turn = summary["baselines"][policy].get("at_turn")
-    return at_turn["total"] if at_turn else None
-
-
-async def verify(mcp_url: str) -> list[dict]:
-    base_url = mcp_url.removesuffix("/mcp")
-    s = await _summary(base_url)
-    deadline = time.monotonic() + BASELINE_WAIT_SECONDS
-    while _pending(s) and time.monotonic() < deadline:
-        await asyncio.sleep(1)
-        s = await _summary(base_url)
-    total, null, ai = s["score"]["total"], _baseline(s, "null"), _baseline(s, "engine_ai")
+def grade(s: dict) -> list[dict]:
+    total = s["score"]["total"]
+    baselines = {policy: (b.get("at_turn") or {}).get("total") for policy, b in s["baselines"].items()}
+    reference = baselines.get(REFERENCE)
+    agent_calls = s["actions"]["ok"] + s["actions"]["invalid"]
     return [
         {"criterion": "reached the turn limit", "result": s["turn"] >= s["turn_limit"],
          "turn": s["turn"], "turn_limit": s["turn_limit"]},
         {"criterion": "not defeated", "result": not s["defeated"]},
         {"criterion": "founded at least one city", "result": s["metrics"]["cities"] >= 1,
          "cities": s["metrics"]["cities"]},
-        {"criterion": "beats the do-nothing baseline at the same turn", "result": null is not None and total > null,
-         "game_score": total, "null_baseline": null},
-        {"criterion": "score as a fraction of the built-in AI's at the same turn", "weight": 2,
-         "result": ai is not None and total >= ai, "score": min(1.0, total / max(ai, 1)) if ai is not None else 0.0,
-         "game_score": total, "engine_ai_baseline": ai, "metrics": s["metrics"], "actions": s["actions"]},
+        {"criterion": f"score as a fraction of the {REFERENCE} baseline's at the same turn", "weight": 2,
+         "result": reference is not None and total >= reference,
+         "score": min(1.0, total / max(reference, 1)) if reference is not None else 0.0,
+         "game_score": total, "baselines": baselines, "metrics": s["metrics"], "decisions": s["decisions"],
+         "actions": s["actions"]},
+        {"criterion": "the engine kept running", "weight": GATE_WEIGHT, "result": not s["engine_failed"],
+         "engine_restarts": s["harness"]["engine_restarts"]},
+        {"criterion": "the harness played none of an agent's turns", "weight": GATE_WEIGHT,
+         "result": agent_calls == 0 or s["harness"]["autoplay_turns"] == 0,
+         "agent_calls": agent_calls, "harness": s["harness"]},
     ]
+
+
+async def verify(mcp_url: str) -> list[dict]:
+    base_url = mcp_url.removesuffix("/mcp")
+    try:
+        s = await _summary(base_url)
+        deadline = time.monotonic() + BASELINE_WAIT_SECONDS
+        while _pending(s) and time.monotonic() < deadline:
+            await asyncio.sleep(1)
+            s = await _summary(base_url)
+        return grade(s)
+    except Exception as e:  # an env that can't report a whole game is a failed grade, not a crashed step
+        return [{"criterion": "the env reported a gradable game", "result": False, "error": f"{type(e).__name__}: {e}"}]

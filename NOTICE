@@ -1,0 +1,11 @@
+agentenv-openciv3
+Copyright 2026 the agentenv-openciv3 contributors
+
+This product is licensed under the Apache License, Version 2.0 (LICENSE).
+
+The env image built from this repository contains OpenCiv3 (MIT), Blast (Apache-2.0, with code
+under the zlib-style licence of blast.c), .NET (MIT) and other third-party software. See
+THIRD_PARTY_NOTICES.md for each component, its licence and its copyright notices.
+
+Civilization and Civilization III are trademarks of Take-Two Interactive Software. This project is
+not affiliated with or endorsed by Take-Two, Firaxis Games or the OpenCiv3 project.

@@ -204,8 +204,7 @@ submodule itself stays untouched):
 
 ## Round 2 additions (from the post-playtest audit)
 
-These extend the commands above. The bridge engineer folds them into the sections above while
-implementing them, and deletes this section.
+Implemented. These extend the sections above; folding them in is still to do.
 
 ### Levers the agent was missing
 - `set_rates {science, luxury}`:

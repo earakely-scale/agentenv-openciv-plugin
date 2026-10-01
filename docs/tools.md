@@ -61,8 +61,7 @@ authoritative record of what the agent did.
 
 ## Round 2 additions (from the post-playtest audit)
 
-The env engineer folds these into the sections above while implementing them, and deletes this
-section.
+Implemented. These extend the sections above; folding them in is still to do.
 
 **New tools (12 in total):**
 - `set_rates(science, luxury)`: the luxury rate is the main fix for disorder, and science is how gold turns into techs.

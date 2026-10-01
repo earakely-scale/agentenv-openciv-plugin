@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "OpenCiv3 as an AgentEnv environment: an LLM agent plays a Civilization III remake through MCP tools."
 readme = "README.md"
 license = "Apache-2.0"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.11"
 keywords = ["agentenv", "mcp", "reinforcement-learning", "llm-agents", "openciv3", "civilization"]
 classifiers = [
@@ -16,15 +16,17 @@ classifiers = [
     "Topic :: Games/Entertainment :: Turn Based Strategy",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
+# The env image installs the same server dependencies, minus agentenv-framework (see Dockerfile).
 dependencies = [
-    "agentenv-framework>=0.9.1258",
-    "agentenv-framework-protocol>=0.1.272",
+    "agentenv-framework>=0.9.1260",
+    "agentenv-framework-protocol>=0.1.275,<0.2",
     "mcp>=1.25,<2",
-    "pydantic>=2",
+    "pydantic>=2,<3",
+    "pillow>=10,<13",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "httpx>=0.27"]
+dev = ["pytest>=8,<10", "httpx>=0.27,<1", "ruff>=0.16,<0.17"]
 
 [project.urls]
 Source = "https://github.com/earakely-scale/agentenv-openciv-plugin"
@@ -36,11 +38,22 @@ openciv3 = "agentenv_openciv3.bundles"
 [project.entry-points."agent_env.cli_plugins"]
 openciv3 = "agentenv_openciv3.cli:openciv3"
 
+[project.entry-points."agent_env.task_steps"]
+save_env_recording = "agentenv_openciv3.steps:SaveEnvRecordingTaskStep"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/agentenv_openciv3"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/src", "/tests", "/README.md", "/LICENSE"]
+include = ["/src", "/tests", "/README.md", "/LICENSE", "/NOTICE", "/THIRD_PARTY_NOTICES.md"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "playtest"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["vendor", "build"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "I"]

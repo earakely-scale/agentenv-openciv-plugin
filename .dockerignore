@@ -3,6 +3,7 @@
 !vendor/OpenCiv3/QueryCiv3
 !vendor/OpenCiv3/Blast
 !vendor/OpenCiv3/C7/Lua
+!vendor/OpenCiv3/LICENSE
 !bridge
 !patches
 !scripts
@@ -10,6 +11,8 @@
 !pyproject.toml
 !README.md
 !LICENSE
+!NOTICE
+!THIRD_PARTY_NOTICES.md
 **/bin
 **/obj
 **/__pycache__

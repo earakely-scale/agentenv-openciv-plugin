@@ -5,7 +5,8 @@
                    "args": {"seed": 7, "size": "Tiny", "turn_limit": 30}}]},
   {"id": "autoplay", "type": "apply_server_config", "env_id": "openciv3", "timeout_seconds": 600,
    "directives": [{"service": "openciv3", "uri": "urn:openciv3:autoplay/v1",
-                   "args": {"turns": 30, "policy": "engine_ai"}}]},
+                   "args": {"turns": 30, "policy": "settler_bot"}}]},
   {"id": "grade", "type": "env_outcome_verifier", "env_id": "openciv3", "file_artifact_id": "outcome-verifier",
-   "verifier_id": "outcome", "score_aggregator": "weighted_average"}
+   "verifier_id": "outcome", "score_aggregator": "weighted_average", "depends_on": ["autoplay"]},
+  {"id": "recording", "type": "save_env_recording", "env_id": "openciv3", "depends_on": ["autoplay"]}
 ]

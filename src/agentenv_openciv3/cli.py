@@ -1,12 +1,14 @@
-"""`agent-env openciv3`: register the OpenCiv3 env in the store, or serve it locally without Docker."""
+"""`agent-env openciv3`: register the OpenCiv3 env, serve it locally without Docker, and fetch game recordings."""
 
+import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
 
 import click
-from agent_env.artifact import DockerImageArtifact
+from agent_env.artifact import DockerImageArtifact, FileArtifact
 from agent_env.env import MCPServerEnv
 
 ENVIRONMENT_NAME = "openciv3"
@@ -15,7 +17,7 @@ REPO = "https://github.com/earakely-scale/agentenv-openciv-plugin"
 
 @click.group()
 def openciv3():
-    """OpenCiv3: build and register the env, or serve it locally."""
+    """OpenCiv3: build and register the env, serve it locally, and fetch game recordings."""
 
 
 def _checkout(source: Path | None) -> Path:
@@ -23,7 +25,8 @@ def _checkout(source: Path | None) -> Path:
     for root in [source] if source else [Path(__file__).resolve().parents[2], Path.cwd()]:
         if (root / "Dockerfile").is_file() and (root / "bridge").is_dir():
             if not (root / "vendor/OpenCiv3/C7Engine").is_dir():
-                raise click.ClickException(f"{root / 'vendor/OpenCiv3'} is empty; run: git -C {root} submodule update --init")
+                raise click.ClickException(
+                    f"{root / 'vendor/OpenCiv3'} is empty; run: git -C {root} submodule update --init vendor/OpenCiv3")
             return root
     if source:
         raise click.UsageError(f"{source} is not a checkout of agentenv-openciv-plugin (no Dockerfile and bridge/)")
@@ -61,17 +64,34 @@ def setup(env_id: str, source: Path | None, build_platform: str | None, image: s
         if subprocess.run(["docker", "build", "--platform", build_platform, "-t", image, str(root)]).returncode:
             raise click.ClickException("docker build failed")
     click.echo("Storing the image (docker save, can take a minute)")
-    artifact = DockerImageArtifact.put(id=f"mcp-server-{env_id}", description="OpenCiv3 env: CivBridge and its MCP server",
-                                       image_name=image)
+    artifact = DockerImageArtifact.put(id=f"mcp-server-{env_id}", image_name=image,
+                                       description="OpenCiv3 env: CivBridge and its MCP server")
     env = MCPServerEnv.put(id=env_id, docker_image_artifact=artifact, environment_name=ENVIRONMENT_NAME,
                            env_provider_type="server")
     click.echo(f"Registered env {env.id!r} version {env.version} (image {artifact.image_name})")
-    click.echo("Next: agent-env run openciv3 --task smoke")
+    if env_id == ENVIRONMENT_NAME:
+        click.echo("Next: agent-env run openciv3 --task smoke")
+    else:
+        click.echo(f"The openciv3 bundle's tasks deploy the env 'openciv3'; your own tasks can deploy {env_id!r}.")
+
+
+def _check_bridge(bridge: str) -> None:
+    """Start the bridge once, so a missing .NET runtime is reported here rather than on the agent's first call."""
+    try:
+        out = subprocess.run(shlex.split(bridge), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
+        ready = json.loads(out.stdout.splitlines()[0])["ok"] if out.stdout else False
+    except (OSError, subprocess.TimeoutExpired, ValueError) as e:
+        raise click.ClickException(f"the bridge {bridge} did not start: {e}") from e
+    if not ready:
+        hint = ("\nA bridge built by scripts/build-bridge.sh needs the .NET 8 runtime: set DOTNET_ROOT to the .NET "
+                "install it was built with." if "install .NET" in out.stderr else "")
+        raise click.ClickException(f"the bridge {bridge} did not start:\n{(out.stdout + out.stderr).strip()}{hint}")
 
 
 @openciv3.command()
 @click.option("--bridge", envvar="CIVBRIDGE_CMD",
-              help="Command that starts CivBridge. Default: $CIVBRIDGE_CMD, else build/bridge/CivBridge in the checkout.")
+              help="Command that starts CivBridge. Default: $CIVBRIDGE_CMD, else build/bridge/CivBridge in the "
+                   "checkout.")
 @click.option("--host", default="127.0.0.1", show_default=True)
 @click.option("--port", default=18765, show_default=True)
 @click.option("--seed", type=int, help="Seed for the first game (OPENCIV_SEED).")
@@ -82,11 +102,35 @@ def serve(bridge: str | None, host: str, port: int, seed: int | None, turn_limit
     if not bridge:
         built = Path(__file__).resolve().parents[2] / "build/bridge/CivBridge"
         if not built.is_file():
-            raise click.UsageError("no bridge: run scripts/build-bridge.sh in the checkout, or set CIVBRIDGE_CMD / --bridge")
-        bridge = str(built)
+            raise click.UsageError("no bridge: run scripts/build-bridge.sh in the checkout, or set CIVBRIDGE_CMD or "
+                                   "--bridge")
+        bridge = shlex.quote(str(built))
+    _check_bridge(bridge)
     settings = {"CIVBRIDGE_CMD": bridge, "MCP_HOST": host, "MCP_PORT": port, "OPENCIV_SEED": seed,
                 "OPENCIV_TURN_LIMIT": turn_limit, "OPENCIV_ACTION_LOG": action_log}
     os.environ.update({k: str(v) for k, v in settings.items() if v is not None})
     click.echo(f"OpenCiv3 MCP on http://{host}:{port}/mcp  (claude mcp add --transport http openciv3 "
                f"http://{host}:{port}/mcp)", err=True)
     os.execv(sys.executable, [sys.executable, "-m", "agentenv_openciv3.server"])
+
+
+@openciv3.command()
+@click.argument("instance", required=False)
+@click.option("--out", type=click.Path(file_okay=False, path_type=Path), help="Copy the files into this directory.")
+def recordings(instance: str | None, out: Path | None):
+    """List the game recordings the save_env_recording step stored, or copy them out with --out.
+
+    INSTANCE keeps one run's: the instance id `agent-env run` prints.
+    """
+    saved = [a for a in FileArtifact.query().type("file").execute()
+             if "-recording-" in a.id and a.id.rpartition("-recording-")[2].startswith(instance or "")]
+    if not saved:
+        raise click.ClickException("no recordings" + (f" for instance {instance}" if instance else ""))
+    for a in saved:
+        line = f"{a.id} v{a.version}  {a.content_type}  {a.object_url}"
+        if out:
+            out.mkdir(parents=True, exist_ok=True)
+            path = out / a.id.rpartition("/")[2]
+            path.write_bytes(a.load())
+            line += f"  -> {path}"
+        click.echo(line)
