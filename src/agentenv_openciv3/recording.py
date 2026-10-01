@@ -281,19 +281,19 @@ class Renderer:
                 cx, cy = cx + L.hw * 0.55, cy + L.hw * 0.3
             for i, o in enumerate(owners[:3]):
                 ox = cx + (i - (len(owners[:3]) - 1) / 2) * r * 1.8
-                outline = (255, 255, 255) if self._human(snap) == o else (0, 0, 0)
+                outline = (255, 255, 255) if o in self._seats(snap) else (0, 0, 0)
                 draw.ellipse([ox - r, cy - r, ox + r, cy + r], fill=colors.get(o, DIM), outline=outline)
 
     def _draw_cities(self, draw: ImageDraw.ImageDraw, snap: dict, colors: dict, known: set) -> None:
         L = self.layout
         r = max(4, round(L.hw * 0.6))
         label = font(max(10, min(13, L.hw)), bold=True)
-        human = self._human(snap)
+        seats = self._seats(snap)
         for c in snap["cities"]:
             if self.view == "agent" and (c["x"], c["y"]) not in known:
                 continue
             cx, cy = L.center(c["x"], c["y"])
-            mine = c["owner"] == human
+            mine = c["owner"] in seats
             draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=colors.get(c["owner"], DIM),
                          outline=(255, 255, 255) if mine else (0, 0, 0), width=2)
             if c.get("capital"):
@@ -303,8 +303,9 @@ class Renderer:
                       stroke_width=2, stroke_fill=(0, 0, 0))
 
     @staticmethod
-    def _human(snap: dict) -> int | None:
-        return next((p["index"] for p in snap["players"] if p.get("is_human")), None)
+    def _seats(snap: dict) -> set[int]:
+        """The players agents play: one, or one per seat."""
+        return {p["index"] for p in snap["players"] if p.get("is_human")}
 
     # -- chart --
 
@@ -349,7 +350,7 @@ class Renderer:
             if len(pts) > 1:
                 draw.line(pts, fill=tuple(p.get("color") or DIM), width=3 if p.get("is_human") else 1)
             if pts and p.get("is_human"):
-                labels.append((pts[-1][1], pts[-1][0] + 4, txt(p["civ"]), font(11, bold=True), TEXT))
+                labels.append((pts[-1][1], pts[-1][0] + 4, txt(p.get("label") or p["civ"]), font(11, bold=True), TEXT))
         for (_, x, text, f, fill), y in zip(labels, spread([lb[0] for lb in labels], 12, top, bottom), strict=True):
             draw.text((x, y), text, font=f, fill=fill, anchor="lm")
 
@@ -378,9 +379,8 @@ class Renderer:
         width = x1 - x0
         draw.text((x0, 16), f"Turn {snap['turn']} / {snap.get('turn_limit', '?')}", font=font(26, bold=True),
                   fill=TEXT)
-        human = next((p for p in snap["players"] if p.get("is_human")), {})
         view = "spectator view" if self.view != "agent" else "agent view (explored tiles)"
-        draw.text((x0, 50), fit(f"OpenCiv3 · {human.get('civ', '?')} · seed {snap.get('seed', '?')} · {view}",
+        draw.text((x0, 50), fit(f"OpenCiv3 · {agents(snap)} · seed {snap.get('seed', '?')} · {view}",
                                 font(12), width), font=font(12), fill=DIM)
         y = 80
         y = self._heading(draw, x0, y, "SCORE  ·  cities  pop  techs")
@@ -392,7 +392,7 @@ class Renderer:
             f = font(14, bold=bool(p.get("is_human")))
             draw.rectangle([x0, y + 3, x0 + 11, y + 14], fill=tuple(p.get("color") or DIM))
             color = DIM if p.get("defeated") else TEXT
-            draw.text((x0 + 18, y), fit(p["civ"] + (" (out)" if p.get("defeated") else ""), f, 150), font=f,
+            draw.text((x0 + 18, y), fit(player_name(p) + (" (out)" if p.get("defeated") else ""), f, 150), font=f,
                       fill=color)
             draw.text((x0 + 210, y), str(s["total"]), font=f, fill=color, anchor="ra")
             draw.text((x1, y), f"{s['cities']}  {s['pop']}  {s['techs']}", font=body, fill=DIM, anchor="ra")
@@ -406,7 +406,7 @@ class Renderer:
                 draw.text((x1, y), f"{s['cities']}  {s['pop']}  {s['techs']}", font=font(13), fill=DIM, anchor="ra")
                 y += 19
         actions = [(a["text"], a.get("ok", True)) for a in self.turn_actions(snap)]
-        events = [(e.get("text") or e.get("kind", ""), e.get("kind") not in URGENT) for e in snap.get("events", [])]
+        events = [(event_text(snap, e), e.get("kind") not in URGENT) for e in snap.get("events", [])]
         room = (L.height - PAD - y - 2 * 34) // 18
         n_actions = min(len(actions), max(room - min(len(events), room // 2), room // 2))
         prev = snap["turn"] - 1
@@ -440,8 +440,7 @@ class Renderer:
         self._draw_chart(img, snap["turn"])
         self._draw_panel(img, snap)
         draw = ImageDraw.Draw(img)
-        human = next((p for p in snap["players"] if p.get("is_human")), {})
-        draw.text((PAD, 12), txt(f"{human.get('civ', '?')} · T{snap['turn']}"), font=font(16, bold=True), fill=TEXT)
+        draw.text((PAD, 12), txt(f"{agents(snap)} · T{snap['turn']}"), font=font(16, bold=True), fill=TEXT)
         return img
 
     def frames(self) -> Iterable[tuple[dict, Image.Image]]:
@@ -536,16 +535,33 @@ def render(snapshots: list[dict], *, formats: Iterable[str] = ("mp4", "html"), v
     return files, notes
 
 
+def player_name(p: dict) -> str:
+    return p["civ"] + (f" ({p['label']})" if p.get("label") else "")
+
+
+def agents(snap: dict) -> str:
+    """The civs agents play, e.g. "Rome" or "Rome (Opus) vs Greece (Sonnet)"."""
+    return " vs ".join(player_name(p) for p in snap["players"] if p.get("is_human")) or "?"
+
+
+def event_text(snap: dict, e: dict) -> str:
+    """An event line; with several seats each event names the seat it happened to."""
+    text = e.get("text") or e.get("kind", "")
+    if not e.get("civ"):
+        return text
+    p = next((p for p in snap["players"] if p["civ"] == e["civ"]), {})
+    return f"{p.get('label') or e['civ']}: {text}"
+
+
 def _page(r: Renderer, snap: dict, img: Image.Image) -> dict:
     data = base64.b64encode(_png(img.crop(r.map_box), colors=128)).decode()
     return {
         "turn": snap["turn"], "limit": snap.get("turn_limit"), "img": f"data:image/png;base64,{data}",
-        "players": [{"civ": p["civ"], "color": hex_color(p.get("color") or DIM), "human": bool(p.get("is_human")),
+        "players": [{"civ": player_name(p), "color": hex_color(p.get("color") or DIM), "human": bool(p.get("is_human")),
                      "defeated": bool(p.get("defeated")), **p["score"]} for p in r.scoreboard(snap)],
         "baselines": [{"label": BASELINE_LABELS.get(k, k), **v} for k, v in r.baselines_at(snap["turn"]).items()],
         "actions": r.turn_actions(snap),
-        "events": [{"text": e.get("text") or e.get("kind", ""), "urgent": e.get("kind") in URGENT}
-                   for e in snap.get("events", [])],
+        "events": [{"text": event_text(snap, e), "urgent": e.get("kind") in URGENT} for e in snap.get("events", [])],
     }
 
 

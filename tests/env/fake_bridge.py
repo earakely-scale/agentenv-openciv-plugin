@@ -727,7 +727,7 @@ class Game:
 
     def world(self) -> dict:
         civs = [self.civ, *self.opponents, "Barbarians"]
-        players = [{"index": i, "civ": civ, "is_human": i == 0, "defeated": False,
+        players = [{"index": i, "civ": civ, "is_human": i == 0, "label": None, "defeated": False,
                     "color": COLORS.get(civ, [128, 128, 128]),
                     "score": self.score() if i == 0 else {"total": 30 + self.turn, "cities": 1, "pop": 2, "tiles": 9,
                                                           "techs": 3}} for i, civ in enumerate(civs)]

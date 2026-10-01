@@ -5,7 +5,9 @@ agent-env deploys it with `deploy_agent` and hands it the env's MCP server (urn:
 ends at ("... until turn 180 ..."): the agent nudges Claude to keep playing until the game reaches that turn, or
 GAME OVER, so a long game can run as several bounded sessions. The model endpoint comes from agent-env as
 LITELLM_BASE_URL and LITELLM_API_KEY; the key may be a LiteLLM key, an Anthropic API key or a Claude Code OAuth
-token (`claude setup-token`).
+token (`claude setup-token`). In a game with several agents, OPENCIV3_SEAT names the civilization this agent plays: it
+goes to the env as the X-OpenCiv3-Seat header, and end_turn may wait minutes for the others, so tool calls get a
+longer timeout.
 """
 
 from __future__ import annotations
@@ -38,6 +40,8 @@ SYSTEM_PROMPT = (
 )
 NUDGE = "The game is at turn {turn}; this session ends at turn {stop}. Continue playing."
 FOOTER = re.compile(r"\[T(\d+)/(\d+)")
+SEAT_HEADER = "X-OpenCiv3-Seat"
+TOOL_TIMEOUT_MS = "1800000"
 STOP_AT = re.compile(r"\buntil turn (\d+)", re.IGNORECASE)
 
 
@@ -66,10 +70,11 @@ def model_env(environ: dict[str, str], model: str) -> dict[str, str]:
     return env
 
 
-def mcp_config(servers: dict) -> dict:
-    return {"mcpServers": {name: {"type": "http", "url": s["url"], **({"headers": s["headers"]} if s.get("headers")
-                                                                   else {})}
-                           for name, s in servers.items()}}
+def mcp_config(servers: dict, seat: str | None = None) -> dict:
+    def server(s: dict) -> dict:
+        headers = {**(s.get("headers") or {}), **({SEAT_HEADER: seat} if seat else {})}
+        return {"type": "http", "url": s["url"], **({"headers": headers} if headers else {})}
+    return {"mcpServers": {name: server(s) for name, s in servers.items()}}
 
 
 def claude_cmd(config: PlayerConfig, mcp_file: Path, names: list[str]) -> list[str]:
@@ -125,11 +130,12 @@ class ClaudePlayer(AgentEnvAgent):
         stop = int(m.group(1)) if (m := STOP_AT.search(prompt)) else None
         with tempfile.TemporaryDirectory(prefix="claude-player-") as tmp:
             mcp_file = Path(tmp) / "mcp.json"
-            mcp_file.write_text(json.dumps(mcp_config(dict(request.mcp_servers))))
+            mcp_file.write_text(json.dumps(mcp_config(dict(request.mcp_servers), os.environ.get("OPENCIV3_SEAT"))))
             proc = await asyncio.create_subprocess_exec(
                 *claude_cmd(config, mcp_file, list(request.mcp_servers)), cwd=tmp,
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-                env={**os.environ, **model_env(dict(os.environ), config.model)}, limit=64 * 1024 * 1024)
+                env={**os.environ, **model_env(dict(os.environ), config.model), "MCP_TOOL_TIMEOUT": TOOL_TIMEOUT_MS},
+                limit=64 * 1024 * 1024)
             try:
                 return await asyncio.wait_for(self._play(proc, prompt, stop, config), config.timeout_seconds)
             except TimeoutError:

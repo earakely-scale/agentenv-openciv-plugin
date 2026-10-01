@@ -370,3 +370,21 @@ def test_rates_result():
     res = {"message": "Rates set.", "rates": {"tax": 2, "science": 6, "luxury": 2}, "gold_per_turn": -1,
            "turns_left_research": 5}
     assert render.rates_result(res) == "tax 20% · science 60% · luxury 20% · gold -1/t · research 5t"
+
+
+def test_war_with_another_agent_needs_both_to_propose_peace():
+    score = {"total": 40, "cities": 2, "techs": 5}
+    greece = {"civ": "Greece", "agent": True, "at_war": True, "score": score, "government": "Despotism",
+              "peace_offered": {"gold": 20, "until_turn": 12}, "you_offered": None}
+    assert render.civ_line(greece) == (
+        'Greece (another agent) · AT WAR (offers peace with 20 gold, until T12: accept with '
+        'diplomacy(action="propose_peace", civ="Greece")) · score 40 (2 cities, 5 techs) · Despotism')
+    egypt = {**greece, "civ": "Egypt", "peace_offered": None, "you_offered": {"gold": 0, "until_turn": 12}}
+    assert "AT WAR (you offered peace, until T12)" in render.civ_line(egypt)
+    text = render.diplomacy({"civs": [{**egypt, "you_offered": None}], "unmet": 0})
+    assert "AT WAR (peace when both propose it)" in text and "Peace with another agent's civ: both propose it" in text
+    assert "at the price above" not in text
+    assert render.waiting(4, ["Egypt"], 600) == (
+        "WAITING — you ended turn T4; Egypt is still playing it (waited 10 min). The turn advances once every "
+        "civilization has ended it: call end_turn() again to keep waiting.")
+

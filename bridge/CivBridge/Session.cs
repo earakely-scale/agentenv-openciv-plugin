@@ -26,16 +26,12 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 
 	GameMode mode;
 	GameData gd;
-	Player human;
 	int seed, turnLimit;
-	readonly Ids ids = new();
-	readonly Dictionary<MapUnit, Order> orders = [];
-	List<JsonObject> lastEvents = [];
-	List<JsonObject> turnEvents = [];
-	List<JsonObject> uiEvents = [];
-	List<JsonObject> autos = [];
-	List<int> thefts = [];
 	int eventTurn;
+
+	/// <summary>UI messages that become turn events, with the seat whose command raised them (null: the turn's advance).</summary>
+	readonly List<(MessageToUI Message, Seat Actor)> uiMessages = [];
+	bool advancing;
 
 	bool GameOver => human.defeated || gd.turn >= turnLimit;
 
@@ -45,6 +41,7 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 		if (!Commands.Contains(cmd))
 			throw new BridgeError("unknown_command", $"'{cmd}' is not a CivBridge command.", BridgeError.Names(Commands));
 		if (gd == null) throw new BridgeError("no_game", "No game is running yet; send new_game (or load) first.");
+		seat = SeatArg(a);
 		ids.Sync(gd, human);
 		PruneOrders();
 		return cmd switch {
@@ -81,6 +78,8 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 		SaveGame save = mode.GetSave();
 		Civilization civ = Pick(save.Civilizations.Where(c => !c.isBarbarian), c => c.name, a.Str("civ", "Rome"), "civ");
 		int opponents = a.Int("opponents", 3, 1, 11);
+		List<string> extra = SeatCivs(a, civ.name, opponents, save.Civilizations.Where(c => !c.isBarbarian).Select(c => c.name));
+		JsonObject labels = a.Object("labels");
 		WorldSize size = Pick(save.WorldSizes, w => w.name, a.Str("size", "Tiny"), "size");
 		Difficulty difficulty = Pick(save.Difficulties, d => d.Name, a.Str("difficulty", "Regent"), "difficulty");
 		var barbarians = Pick(Enum.GetValues<BarbarianActivity>(), b => b.ToString(), a.Str("barbarians", "Sedentary"), "barbarians");
@@ -100,7 +99,10 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 				age = WorldCharacteristics.Age.Billion_4, climate = WorldCharacteristics.Climate.Normal,
 				temperature = WorldCharacteristics.Temperature.Temperate,
 			},
-			opponents = Enumerable.Repeat(new SelectedOpponent { isRandom = true }, opponents).ToList(),
+			opponents = [
+				.. extra.Select(name => new SelectedOpponent { Name = name }),
+				.. Enumerable.Repeat(new SelectedOpponent { isRandom = true }, opponents - extra.Count),
+			],
 		};
 		try {
 			setup.Populate(save);
@@ -110,11 +112,12 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 		}
 
 		Player player = CreateGame.createGame(save, _ => mode.behaviors).GetAwaiter().GetResult();
-		(gd, human, seed, turnLimit) = (EngineStorage.gameData, player, seedArg, limit);
+		(gd, seed, turnLimit) = (EngineStorage.gameData, seedArg, limit);
+		SeatGame(player, extra, labels);
 		foreach (Player p in gd.players) TurnHandling.InitTurnData(p, p.SitsOutFirstTurn());
 		TurnHandling.OnBeginTurn();
 		DrainUi();
-		ids.Sync(gd, human);
+		EachSeat(_ => ids.Sync(gd, human));
 		Autosave();
 		Record();
 		return GameInfo();
@@ -126,6 +129,7 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 		["seed"] = seed,
 		["civ"] = human.civilization.name,
 		["opponents"] = Json.Strings(Rivals().Select(p => p.civilization.name)),
+		["seats"] = SeatsJson(),
 		["map"] = new JsonObject { ["width"] = gd.map.numTilesWide, ["height"] = gd.map.numTilesTall, ["wrap_x"] = gd.map.wrapHorizontally },
 	};
 
@@ -141,6 +145,7 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 		JsonArray blockers = Blockers();
 		if (blockers.Count > 0 && !skipIdle) return new JsonObject { ["blocked"] = true, ["blockers"] = blockers };
 		if (skipIdle) AcceptEnginePicks();
+		if (MultiSeat) return await EndSeatTurn();
 
 		autos = [];
 		var events = new List<JsonObject>();
@@ -169,6 +174,7 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 		int turns = a.Int("turns", min: 1, max: MaxTurnLimit);
 		string policy = a.Has("policy") ? a.Str("policy") : "null";
 		if (!Policies.Contains(policy)) throw new BridgeError("bad_args", $"Unknown autoplay policy '{policy}'.", BridgeError.Names(Policies));
+		if (MultiSeat) throw new BridgeError("multi_seat", "autoplay plays a one-seat game; in this game every seat ends its own turns.");
 		bool record = a.Bool("record", false);
 
 		autos = [];
@@ -213,58 +219,75 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 	}
 
 	/// <summary>
-	/// Ends the human's turn and plays everyone else's, then does what the Godot client does when the
-	/// human's next turn starts. Returns the events of the ended turn.
+	/// Ends the seats' turn and plays everyone else's, then does what the Godot client does when the human's next turn
+	/// starts, for each seat. Returns the active seat's events of the ended turn; each seat keeps its own in TurnEvents.
 	/// </summary>
 	async Task<List<JsonObject>> AdvanceTurn(bool engineAi) {
 		eventTurn = gd.turn;
-		uiEvents = [];
-		thefts = [];
-		if (engineAi) {
-			// The engine AI plays the human seat during the human's own turn only, so human-side rules
-			// (costs, support, trade offers) still apply during everyone else's turns.
-			orders.Clear();
-			ID research = human.currentlyResearchedTech;
-			human.isHuman = false;
-			try {
-				await Pump(PlayerAI.PlayTurn(human, gd));
-			} catch (Exception e) {
-				// The same containment patches/0004 gives every other AI player.
-				Log.Error(e, "the engine AI failed while playing the human seat; its turn ends here");
-			} finally {
-				human.isHuman = true;
+		var before = new Dictionary<Seat, (Snapshot Snap, List<(MapUnit, Terraform, Tile)> Jobs)>();
+		await EachSeat(async s => {
+			if (human.defeated) return;
+			if (engineAi) {
+				// The engine AI plays the human seat during the human's own turn only, so human-side rules
+				// (costs, support, trade offers) still apply during everyone else's turns.
+				orders.Clear();
+				ID research = human.currentlyResearchedTech;
+				human.isHuman = false;
+				try {
+					await Pump(PlayerAI.PlayTurn(human, gd));
+				} catch (Exception e) {
+					// The same containment patches/0004 gives every other AI player.
+					Log.Error(e, "the engine AI failed while playing the human seat; its turn ends here");
+				} finally {
+					human.isHuman = true;
+				}
+				if (human.currentlyResearchedTech != research) researchSource = Source.Engine;
+			} else {
+				foreach (MapUnit u in human.units.ToList()) if (NeedsOrders(u)) u.SkipTurn();
 			}
-			if (human.currentlyResearchedTech != research) researchSource = Source.Engine;
-		} else {
-			foreach (MapUnit u in human.units.ToList()) if (NeedsOrders(u)) u.SkipTurn();
-		}
-		PickResearch();
+			PickResearch();
+			before[s] = (Take(), human.units.Where(u => u.WorkerJob != null && !u.isAutomated).Select(u => (u, u.WorkerJob, u.location)).ToList());
+		});
 
-		Snapshot before = Take();
-		var events = new List<JsonObject>();
-		var jobs = human.units.Where(u => u.WorkerJob != null && !u.isAutomated).Select(u => (u, u.WorkerJob, u.location)).ToList();
-		TurnHandling.OnEndTurn(human);
-		foreach (var (u, job, at) in jobs)
-			if (Alive(u) && u.WorkerJob == null) events.Add(Event("job_done", $"{Label(u)} finished {job.Name} at {At(at)}.", at));
-		human.units.Sort((x, y) => x.IsBusy().CompareTo(y.IsBusy()));
-		human.hasPlayedThisTurn = true;
-		await Pump(TurnHandling.AdvanceTurn());
+		// The engine ends the other seats' turns itself (TurnHandling.PlayPlayerTurns); the UI controller's is the client's.
+		Player controller = seats[0].Player;
+		TurnHandling.OnEndTurn(controller);
+		controller.units.Sort((x, y) => x.IsBusy().CompareTo(y.IsBusy()));
+		controller.hasPlayedThisTurn = true;
+		advancing = true;
+		try {
+			await Pump(TurnHandling.AdvanceTurn());
+		} finally {
+			advancing = false;
+		}
 		watchdog.Kick();
 
-		PlayerRelationship.CheckForObsoleteDeals(human, gd.players, gd.turn);
-		PickGovernment();
-		events.AddRange(Diff(before));
-		events.AddRange(uiEvents);
-		events.AddRange(Thefts(before));
-		if (!engineAi && !human.defeated) await RunStandingOrders(events);
-		events.AddRange(Watch());
-		DrainUi();
-		ids.Sync(gd, human);
-		PruneOrders();
-		turnEvents = events;
+		var raised = uiMessages.ToList();
+		uiMessages.Clear();
+		var thefts = Thefts(raised, before.Values.FirstOrDefault().Snap?.Barbarians ?? []);
+		await EachSeat(async s => {
+			if (!before.TryGetValue(s, out var b)) return;
+			var events = new List<JsonObject>();
+			foreach (var (u, job, at) in b.Jobs)
+				if (Alive(u) && u.WorkerJob == null) events.Add(Event("job_done", $"{Label(u)} finished {job.Name} at {At(at)}.", at));
+			PlayerRelationship.CheckForObsoleteDeals(human, gd.players, gd.turn);
+			PickGovernment();
+			events.AddRange(Diff(b.Snap));
+			events.AddRange(UiEvents(raised));
+			events.AddRange(s.Incoming);
+			s.Incoming = [];
+			events.AddRange(thefts.GetValueOrDefault(s, []));
+			if (!engineAi && !human.defeated) await RunStandingOrders(events);
+			events.AddRange(Watch());
+			DrainUi();
+			ids.Sync(gd, human);
+			PruneOrders();
+			turnEvents = events;
+			s.Ready = false;
+		});
 		Autosave();
 		Record();
-		return events;
+		return turnEvents;
 	}
 
 	void PruneOrders() {
@@ -307,34 +330,49 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 				case MsgShowTradeOffer o when o.aiWant.partOfPeaceTreaty || o.aiGive.partOfPeaceTreaty:
 					// The AI's turn waits on this "screen", so the offer is reported and answered at once; the agent can
 					// take it up with propose_peace, at the price the AI asks.
-					uiEvents.Add(Event("peace_offered", $"{o.aiPlayer.civilization.name} offered peace"
-						+ (o.aiWant.gold is > 0 ? $" for {o.aiWant.gold} gold" : "")
-						+ $". Accept with diplomacy(action=\"propose_peace\", civ=\"{o.aiPlayer.civilization.name}\")."));
+					uiMessages.Add((m, advancing ? null : seat));
 					new MsgDiplomacyCompleted().send();
 					EngineStorage.ProcessNextMessageToEngine();
 					break;
 				case MsgShowTradeOffer o:
 					// The AI's turn is suspended until the "diplomacy screen" closes: decline right away.
-					autos.Add(Auto("trade_declined",
+					(SeatOf(o.humanPlayer) ?? seat).Autos.Add(Auto("trade_declined",
 						$"Declined {o.aiPlayer.civilization.name}'s offer of {Describe(o.aiGive)} for {Describe(o.aiWant)}: the env declines every trade."));
 					new MsgDiplomacyCompleted().send();
 					EngineStorage.ProcessNextMessageToEngine();
 					break;
-				case MsgWarDeclaration w when Knows(w.aggressor) || Knows(w.opponent):
-					uiEvents.Add(Event("war_declared", $"{w.aggressor.civilization.name} declared war on {w.opponent.civilization.name}."));
-					break;
-				case MsgCityDestroyed d when d.city.owner == human || human.tileKnowledge.isTileKnown(d.city.location):
-					uiEvents.Add(Event("city_destroyed", $"{d.city.name} ({d.city.owner.civilization.name}) was destroyed.", d.city.location));
-					break;
-				case MsgCivilizationDestroyed d:
-					uiEvents.Add(Event("civ_destroyed", $"{d.civilization.name} has been destroyed."));
-					break;
-				case MsgShowMilitaryAdvisorPopup p when !p.happy && Stolen.Match(p.message) is { Success: true } s:
-					thefts.Add(int.Parse(s.Groups[1].Value));
+				case MsgWarDeclaration or MsgCityDestroyed or MsgCivilizationDestroyed:
+				case MsgShowMilitaryAdvisorPopup { happy: false }:
+					uiMessages.Add((m, advancing ? null : seat));
 					break;
 			}
 		}
 		while (EngineStorage.TryDequeueNextAnimationMessage(out AnimationMessage a)) a.markCompleted();
+	}
+
+	/// <summary>The active seat's events from the turn's UI messages; what its own commands raised it already knows.</summary>
+	List<JsonObject> UiEvents(List<(MessageToUI Message, Seat Actor)> raised) {
+		var events = new List<JsonObject>();
+		foreach (var (m, actor) in raised) {
+			if (actor == seat) continue;
+			switch (m) {
+				case MsgShowTradeOffer o when o.humanPlayer == human:
+					events.Add(Event("peace_offered", $"{o.aiPlayer.civilization.name} offered peace"
+						+ (o.aiWant.gold is > 0 ? $" for {o.aiWant.gold} gold" : "")
+						+ $". Accept with diplomacy(action=\"propose_peace\", civ=\"{o.aiPlayer.civilization.name}\")."));
+					break;
+				case MsgWarDeclaration w when Knows(w.aggressor) || Knows(w.opponent):
+					events.Add(Event("war_declared", $"{w.aggressor.civilization.name} declared war on {w.opponent.civilization.name}."));
+					break;
+				case MsgCityDestroyed d when d.city.owner == human || human.tileKnowledge.isTileKnown(d.city.location):
+					events.Add(Event("city_destroyed", $"{d.city.name} ({d.city.owner.civilization.name}) was destroyed.", d.city.location));
+					break;
+				case MsgCivilizationDestroyed d:
+					events.Add(Event("civ_destroyed", $"{d.civilization.name} has been destroyed."));
+					break;
+			}
+		}
+		return events;
 	}
 
 	bool Knows(Player p) => p == human || human.playerRelationships.ContainsKey(p.id);
@@ -359,17 +397,19 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 	JsonObject ScoreAll() {
 		var land = gd.map.tiles.Where(t => t.IsLand()).ToList();
 		int pop = gd.players.Where(p => !p.isBarbarians).Sum(p => p.cities.Sum(c => c.residents.Count));
+		// Civ III's domination victory needs two thirds of each: the world's land, and its population.
+		JsonObject Share(Player p) => new() {
+			["land"] = land.Count == 0 ? 0 : Math.Round((double)land.Count(t => t.OwningPlayer() == p) / land.Count, 4),
+			["pop"] = pop == 0 ? 0 : Math.Round((double)p.cities.Sum(c => c.residents.Count) / pop, 4),
+		};
 		return new JsonObject {
 			["turn"] = gd.turn,
 			["human"] = ScoreOf(human),
 			["players"] = Json.Array(gd.players.Where(p => !p.isBarbarians), p => new JsonObject {
-				["civ"] = p.civilization.name, ["is_human"] = p == human, ["defeated"] = p.defeated, ["score"] = ScoreOf(p),
+				["civ"] = p.civilization.name, ["is_human"] = p == human, ["seat"] = SeatOf(p) is Seat s ? s.Label ?? Owner(p) : null,
+				["defeated"] = p.defeated, ["score"] = ScoreOf(p), ["share"] = Share(p),
 			}),
-			// Civ III's domination victory needs two thirds of each: the world's land, and its population.
-			["human_share"] = new JsonObject {
-				["land"] = land.Count == 0 ? 0 : Math.Round((double)land.Count(t => t.OwningPlayer() == human) / land.Count, 4),
-				["pop"] = pop == 0 ? 0 : Math.Round((double)human.cities.Sum(c => c.residents.Count) / pop, 4),
-			},
+			["human_share"] = Share(human),
 		};
 	}
 

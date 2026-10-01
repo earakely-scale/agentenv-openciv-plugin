@@ -1,4 +1,7 @@
-"""OpenCiv3 as an AgentEnv environment: twelve MCP tools over one CivBridge game (docs/tools.md)."""
+"""OpenCiv3 as an AgentEnv environment: fourteen MCP tools over one CivBridge game (docs/tools.md).
+
+A game may have several seats, one per agent (new-game `seats`): each MCP request plays the seat its
+X-OpenCiv3-Seat header names, and the turn advances once every seat has ended it."""
 
 from __future__ import annotations
 
@@ -16,6 +19,8 @@ import tempfile
 import time
 import weakref
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -30,6 +35,7 @@ from agentenv_protocol import (
     tool,
 )
 from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.lowlevel.server import request_ctx
 from pydantic import Field
 
 from . import client, recording, render
@@ -39,7 +45,8 @@ from .bridge import DEAD, Bridge, BridgeError
 
 log = logging.getLogger(__name__)
 
-SCENARIO_KEYS = ("seed", "civ", "opponents", "size", "difficulty", "barbarians", "landform", "ocean", "turn_limit")
+SCENARIO_KEYS = ("seed", "civ", "opponents", "size", "difficulty", "barbarians", "landform", "ocean", "turn_limit",
+                 "seats", "labels")
 SCENARIO_INTS = {"seed": (0, None), "opponents": (1, 11), "ocean": (0, 100), "turn_limit": (1, 1000)}
 ENV_SCENARIO = (("size", "OPENCIV_SIZE", str), ("opponents", "OPENCIV_OPPONENTS", int),
                 ("difficulty", "OPENCIV_DIFFICULTY", str), ("barbarians", "OPENCIV_BARBARIANS", str))
@@ -50,6 +57,10 @@ PLAN_LIMIT = 1000
 SITE_LOOKUPS = 2
 AUTOPLAY_CHUNK = 10
 RESTARTS_PER_TURN = 3
+SEAT_HEADER = "x-openciv3-seat"
+SEAT_WAIT_SECONDS = 600
+SEAT_STALL_SECONDS = 300
+STALL_CHECK_SECONDS = 5
 
 UnitId = Annotated[str, Field(description='Unit id, e.g. "u7".')]
 CityId = Annotated[str, Field(description='City id, e.g. "c1".')]
@@ -74,6 +85,14 @@ def merge_scenario(base: dict, update: dict) -> dict:
         raise ValueError(f"unknown scenario keys {sorted(unknown)}; valid: {', '.join(SCENARIO_KEYS)}")
     update = {k: v for k, v in update.items() if v is not None}
     for key, value in update.items():
+        if key == "seats":
+            if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+                raise ValueError(f"scenario seats must be a list of civ names, got {value!r}")
+            continue
+        if key == "labels":
+            if not isinstance(value, dict) or not all(isinstance(v, str) for v in (*value, *value.values())):
+                raise ValueError(f"scenario labels must map civ names to labels, got {value!r}")
+            continue
         if key not in SCENARIO_INTS:
             if not isinstance(value, str):
                 raise ValueError(f"scenario {key} must be a name, got {value!r}")
@@ -104,6 +123,42 @@ def clean(text: str) -> str:
     return text.encode("utf-8", "replace").decode("utf-8")
 
 
+@dataclass(eq=False)
+class Seat:
+    """A civilization an agent plays: its view of the game, plan, notices and action log."""
+    civ: str
+    label: str | None
+    actions: ActionLog
+    cache: dict | None = None
+    last_state: dict | None = None
+    over: bool = False
+    start_techs: int = 0
+    plan_text: str = ""
+    plan_turn: int | None = None
+    notices: list[dict] = field(default_factory=list)
+    notices_shown: int = 0
+    last_call: float = field(default_factory=time.monotonic)
+    ready: bool = False
+    turn_result: asyncio.Future | None = None
+    auto_ended_turns: int = 0
+
+    @property
+    def name(self) -> str:
+        return self.label or self.civ
+
+
+SEAT: ContextVar[Seat | None] = ContextVar("openciv3_seat", default=None)
+
+
+def requested_seat() -> str | None:
+    """The civ the current MCP request's X-OpenCiv3-Seat header names, if any."""
+    try:
+        request = request_ctx.get().request
+    except LookupError:
+        return None
+    return (getattr(request, "headers", None) or {}).get(SEAT_HEADER)
+
+
 @environment_card(name="openciv3")
 class OpenCiv3Env(AgentEnvEnvironment):
     """One OpenCiv3 game per env. The bridge starts on first use so the HTTP port binds at once."""
@@ -120,19 +175,40 @@ class OpenCiv3Env(AgentEnvEnvironment):
         self.game_dir: Path | None = None
         self.bridge = Bridge(self.cmd)
         self.baselines = Baselines(self.cmd, self.root / "baselines") if flag("OPENCIV_BASELINES") else None
-        self.actions = ActionLog(os.environ.get("OPENCIV_ACTION_LOG"))
+        self.action_log = os.environ.get("OPENCIV_ACTION_LOG")
         self.lock = asyncio.Lock()
         self.game: dict | None = None
-        self.cache: dict | None = None
-        self.last_state: dict | None = None
+        self.seats: list[Seat] = [Seat(self.scenario.get("civ", "Rome"), None, ActionLog(self.action_log))]
         self.turn: int | None = None
-        self.over = False
-        self.start_techs = 0
-        self.plan_text, self.plan_turn = "", None
         self.harness = {"autoplay_turns": 0, "new_games": 0, "extension_calls": 0, "engine_restarts": 0}
-        self.notices: list[dict] = []
         self.restarts: dict[int | None, int] = {}
         self.failed: str | None = None
+        self.stall_watch: asyncio.Task | None = None
+
+    # ---- seats ----
+
+    @property
+    def seat(self) -> Seat:
+        """The seat the current request plays (the first seat outside a tool call)."""
+        return SEAT.get() or self.seats[0]
+
+    @property
+    def multi(self) -> bool:
+        return len(self.seats) > 1
+
+    def _seat_named(self, civ: str | None) -> Seat:
+        if not civ:
+            return self.seats[0]
+        seat = next((s for s in self.seats if s.civ.lower() == civ.strip().lower()), None)
+        if seat is None:
+            raise BridgeError("unknown_seat", f"{civ!r} is not a seat in this game; the seats are "
+                              f"{', '.join(s.civ for s in self.seats)}.", [s.civ for s in self.seats])
+        return seat
+
+    async def _call(self, cmd: str, *, seat: Seat | None = None, **args):
+        """A bridge command played by `seat` (default: the request's)."""
+        seat = seat or self.seat
+        return await self.bridge.call(cmd, **args, **({"seat": seat.civ} if self.multi else {}))
 
     # ---- game lifecycle ----
 
@@ -140,6 +216,10 @@ class OpenCiv3Env(AgentEnvEnvironment):
         return [*self.cmd, "--autosave", str(game_dir / "autosave")] + (
             ["--record", str(game_dir / "record")] if self.record else []) + (
             ["--saves", str(game_dir / "saves")] if self.client else [])
+
+    async def _states(self, bridge: Bridge, seats: list[Seat]) -> list[dict]:
+        multi = len(seats) > 1
+        return [await bridge.call("state", **({"seat": s.civ} if multi else {})) for s in seats]
 
     async def _new_game(self, scenario: dict | None = None) -> None:
         """Start a game in a new bridge; the running game is replaced only once the new one has started."""
@@ -149,29 +229,34 @@ class OpenCiv3Env(AgentEnvEnvironment):
         bridge = Bridge(self._bridge_cmd(game_dir))
         try:
             game = await bridge.new_game(**scenario)
-            state = await bridge.call("state")
+            seats = [Seat(s["civ"], s.get("label"), ActionLog(self.action_log))
+                     for s in game.get("seats") or [{"civ": game["civ"]}]]
+            states = await self._states(bridge, seats)
         except BaseException:
             await bridge.close()
             shutil.rmtree(game_dir, ignore_errors=True)
             raise
         old_bridge, old_dir = self.bridge, self.game_dir
-        self.bridge, self.game_dir, self.game, self.scenario = bridge, game_dir, game, scenario
-        self._keep(state)
-        self.start_techs = state["score"]["techs"]
-        self.plan_text, self.plan_turn = "", None
-        self.actions.reset()
-        self.notices, self.restarts, self.failed = [], {}, None
+        for old in self.seats:
+            if old.turn_result and not old.turn_result.done():
+                old.turn_result.set_exception(BridgeError("new_game", "a new game started; this one is over."))
+        self.bridge, self.game_dir, self.game, self.scenario, self.seats = bridge, game_dir, game, scenario, seats
+        for seat, state in zip(seats, states, strict=True):
+            self._keep(state, seat)
+            seat.start_techs = state["score"]["techs"]
+        self.restarts, self.failed = {}, None
         self.harness["new_games"] += 1
         self.harness["autoplay_turns"] = 0
         await old_bridge.close()
         if old_dir is not None:
             shutil.rmtree(old_dir, ignore_errors=True)
-        if self.baselines:
+        if self.baselines and not self.multi:
             self.baselines.start(dict(scenario))
 
     async def _restart(self) -> None:
         """Restore the game in a new bridge from the autosave of the current turn's start."""
-        self.cache = None
+        for seat in self.seats:
+            seat.cache, seat.ready = None, False
         await self.bridge.close()
         self.restarts[self.turn] = self.restarts.get(self.turn, 0) + 1
         if self.restarts[self.turn] > RESTARTS_PER_TURN:
@@ -182,19 +267,25 @@ class OpenCiv3Env(AgentEnvEnvironment):
         bridge = Bridge(self._bridge_cmd(self.game_dir))
         try:
             game = await (bridge.load(str(save)) if save.exists() else bridge.new_game(**self.scenario))
-            state = await bridge.call("state")
+            states = await self._states(bridge, self.seats)
         except BridgeError as e:
             await bridge.close()
             self.failed = f"the game engine stopped and could not be restarted ({e.message}); the game cannot continue."
             raise BridgeError("engine_failed", self.failed) from None
         self.bridge, self.game = bridge, {**self.game, **game}
-        self._keep(state)
+        for seat, state in zip(self.seats, states, strict=True):
+            self._keep(state, seat)
         self.harness["engine_restarts"] += 1
-        notice = {"turn": state["turn"], "kind": "engine_restarted",
-                  "text": f"the engine restarted from the start of turn {state['turn']}; orders given since then "
-                          "are lost"}
-        self.notices.append(notice)
-        self.actions.note(state["turn"], notice["text"], ok=False)
+        turn = states[0]["turn"]
+        notice = {"turn": turn, "kind": "engine_restarted",
+                  "text": f"the engine restarted from the start of turn {turn}; orders given since then are lost"
+                          + ("; every civilization ends this turn again" if self.multi else "")}
+        for seat in self.seats:
+            seat.notices.append(notice)
+            seat.actions.note(turn, notice["text"], ok=False)
+            if seat.turn_result and not seat.turn_result.done():
+                seat.turn_result.set_exception(BridgeError(
+                    "engine_restarted", f"{notice['text']}; end your turn again.", suggest="get_turn_brief()"))
 
     async def _ensure_game(self) -> None:
         if self.failed:
@@ -204,20 +295,92 @@ class OpenCiv3Env(AgentEnvEnvironment):
         elif not self.bridge.running:
             await self._restart()
 
-    def _keep(self, state: dict) -> None:
-        self.cache = self.last_state = state
+    def _keep(self, state: dict, seat: Seat | None = None) -> None:
+        seat = seat or self.seat
+        seat.cache = seat.last_state = state
         self.turn = state["turn"]
-        self.over = state["game_over"] or state["defeated"]
+        seat.over = state["game_over"] or state["defeated"]
 
-    async def _state(self) -> dict:
-        if self.cache is None:
-            self._keep(await self.bridge.call("state"))
-        return self.cache
+    async def _state(self, seat: Seat | None = None) -> dict:
+        seat = seat or self.seat
+        if seat.cache is None:
+            self._keep(await self._call("state", seat=seat), seat)
+        return seat.cache
 
     def _vs(self, turn: int) -> dict | None:
-        return self.baselines.scores_at(turn) if self.baselines else None
+        return self.baselines.scores_at(turn) if self.baselines and not self.multi else None
+
+    # ---- the turn of a game with several seats ----
+
+    def _advanced(self, results: dict) -> None:
+        """The turn advanced: every seat sees the new turn, and seats waiting on it get their result."""
+        for seat in self.seats:
+            seat.cache, seat.ready = None, False
+            if seat.turn_result and not seat.turn_result.done():
+                seat.turn_result.set_result(results[seat.civ])
+        self.turn = next(iter(results.values()))["turn"]
+
+    async def _seat_turn(self, seat: Seat, res: dict | None) -> dict | None:
+        """This seat's result of the turn: at once when its end_turn advanced the game, else when the other seats
+        have ended the turn too. The env serves them meanwhile; None when they take longer than SEAT_WAIT_SECONDS."""
+        if res is not None and "seats" in res:
+            self._advanced(res["seats"])
+            return res["seats"][seat.civ]
+        if seat.turn_result is None:
+            seat.ready = True
+            seat.turn_result = asyncio.get_running_loop().create_future()
+            self._watch_stalls()
+        result = seat.turn_result
+        self.lock.release()
+        try:
+            return await asyncio.wait_for(asyncio.shield(result), SEAT_WAIT_SECONDS)
+        except TimeoutError:
+            return None
+        finally:
+            await self.lock.acquire()
+            if result.done():
+                seat.turn_result = None
+
+    def _watch_stalls(self) -> None:
+        if self.stall_watch is None or self.stall_watch.done():
+            self.stall_watch = asyncio.create_task(self._end_stalled_turns())
+
+    async def _end_stalled_turns(self) -> None:
+        """While seats wait for the turn to end, end it for any seat that has made no call for SEAT_STALL_SECONDS (an
+        agent between sessions, or one that stopped), so one agent cannot hold up the others."""
+        while any(s.ready for s in self.seats):
+            await asyncio.sleep(STALL_CHECK_SECONDS)
+            async with self.lock:
+                for seat in self.seats:
+                    if not (seat.ready or seat.over or time.monotonic() - seat.last_call < SEAT_STALL_SECONDS
+                            or self.failed):
+                        await self._end_turn_for(seat)
+
+    async def _end_turn_for(self, seat: Seat) -> None:
+        turn = self.turn
+        try:
+            res = await self._call("end_turn", seat=seat, skip_idle=True)
+        except BridgeError as e:
+            if e.code == "game_over":
+                seat.over = True
+            elif e.code in DEAD:
+                await self._failure(e, "end_turn")
+            else:
+                log.warning("ending %s's turn failed: %s", seat.civ, e.message)
+            return
+        seat.auto_ended_turns += 1
+        text = (f"the env ended your turn {turn} after {SEAT_STALL_SECONDS} s without a call from you, so the other "
+                "civilizations could play on")
+        seat.notices.append({"turn": turn, "kind": "turn_ended", "text": text})
+        seat.actions.note(turn, text, ok=False)
+        if "seats" in res:
+            self._advanced(res["seats"])
+        else:
+            seat.ready = True
 
     async def close(self) -> None:
+        if self.stall_watch:
+            self.stall_watch.cancel()
         if self.baselines:
             await self.baselines.stop()
         await self.bridge.close()
@@ -236,7 +399,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
             await self._restart()
         except BridgeError as fatal:
             return fatal
-        return BridgeError("engine_restarted", f"{e.message}\n!! {self.notices[-1]['text']}.",
+        return BridgeError("engine_restarted", f"{e.message}\n!! {self.seat.notices[-1]['text']}.",
                            suggest="get_turn_brief()")
 
     async def _run(self, tool_name: str, args: dict, body: Callable[[], Awaitable[str]], *,
@@ -246,48 +409,58 @@ class OpenCiv3Env(AgentEnvEnvironment):
         extra = {} if extra is None else extra
         started, turn, calls = time.monotonic(), self.turn, 0
         async with self.lock:
-            seen = len(self.notices)
+            seat = self.seat
             try:
                 await self._ensure_game()
+                seat = self._seat_named(requested_seat())
+                SEAT.set(seat)
+                seat.last_call = started
                 turn = self.turn
-                calls = self.actions.begin(turn)
+                calls = seat.actions.begin(turn)
                 if mutating:
-                    if self.over:
+                    if seat.over:
                         s = await self._state()
                         raise BridgeError("game_over", f"the game is over (T{s['turn']}/{s['turn_limit']}); "
                                           "no further actions are possible.", suggest="get_turn_brief()")
-                    self.cache = None
+                    for s in self.seats:
+                        s.cache = None
                 text = await body()
             except Exception as e:
                 err = await self._failure(e, tool_name)
                 msg = render.error(err)
-                repeats = self.actions.failed(f"{tool_name} {json.dumps(args, sort_keys=True)}")
+                repeats = seat.actions.failed(f"{tool_name} {json.dumps(args, sort_keys=True)}")
                 if repeats >= REPEATS_BEFORE_HINT:
                     options = [o for o in (err.suggest, "get_turn_brief()", "end_turn(skip_idle=true)") if o]
                     msg += f"\nsame error {repeats}x — try one of: " + " | ".join(dict.fromkeys(options))
-                msg += self._nudge(calls)
+                msg = "\n".join(self._notices(seat, msg) + [msg]) + self._nudge(calls)
                 if mutating and self.game is not None and not self.failed:
                     try:
                         msg += "\n" + render.footer(await self._state())
                     except BridgeError:
                         pass
-                self._record(turn, tool_name, args, False, err.code, started, extra)
+                self._record(seat, turn, tool_name, args, False, err.code, started, extra)
                 raise ToolError(clean(msg)) from None
-            self._record(turn, tool_name, args, True, None, started, extra)
-            restarted = [f"!! {n['text']}." for n in self.notices[seen:] if n["text"] not in text]
-            return clean("\n".join(restarted + [text]) + self._nudge(calls))
+            self._record(seat, turn, tool_name, args, True, None, started, extra)
+            return clean("\n".join(self._notices(seat, text) + [text]) + self._nudge(calls))
+
+    @staticmethod
+    def _notices(seat: Seat, text: str) -> list[str]:
+        """What happened to the seat since its last call (an engine restart, a turn ended for it) and `text` omits."""
+        fresh, seat.notices_shown = seat.notices[seat.notices_shown:], len(seat.notices)
+        return [f"!! {n['text']}." for n in fresh if n["text"] not in text]
 
     def _nudge(self, calls: int) -> str:
         return f"\n({calls} calls this turn — consider end_turn(skip_idle=true))" if calls > CALLS_BEFORE_NUDGE else ""
 
-    def _record(self, turn, tool_name, args, ok, code, started, extra) -> None:
-        self.actions.record(turn=turn, tool=tool_name, args=args, ok=ok, error_code=code,
-                            ms=(time.monotonic() - started) * 1000, **extra)
+    def _record(self, seat, turn, tool_name, args, ok, code, started, extra) -> None:
+        seat.actions.record(turn=turn, tool=tool_name, args=args, ok=ok, error_code=code,
+                            ms=(time.monotonic() - started) * 1000, **({"seat": seat.civ} if self.multi else {}),
+                            **extra)
 
     async def _site_for(self, uid: str, s: dict) -> dict | None:
         """The best site a settler can still reach before the turn limit."""
         try:
-            found = (await self.bridge.call("city_sites", unit=uid, top=3)).get("sites") or []
+            found = (await self._call("city_sites", unit=uid, top=3)).get("sites") or []
         except BridgeError as e:
             if e.code in DEAD:
                 raise
@@ -296,14 +469,15 @@ class OpenCiv3Env(AgentEnvEnvironment):
 
     async def _brief(self, events: bool = True) -> str:
         s = await self._state()
-        if self.over:
+        if self.seat.over:
             return render.game_over(s, self._vs(s["turn"]))
         units = {u["id"]: u for u in s.get("units", [])}
         settlers = [b["id"] for b in s.get("blockers", [])
                     if b.get("kind") == "idle_unit" and "settle" in units.get(b["id"], {}).get("orders", [])]
         sites = {uid: site for uid in settlers[:SITE_LOOKUPS] if (site := await self._site_for(uid, s))}
-        notices = [n for n in self.notices if n["turn"] == s["turn"]]
-        return render.brief(s, start_techs=self.start_techs, plan=self.plan_text, plan_turn=self.plan_turn,
+        seat = self.seat
+        notices = [n for n in seat.notices if n["turn"] == s["turn"]]
+        return render.brief(s, start_techs=seat.start_techs, plan=seat.plan_text, plan_turn=seat.plan_turn,
                             baselines=self._vs(s["turn"]), sites=sites, events=events, notices=notices)
 
     async def _footer(self) -> str:
@@ -360,9 +534,9 @@ class OpenCiv3Env(AgentEnvEnvironment):
                 if home is None:
                     raise BridgeError("bad_target", "you have no units or cities; give x and y.")
                 cx, cy, label = home["x"], home["y"], f"around {home['id']} {render.pos(home)}"
-            m = await self.bridge.call("map", x=cx, y=cy, radius=radius)
+            m = await self._call("map", x=cx, y=cy, radius=radius)
             try:
-                found = await self.bridge.call("city_sites", **({"unit": settler} if settler else {}), top=5)
+                found = await self._call("city_sites", **({"unit": settler} if settler else {}), top=5)
                 sites = found["sites"]
             except BridgeError as e:
                 if e.code in DEAD:
@@ -382,7 +556,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
         river or coast; then every legal site within 4 tiles. Cities need one empty tile between them.
         Then: unit_order(unit=..., order="settle", x=..., y=...)."""
         async def body():
-            res = await self.bridge.call("city_sites", **({"unit": unit} if unit else {}), top=top)
+            res = await self._call("city_sites", **({"unit": unit} if unit else {}), top=top)
             s = await self._state()
             origin = res.get("origin") or {}
             at_origin = (origin.get("x"), origin.get("y"))
@@ -408,7 +582,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
         args = {"unit": unit, "order": order, "x": x, "y": y}
 
         async def body():
-            res = await self.bridge.call("unit_order", **{k: v for k, v in args.items() if v is not None})
+            res = await self._call("unit_order", **{k: v for k, v in args.items() if v is not None})
             path = res.get("path")
             lines = [res.get("message", "done") + (f" (path {path['length']} tiles, {path['turns']}t)" if path else "")]
             if res.get("unit"):
@@ -427,21 +601,21 @@ class OpenCiv3Env(AgentEnvEnvironment):
             ids = [city] if city else [c["id"] for c in (await self._state()).get("cities", [])]
             if not ids:
                 return "No cities yet — find_city_sites(), then unit_order(unit=..., order=\"settle\", x=..., y=...)."
-            details = [render.city_detail(await self.bridge.call("city", city=cid)) for cid in ids]
+            details = [render.city_detail(await self._call("city", city=cid)) for cid in ids]
             return "\n".join(details) + '\nChange production: set_production(city="...", item="...")'
         return await self._run("city_info", {"city": city}, body)
 
     async def _call_resolving(self, cmd: str, code: str, key: str, value: str, **args) -> tuple[dict, str]:
         """Call `cmd`; if the name is unknown but plainly means one of the alternatives, retry with that name."""
         try:
-            return await self.bridge.call(cmd, **{key: value}, **args), ""
+            return await self._call(cmd, **{key: value}, **args), ""
         except BridgeError as e:
             match = resolve_name(value, [str(a) for a in e.alternatives or []]) if e.code == code else None
             if match is None:
                 if e.code == code:
                     e.suggest = None    # the bridge's guess at an unknown name is no better than the list
                 raise
-            return await self.bridge.call(cmd, **{key: match}, **args), f"(read {value!r} as {match!r}) "
+            return await self._call(cmd, **{key: match}, **args), f"(read {value!r} as {match!r}) "
 
     @tool()
     async def set_production(self, city: CityId, item: Annotated[str, Field(
@@ -464,7 +638,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
         the next one; the brief asks you to keep or change it."""
         async def body():
             if tech is None:
-                return render.techs_list(await self.bridge.call("techs"))
+                return render.techs_list(await self._call("techs"))
             res, read_as = await self._call_resolving("set_research", "unknown_tech", "tech", tech)
             queue = [t for t in res.get("queue", []) if t != res.get("current")]
             return "\n".join([read_as + res.get("message", f"researching {res.get('current')}")
@@ -481,8 +655,8 @@ class OpenCiv3Env(AgentEnvEnvironment):
                 raise BridgeError("bad_rates", "give science, luxury or both, in tenths (0-10).",
                                   suggest="set_rates(science=6, luxury=0)")
             rates = (await self._state()).get("rates") or {}
-            self.cache = None
-            res = await self.bridge.call("set_rates", science=rates.get("science", 0) if science is None else science,
+            self.seat.cache = None
+            res = await self._call("set_rates", science=rates.get("science", 0) if science is None else science,
                                          luxury=rates.get("luxury", 0) if luxury is None else luxury)
             return "\n".join([res.get("message", "rates set"), render.rates_result(res), await self._footer()])
         return await self._run("set_rates", {"science": science, "luxury": luxury}, body, mutating=True)
@@ -492,7 +666,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
         """Complete the city's current production next turn. Monarchy and later governments pay gold; Despotism
         pays with citizens (forced labour, at most half the city). Not possible in disorder or for Wealth."""
         async def body():
-            res = await self.bridge.call("hurry", city=city)
+            res = await self._call("hurry", city=city)
             cost = [f"{res[k]} {what}" for k, what in (("gold_cost", "gold"), ("pop_cost", "population")) if res.get(k)]
             lines = [res.get("message", "bought") + (f" (cost: {', '.join(cost)})" if cost else "")]
             if res.get("city"):
@@ -526,7 +700,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
 
         async def body():
             if action == "status":
-                return "\n".join([render.diplomacy(await self.bridge.call("diplomacy")), await self._footer()])
+                return "\n".join([render.diplomacy(await self._call("diplomacy")), await self._footer()])
             if not civ:
                 raise BridgeError("bad_args", f"{action} needs civ; diplomacy() lists the civilizations you know.",
                                   suggest='diplomacy(action="status")')
@@ -551,23 +725,32 @@ class OpenCiv3Env(AgentEnvEnvironment):
         extra = {"idle_units": 0, "turns_advanced": 0}
 
         async def body():
+            seat = self.seat
             before = await self._state()
             extra["idle_units"] = sum(b.get("kind") == "idle_unit" for b in before.get("blockers", []))
-            self.cache = None
-            try:
-                res = await self.bridge.call("end_turn", skip_idle=skip_idle, until_attention=until_attention,
-                                             max_turns=max_turns)
-            except BridgeError as e:
-                if e.code not in DEAD:
-                    extra["turns_advanced"] = (await self._state())["turn"] - before["turn"]
-                raise
-            if res.get("blocked"):
-                self.cache = before
-                raise BridgeError("blocked", render.blocked(res, before))
+            if seat.turn_result is None:
+                seat.cache = None
+                try:
+                    res = await self._call("end_turn", skip_idle=skip_idle, until_attention=until_attention,
+                                           max_turns=max_turns)
+                except BridgeError as e:
+                    if e.code not in DEAD:
+                        extra["turns_advanced"] = (await self._state())["turn"] - before["turn"]
+                    raise
+                if res.get("blocked"):
+                    seat.cache = before
+                    raise BridgeError("blocked", render.blocked(res, before))
+            else:
+                res = None
+            if self.multi:
+                res = await self._seat_turn(seat, res)
+                if res is None:
+                    return render.waiting(before["turn"], [s.civ for s in self.seats if not s.ready and not s.over],
+                                          SEAT_WAIT_SECONDS)
             extra["turns_advanced"] = res.get("turns_advanced", 0)
             s = await self._state()
-            report = render.turn_report(res, before["turn"])
-            if self.over:
+            report = render.turn_report(res, res["turn"] - extra["turns_advanced"])
+            if seat.over:
                 return report + "\n" + render.game_over(s, self._vs(s["turn"]))
             return f"{report}\n---\n{await self._brief(events=False)}\n{render.footer(s)}"
         return await self._run("end_turn", {"skip_idle": skip_idle, "until_attention": until_attention,
@@ -579,15 +762,16 @@ class OpenCiv3Env(AgentEnvEnvironment):
         """Read your plan, or replace it. Every brief shows it back, so write down what you intend to do over the
         next turns (where to settle, what to build and research) and keep it current."""
         async def body():
+            seat = self.seat
             if text is None:
-                return f"PLAN (T{self.plan_turn}) {self.plan_text}" if self.plan_text else \
+                return f"PLAN (T{seat.plan_turn}) {seat.plan_text}" if seat.plan_text else \
                     "No plan yet — plan(text=...) records one; every brief shows it."
             plain = re.sub(r"[\ud800-\udfff]", "", text).strip()
             if len(plain) > PLAN_LIMIT:
                 raise BridgeError("plan_too_long", f"the plan is {len(plain):,} characters; the limit is "
                                   f"{PLAN_LIMIT:,}. Shorten it and call plan(text=...) again.")
-            self.plan_text, self.plan_turn = plain, self.turn
-            return f"Plan saved at T{self.turn} ({len(self.plan_text)}/{PLAN_LIMIT} chars); every brief shows it."
+            seat.plan_text, seat.plan_turn = plain, self.turn
+            return f"Plan saved at T{self.turn} ({len(seat.plan_text)}/{PLAN_LIMIT} chars); every brief shows it."
         return await self._run("plan", {"text": text}, body)
 
     # ---- data plane ----
@@ -611,48 +795,67 @@ class OpenCiv3Env(AgentEnvEnvironment):
     @get_data
     async def data_get(self) -> list[DataPart]:
         async with self.lock:
+            states = {}
             try:
                 await self._ensure_game()
-                s = await self._state()
+                states = {seat.civ: await self._state(seat) for seat in self.seats}
             except BridgeError as e:
-                if self.last_state is None:
+                if self.seats[0].last_state is None:
                     raise
                 if not self.failed and (await self._failure(e, "data/get")).code == "engine_restarted":
-                    s = await self._state()
-                else:
-                    s = self.last_state
+                    states = {seat.civ: await self._state(seat) for seat in self.seats}
+            states = {seat.civ: states.get(seat.civ) or seat.last_state for seat in self.seats}
             try:
-                world = await self.bridge.call("score") if not self.failed else {}
+                world = await self._call("score", seat=self.seats[0]) if not self.failed else {}
             except BridgeError:
                 world = {}
-        score = s["score"]
-        return [DataPart(data={
+        standings = [{"civ": p["civ"], "you": p["is_human"], "defeated": p["defeated"], "score": p["score"]["total"],
+                      **({"seat": p.get("seat")} if self.multi else {})}
+                     for p in sorted(world.get("players", []), key=lambda p: -p["score"]["total"])]
+        s = states[self.seats[0].civ]
+        summary = {
             "turn": s["turn"], "turn_limit": s["turn_limit"], "game_over": s["game_over"], "defeated": s["defeated"],
-            "seed": self.game["seed"], "civ": s["civ"], "score": score,
-            "metrics": {"cities": score["cities"], "pop": score["pop"], "techs": score["techs"],
-                        "tiles": score["tiles"], "units": len(s.get("units", [])), "gold": s.get("gold"),
-                        "explored_pct": s.get("explored_pct")},
-            "decisions": s.get("decisions"),
-            "baselines": self.baselines.summary(s["turn"]) if self.baselines
+            "seed": self.game["seed"], "civ": s["civ"], **self._seat_summary(self.seats[0], s),
+            "baselines": self.baselines.summary(s["turn"]) if self.baselines and not self.multi
             else {p: {"status": "disabled"} for p in POLICIES},
-            "actions": self.actions.summary(),
             "harness": dict(self.harness),
             "engine_failed": self.failed is not None,
-            "standings": [{"civ": p["civ"], "you": p["is_human"], "defeated": p["defeated"],
-                           "score": p["score"]["total"]}
-                          for p in sorted(world.get("players", []), key=lambda p: -p["score"]["total"])],
+            "standings": standings,
             "share": world.get("human_share"),
-        })]
+        }
+        if self.multi:
+            players = {p["civ"]: p for p in world.get("players", [])}
+            ranks = {p["civ"]: i for i, p in enumerate(standings, 1)}
+            summary["seats"] = [{"civ": seat.civ, "label": seat.label, "defeated": states[seat.civ]["defeated"],
+                                 **self._seat_summary(seat, states[seat.civ]), "rank": ranks.get(seat.civ),
+                                 "share": (players.get(seat.civ) or {}).get("share"),
+                                 "auto_ended_turns": seat.auto_ended_turns} for seat in self.seats]
+        return [DataPart(data=summary)]
+
+    @staticmethod
+    def _seat_summary(seat: Seat, s: dict) -> dict:
+        score = s["score"]
+        return {"score": score,
+                "metrics": {"cities": score["cities"], "pop": score["pop"], "techs": score["techs"],
+                            "tiles": score["tiles"], "units": len(s.get("units", [])), "gold": s.get("gold"),
+                            "explored_pct": s.get("explored_pct"), "government": s.get("government")},
+                "decisions": s.get("decisions"),
+                "actions": seat.actions.summary()}
 
     # ---- extensions (harness only; every call is counted in data/get's harness) ----
 
-    @extension("urn:openciv3:new-game/v1", description="Start a new game; omitted args keep the current scenario.")
+    @extension("urn:openciv3:new-game/v1",
+               description="Start a new game; omitted args keep the current scenario. seats: more civs played by "
+                           "agents (each in an opponent slot), each agent naming its civ in the X-OpenCiv3-Seat "
+                           "header; labels: a name per civ for recordings and reports, e.g. the agent's model.")
     async def new_game(self, seed: int | None = None, civ: str | None = None, opponents: int | None = None,
                        size: str | None = None, difficulty: str | None = None, barbarians: str | None = None,
-                       landform: str | None = None, ocean: int | None = None, turn_limit: int | None = None) -> dict:
+                       landform: str | None = None, ocean: int | None = None, turn_limit: int | None = None,
+                       seats: list[str] | None = None, labels: dict[str, str] | None = None) -> dict:
         self.harness["extension_calls"] += 1
         args = {"seed": seed, "civ": civ, "opponents": opponents, "size": size, "difficulty": difficulty,
-                "barbarians": barbarians, "landform": landform, "ocean": ocean, "turn_limit": turn_limit}
+                "barbarians": barbarians, "landform": landform, "ocean": ocean, "turn_limit": turn_limit,
+                "seats": seats, "labels": labels}
         async with self.lock:
             await self._new_game(merge_scenario(self.scenario, args))
             return {**self.game, "scenario": self.scenario}
@@ -663,20 +866,21 @@ class OpenCiv3Env(AgentEnvEnvironment):
         self.harness["extension_calls"] += 1
         if turns < 1:
             raise ValueError("turns must be at least 1")
+        if self.multi:
+            raise ValueError("autoplay plays a game with one seat; in this game every seat ends its own turns")
         trajectory: dict[int, dict] = {}
         left, noted = turns, False
         while left > 0:
             async with self.lock:
                 await self._ensure_game()
-                if self.over:
+                if self.seat.over:
                     break
                 if not noted:
-                    self.actions.note(self.turn, f"autoplay {turns} turns ({policy})")
+                    self.seat.actions.note(self.turn, f"autoplay {turns} turns ({policy})")
                     noted = True
                 start, chunk = self.turn, min(AUTOPLAY_CHUNK, left)
-                self.cache = None
-                res = await self.bridge.call("autoplay", timeout=60 + 10 * chunk, turns=chunk, policy=policy,
-                                             record=True)
+                self.seat.cache = None
+                res = await self._call("autoplay", timeout=60 + 10 * chunk, turns=chunk, policy=policy, record=True)
                 trajectory.update((p["turn"], p["score"]) for p in res.get("trajectory", []))
                 s = await self._state()
                 self.harness["autoplay_turns"] += s["turn"] - start
@@ -685,6 +889,16 @@ class OpenCiv3Env(AgentEnvEnvironment):
             s = await self._state()
         return {"turn": s["turn"], "game_over": s["game_over"], "defeated": s["defeated"], "score": s["score"],
                 "trajectory": [{"turn": t, "score": score} for t, score in sorted(trajectory.items())]}
+
+    def _timeline(self) -> dict[int, list[dict]]:
+        """Each turn's game actions for the recording; with several seats each line names its seat."""
+        if not self.multi:
+            return {t: list(lines) for t, lines in self.seats[0].actions.timeline.items()}
+        out: dict[int, list[dict]] = {}
+        for seat in self.seats:
+            for t, lines in seat.actions.timeline.items():
+                out.setdefault(t, []).extend({**a, "text": f"{seat.name}: {a['text']}"} for a in lines)
+        return out
 
     @extension("urn:openciv3:recording/v1",
                description="Render the game so far: mp4 (gif without ffmpeg), html replay, png of the last turn, or "
@@ -702,10 +916,11 @@ class OpenCiv3Env(AgentEnvEnvironment):
             raise ValueError("recording is off (OPENCIV_RECORD=0)")
         async with self.lock:
             await self._ensure_game()
-            snapshots = recording.load_snapshots(self.game_dir / "record") or [await self.bridge.call("world")]
-            actions = {t: list(lines) for t, lines in self.actions.timeline.items()}
+            snapshots = recording.load_snapshots(self.game_dir / "record") or [await self._call("world")]
+            actions = self._timeline()
             baselines = self.baselines.trajectories() if self.baselines else {}
-            name = f"openciv3-seed{self.game['seed']}" + ("-agent" if view == "agent" else "")
+            name = f"openciv3-seed{self.game['seed']}" + ("-seats" if self.multi else "") + (
+                "-agent" if view == "agent" else "")
             saves = self.game_dir / "saves"
         own = [f for f in formats if f in recording.FORMATS]
         files, notes = await asyncio.to_thread(recording.render, snapshots, formats=own, view=view, fps=fps, name=name,

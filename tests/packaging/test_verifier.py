@@ -17,6 +17,7 @@ def load(artifact: str):
 
 verifier = load("outcome-verifier")
 full_game = load("full-game-verifier")
+seats_verifier = load("seats-verifier")
 
 
 def summary(total=100, cities=4, agent_calls=0, autoplay_turns=30, engine_failed=False, **baselines) -> dict:
@@ -90,3 +91,35 @@ def test_a_full_game_behind_the_engine_ai_and_third_scores_partially():
     rows = full_game.grade(full_summary(total=500, rank=3, land=0.1, pop=0.1))
     assert rows[2]["score"] == pytest.approx(500 / 667) and rows[3]["score"] == pytest.approx(5 / 7)
     assert rows[3]["rank"] == 3 and not rows[3]["result"]
+
+
+def seats_summary(turn=300, auto_ended=(0, 2, 0), engine_failed=False) -> dict:
+    def seat(civ, label, total, idle):
+        return {"civ": civ, "label": label, "defeated": False, "score": {"total": total}, "metrics": {"cities": 9},
+                "share": {"land": 0.2, "pop": 0.3}, "decisions": {}, "actions": {"ok": 900}, "auto_ended_turns": idle}
+    civs = zip(("Rome", "Greece", "Egypt"), ("Opus", "Sonnet", "Haiku"), (700, 900, 400), auto_ended, strict=True)
+    seats = [seat(*c) for c in civs]
+    return {"turn": turn, "turn_limit": 300, "seats": seats, "engine_failed": engine_failed,
+            "harness": {"engine_restarts": 0}}
+
+
+def test_a_seats_game_reports_each_agents_rank_and_grades_only_the_match():
+    rows = seats_verifier.grade(seats_summary())
+    assert [(r["criterion"], r["result"]) for r in rows] == [
+        ("reached the turn limit", True),
+        ("Opus (Rome): rank among the 3 agents", False),
+        ("Sonnet (Greece): rank among the 3 agents", True),
+        ("Haiku (Egypt): rank among the 3 agents", False),
+        ("the engine kept running", True),
+        ("every agent played: the env ended at most 10% of any seat's turns", True)]
+    assert [(r["rank"], r["score"], r["game_score"]) for r in rows[1:4]] == [
+        (2, 0.5, 700), (1, 1.0, 900), (3, 0.0, 400)]
+    assert score(rows) == 1.0
+
+
+def test_a_seats_game_an_agent_sat_out_does_not_count():
+    rows = seats_verifier.grade(seats_summary(auto_ended=(0, 31, 0)))
+    assert rows[-1]["result"] is False and rows[-1]["auto_ended_turns"] == {"Rome": 0, "Greece": 31, "Egypt": 0}
+    assert score(rows) == 0.0
+    assert score(seats_verifier.grade(seats_summary(turn=120))) == 0.0
+

@@ -11,10 +11,10 @@ using Serilog;
 namespace CivBridge;
 
 // Autosave and load: every human turn start writes <autosave dir>/autosave.json, the engine's own save
-// plus the bridge's state (ids, standing orders, decision sources, event memory, the RNG state), so a
-// new bridge process can pick the game up from the start of that turn.
+// plus the bridge's state (each seat's ids, standing orders, decision sources and event memory, the RNG
+// state), so a new bridge process can pick the game up from the start of that turn.
 sealed partial class Session {
-	const int SaveFormat = 1;
+	const int SaveFormat = 2;
 
 	// The engine's save serializer settings (camelCase, fields, its converters), without the indentation.
 	static readonly JsonSerializerOptions EngineJson = new(
@@ -62,11 +62,22 @@ sealed partial class Session {
 	}
 
 	JsonObject BridgeState() {
-		JsonArray Cities(IEnumerable<City> cities) => Json.Strings(cities.Select(ids.Of).Where(id => id != null));
-		var (units, cityCount) = ids.Counters;
+		var states = new JsonArray();
+		EachSeat(_ => states.Add(SeatState()));
 		return new JsonObject {
 			["seed"] = seed,
 			["turn_limit"] = turnLimit,
+			["seats"] = states,
+			["rng"] = RngState.Get(GameData.rng),
+		};
+	}
+
+	JsonObject SeatState() {
+		JsonArray Cities(IEnumerable<City> cities) => Json.Strings(cities.Select(ids.Of).Where(id => id != null));
+		var (units, cityCount) = ids.Counters;
+		return new JsonObject {
+			["civ"] = Owner(human),
+			["label"] = seat.Label,
 			["ids"] = new JsonObject {
 				["units"] = units, ["cities"] = cityCount,
 				["live"] = new JsonObject(ids.Live(gd, human).Select(p => KeyValuePair.Create(EngineId(p.Object), (JsonNode)p.Id))),
@@ -93,7 +104,9 @@ sealed partial class Session {
 			["bot_explorer"] = botExplorer == null ? null : ids.Of(botExplorer),
 			["revolution_target"] = revolutionTarget?.name,
 			["rates_before_anarchy"] = ratesBeforeAnarchy is var (science, luxury) ? new JsonArray(science, luxury) : null,
-			["rng"] = RngState.Get(GameData.rng),
+			["peace_offers"] = Json.Array(seat.PeaceOffers, kv => new JsonObject {
+				["civ"] = Owner(kv.Key), ["gold"] = kv.Value.Gold, ["turn"] = kv.Value.Turn,
+			}),
 		};
 	}
 
@@ -117,25 +130,37 @@ sealed partial class Session {
 		}
 
 		mode ??= GameMode.Load(luaDir, new GameMode.Config("civ3", ["standalone"]));
-		Player player;
 		try {
-			player = CreateGame.createGame(save, _ => mode.behaviors).GetAwaiter().GetResult();
+			CreateGame.createGame(save, _ => mode.behaviors).GetAwaiter().GetResult();
 		} catch (Exception e) {
 			Log.Error(e, "loading {Path} failed", path);
 			throw new BridgeError("bad_save", $"The engine could not restore {path}: {e.GetType().Name}: {e.Message}");
 		}
-		(gd, human) = (EngineStorage.gameData, player);
+		gd = EngineStorage.gameData;
 		TurnHandling.OnBeginTurn();
 		Restore(state);
 		DrainUi();
-		ids.Sync(gd, human);
+		EachSeat(_ => ids.Sync(gd, human));
 		Record();
 		return GameInfo();
 	}
 
-	void Restore(JsonObject s) {
-		seed = (int)s["seed"];
-		turnLimit = (int)s["turn_limit"];
+	void Restore(JsonObject state) {
+		seed = (int)state["seed"];
+		turnLimit = (int)state["turn_limit"];
+		foreach (JsonNode s in state["seats"]!.AsArray()) {
+			Player p = gd.players.FirstOrDefault(x => !x.isBarbarians && x.civilization.name == (string)s["civ"])
+				?? throw new BridgeError("bad_save", $"The save has a seat for {(string)s["civ"]}, which is not in its game.");
+			seats.Add(seat = new Seat(p, (string)s["label"]));
+			RestoreSeat(s!.AsObject());
+			SeeRelations();
+		}
+		seat = seats[0];
+		if (state["rng"] is JsonObject rng && !RngState.Set(GameData.rng, rng))
+			Log.Warning("could not restore the engine's random state; the restored game continues from a fresh one");
+	}
+
+	void RestoreSeat(JsonObject s) {
 		var byEngineId = gd.mapUnits.Where(u => u.owner == human).Cast<object>().Concat(gd.cities.Where(c => c.owner == human))
 			.ToDictionary(EngineId);
 		JsonObject idState = s["ids"]!.AsObject();
@@ -176,8 +201,9 @@ sealed partial class Session {
 		botExplorer = s["bot_explorer"] is JsonNode explorer ? UnitOf(explorer) : null;
 		revolutionTarget = s["revolution_target"] is JsonNode target ? gd.governments.FirstOrDefault(g => g.name == (string)target) : null;
 		ratesBeforeAnarchy = s["rates_before_anarchy"] is JsonArray r ? ((int)r[0], (int)r[1]) : null;
-		if (s["rng"] is JsonObject rng && !RngState.Set(GameData.rng, rng))
-			Log.Warning("could not restore the engine's random state; the restored game continues from a fresh one");
+		foreach (JsonNode o in s["peace_offers"]!.AsArray())
+			if (gd.players.FirstOrDefault(x => x.civilization.name == (string)o["civ"]) is Player to)
+				seat.PeaceOffers[to] = ((int)o["gold"], (int)o["turn"]);
 	}
 }
 

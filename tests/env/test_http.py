@@ -16,6 +16,7 @@ from mcp.client.streamable_http import streamable_http_client
 pytestmark = pytest.mark.anyio
 
 SRC = Path(__file__).resolve().parents[2] / "src"
+REAL_CMD = os.environ.get("CIVBRIDGE_CMD", str(SRC.parent / "build" / "bridge" / "CivBridge"))
 TOOLS = {"get_turn_brief", "list_units", "view_map", "find_city_sites", "unit_order", "city_info", "set_production",
          "research", "set_rates", "buy", "revolution", "diplomacy", "end_turn", "plan"}
 
@@ -120,6 +121,25 @@ async def test_binds_before_the_bridge_starts(env_vars):
             await session.initialize()
             res = await session.call_tool("get_turn_brief", {})
             assert res.isError and "could not start the game engine" in res.content[0].text
+    finally:
+        proc.terminate()
+        proc.wait(10)
+
+
+async def test_the_seat_header_over_http(env_vars):
+    proc, base = await serve(env_vars, CIVBRIDGE_CMD=REAL_CMD)
+    try:
+        card = await client.get_card(base)
+        game = await client.invoke_extension(base, card, "urn:openciv3:new-game/v1",
+                                             {"seed": 1, "opponents": 2, "seats": ["Greece", "Egypt"]})
+        assert [s["civ"] for s in game["seats"]] == ["Rome", "Greece", "Egypt"]
+        headers = {"X-OpenCiv3-Seat": "Egypt"}
+        async with httpx.AsyncClient(headers=headers) as http, \
+                streamable_http_client(f"{base}/mcp", http_client=http) as (read, write, _), \
+                ClientSession(read, write) as session:
+            await session.initialize()
+            brief = await session.call_tool("get_turn_brief", {})
+            assert not brief.isError and brief.content[0].text.startswith("T0/8 · Egypt")
     finally:
         proc.terminate()
         proc.wait(10)

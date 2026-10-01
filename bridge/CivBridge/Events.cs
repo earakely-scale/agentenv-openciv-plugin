@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using C7Engine;
 using C7GameData;
 
 namespace CivBridge;
@@ -13,12 +14,8 @@ sealed partial class Session {
 	sealed record UnitSnap(string Label, Tile At, string Level);
 
 	sealed record Snapshot(
-		Dictionary<City, CitySnap> Cities, Dictionary<MapUnit, UnitSnap> Units, HashSet<ID> Techs, HashSet<ID> Met, Tech Research,
-		Dictionary<MapUnit, Tile> Barbarians, HashSet<(Player, Player)> Wars);
-
-	readonly Dictionary<City, int> shieldsLost = [];
-	HashSet<City> riskSeen = [], cappedSeen = [], defenselessSeen = [];
-	HashSet<MapUnit> threatsSeen = [];
+		Dictionary<City, CitySnap> Cities, Dictionary<MapUnit, UnitSnap> Units, HashSet<ID> Techs, Tech Research,
+		Dictionary<MapUnit, Tile> Barbarians);
 
 	Snapshot Take() {
 		ids.Sync(gd, human);
@@ -26,10 +23,8 @@ sealed partial class Session {
 			human.cities.ToDictionary(c => c, c => new CitySnap(c.residents.Count, c.constructed_buildings.Count, c.isInCivilDisorder, c.itemBeingProduced, c.shieldsStored)),
 			human.units.ToDictionary(u => u, u => new UnitSnap(Label(u), u.location, u.experienceLevelKey)),
 			[.. human.knownTechs],
-			[.. human.playerRelationships.Keys],
 			gd.GetTech(human.currentlyResearchedTech),
-			gd.mapUnits.Where(u => u.owner.isBarbarians).ToDictionary(u => u, u => u.location),
-			Wars());
+			gd.mapUnits.Where(u => u.owner.isBarbarians).ToDictionary(u => u, u => u.location));
 	}
 
 	List<JsonObject> Diff(Snapshot before) {
@@ -80,32 +75,54 @@ sealed partial class Session {
 				: researchSource == Source.Engine ? $"; the engine picked {now.Name} next" : $"; researching {now.Name} next, as queued";
 			events.Add(Event("tech_learned", $"Learned {learned[i].Name}{next}."));
 		}
-		foreach (ID id in human.playerRelationships.Keys.Where(id => !before.Met.Contains(id)))
-			events.Add(Event("contact", $"Met {gd.GetPlayer(id)?.civilization.name}."));
-		foreach (var (p, o) in before.Wars.Where(w => !w.Item1.defeated && !w.Item2.defeated && !PlayerRelationship.AtWar(w.Item1, w.Item2)))
-			events.Add(Event("peace_signed", p == human || o == human
-				? $"Peace with {Owner(p == human ? o : p)}." : $"{Owner(p)} and {Owner(o)} made peace."));
+		events.AddRange(Relations());
 		return events;
 	}
 
-	/// <summary>Barbarians that enter a city take gold and vanish; the city is the one nearest to a vanished barbarian.</summary>
-	List<JsonObject> Thefts(Snapshot before) {
+	/// <summary>
+	/// Contacts and peace since the seat last looked, whoever's move made them (its own, another seat's, an AI's), so a
+	/// contact made after one seat's report reaches it the next turn instead of never.
+	/// </summary>
+	List<JsonObject> Relations() {
 		var events = new List<JsonObject>();
-		var gone = before.Barbarians.Where(kv => !gd.mapUnits.Contains(kv.Key)).Select(kv => kv.Value).ToList();
-		foreach (int amount in thefts) {
-			var (city, from) = HumanCities()
-				.SelectMany(c => gone.Select(t => (c, t)))
+		foreach (ID id in human.playerRelationships.Keys.Where(id => !seat.MetSeen.Contains(id)))
+			events.Add(Event("contact", $"Met {gd.GetPlayer(id)?.civilization.name}."));
+		foreach (var (p, o) in seat.WarsSeen.Where(w => !w.Item1.defeated && !w.Item2.defeated && !PlayerRelationship.AtWar(w.Item1, w.Item2)))
+			events.Add(Event("peace_signed", p == human || o == human
+				? $"Peace with {Owner(p == human ? o : p)}." : $"{Owner(p)} and {Owner(o)} made peace."));
+		SeeRelations();
+		return events;
+	}
+
+	void SeeRelations() {
+		seat.MetSeen = [.. human.playerRelationships.Keys];
+		seat.WarsSeen = Wars();
+	}
+
+	/// <summary>
+	/// Barbarians that enter a city take gold and vanish; the city is the seats' city nearest to a vanished barbarian. A theft
+	/// no city explains is the one seat's, or nobody's when there are several.
+	/// </summary>
+	Dictionary<Seat, List<JsonObject>> Thefts(List<(MessageToUI Message, Seat Actor)> raised, Dictionary<MapUnit, Tile> barbarians) {
+		var bySeat = new Dictionary<Seat, List<JsonObject>>();
+		var gone = barbarians.Where(kv => !gd.mapUnits.Contains(kv.Key)).Select(kv => kv.Value).ToList();
+		var amounts = raised.Where(r => r.Actor == null).Select(r => r.Message)
+			.OfType<MsgShowMilitaryAdvisorPopup>().Select(p => Stolen.Match(p.message)).Where(m => m.Success).Select(m => int.Parse(m.Groups[1].Value));
+		foreach (int amount in amounts) {
+			var (owner, city, from) = seats.SelectMany(s => CitiesOf(s).SelectMany(c => gone.Select(t => (s, c, t))))
 				.Where(p => p.t.DistanceTo(p.c.location) <= 3)
 				.OrderBy(p => p.t.DistanceTo(p.c.location)).FirstOrDefault();
 			if (city != null) gone.Remove(from);
+			owner ??= MultiSeat ? null : seats[0];
+			if (owner == null) continue;
 			JsonObject e = Event("gold_stolen", city == null
 				? $"Barbarians stole {amount} gold from your treasury."
 				: $"Barbarians entered {city.name} and stole {amount} gold; {(Defenders(city) == 0 ? "it has no defender" : "keep defenders inside")}.",
 				city?.location);
 			e["amount"] = amount;
-			events.Add(e);
+			(bySeat.TryGetValue(owner, out var list) ? list : bySeat[owner] = []).Add(e);
 		}
-		return events;
+		return bySeat;
 	}
 
 	/// <summary>Conditions that start mattering at some turn: each is reported on the turn it first appears.</summary>

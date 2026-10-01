@@ -96,7 +96,11 @@ tasks, `agents/claude-player`. It runs Claude Code against the env's tools, one 
 ```bash
 agent-env run openciv3 --task play        # 50 turns on a Tiny map
 agent-env run openciv3 --task full-game   # 540 turns at Civilization III's own settings, as six 90-turn sessions
+agent-env run openciv3 --task three-agents  # Opus, Sonnet and Haiku play one 300-turn game against each other
 ```
+
+In `three-agents` each agent plays its own civilization (the `X-OpenCiv3-Seat` header names it), all three play each
+turn at the same time, and the turn advances once every agent has ended it.
 
 The full game took 46 minutes and about $13 on Sonnet 5.5, and scored 0.86 with the full-game verifier. Any
 other A2A agent that advertises `urn:agentenv:mcp-config/v1` works too: set it as the default, or pick it

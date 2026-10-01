@@ -51,8 +51,11 @@ Args (all optional except `seed`):
 | `landform` | `"Pangaea"` | `Pangaea`, `Continents`, `Archipelago` |
 | `ocean` | `70` | `60`, `70`, `80` |
 | `turn_limit` | `60` | int ≥ 1 |
+| `seats` | `[]` | more civs played by agents, each taking an opponent slot (see [Seats](#seats-several-agents-in-one-game)) |
+| `labels` | none | `{civ: label}`, a name per seat for recordings and reports, e.g. the agent's model |
 
-Result: `{"turn", "turn_limit", "seed", "civ", "opponents": [civ names], "map": {"width", "height", "wrap_x"}}`.
+Result: `{"turn", "turn_limit", "seed", "civ", "opponents": [civ names], "seats": [{"civ", "label"}], "map":
+{"width", "height", "wrap_x"}}`.
 
 ### `state`
 The human player's full situation. Result:
@@ -203,9 +206,10 @@ false). Result: `{"turn", "game_over", "defeated", "score": {...}, "trajectory":
 "score": {...}}]}` (trajectory only when `record`).
 
 ### `score`
-Result: `{"turn", "human": {score}, "players": [{"civ", "is_human", "defeated", "score": {...}}], "human_share":
-{"land", "pop"}}`: the human's fractions of the world's land tiles and of its population (Civ III's domination
-victory needs two thirds of each).
+Result: `{"turn", "human": {score}, "players": [{"civ", "is_human", "seat", "defeated", "score": {...}, "share":
+{"land", "pop"}}], "human_share": {"land", "pop"}}`: each player's fractions of the world's land tiles and of its
+population (Civ III's domination victory needs two thirds of each). `seat` is the seat's label (or civ) for a civ an
+agent plays, else null; `is_human` marks the seat the command plays.
 
 ### `revolution`
 Args: `government` (a name from `state.governments`). Starts anarchy (the engine's own transition: 2 to 6 turns,
@@ -217,8 +221,9 @@ the target. Result: `{"message", "government": {"current", "anarchy_until", "rev
 
 ### `diplomacy`
 No args. Result: `{"civs": [<civ>], "unmet": n}`, where a civ (one you have met and that is alive) is `{"civ",
-"at_war", "talks", "refuses_talks_until", "peace_price", "score": {...}, "government", "military_vs_yours" (sum of
-each combat unit's best strength, theirs over yours), "at_war_with": [known civs]}`.
+"agent" (another seat), "at_war", "talks", "refuses_talks_until", "peace_price", "peace_offered" and "you_offered"
+(a standing peace offer between seats: `{"gold", "until_turn"}`), "score": {...}, "government", "military_vs_yours"
+(sum of each combat unit's best strength, theirs over yours), "at_war_with": [known civs]}`.
 
 ### `declare_war`
 Args: `civ`. The engine's `DeclareWarOn`; the civ refuses to talk for 5 to 16 turns (longer after a sneak attack
@@ -235,6 +240,27 @@ asked price, when you can pay), `not_enough_gold`.
 An AI that wants peace offers it during its turn; the bridge cannot hold the AI's turn open, so it reports a
 `peace_offered` event (which stops `end_turn(until_attention)`) and the agent accepts with `propose_peace`. Peace
 between any two civs the human knows is reported as `peace_signed`.
+
+## Seats: several agents in one game
+
+`new_game` with `seats` makes a game several agents play, one civ each. The first civ (`civ`) stays the engine's UI
+controller; each seat civ takes an opponent slot and is a human player, so the engine gives it no AI turn and the
+human's costs. Opponent slots beyond the seats are the engine's AI. Every command but `new_game` and `load` takes
+`seat` (a seat's civ; default the first) and plays that seat: its ids (`u1`, `c1`, … per seat), standing orders,
+events, decisions and plan state are its own. An unknown seat fails with `unknown_seat`.
+
+- **The turn.** `end_turn` marks the seat ready; until every live seat is, it answers `{"blocked": false,
+  "turns_advanced": 0, "turn", "waiting_for": [civs]}` and the game does not move. The seat that completes the set
+  advances the game one turn (`until_attention` and `max_turns` do not apply) and gets `{"turn", "seats": {civ:
+  <end_turn result>}}`, every seat's own events. The seats play the turn at the same time; standing orders run at
+  the start of the next turn, seat by seat in seat order. A seat can keep giving orders after it ends the turn.
+- **What another seat did.** Attacks and bombards reach the target seat as `unit_lost`, `attacked` or `bombarded`
+  events; war declarations as `war_declared` (to every seat that knows both); contacts as `contact` the turn after,
+  whoever's move made them.
+- **Peace between seats** has no price: `propose_peace` from one seat stands until the end of the next turn and
+  reaches the other as a `peace_offered` event; a `propose_peace` from the other meanwhile signs it, each side paying
+  the gold it offered. Talks are never refused between seats.
+- `autoplay` fails with `multi_seat`. The autosave (format 2) keeps every seat; `load` restores them all.
 
 ## Engine patches
 

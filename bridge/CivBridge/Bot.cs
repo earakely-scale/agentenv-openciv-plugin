@@ -7,7 +7,6 @@ namespace CivBridge;
 // set_research) and ends turns the same way, so standing orders and rules apply to it unchanged.
 sealed partial class Session {
 	const int BotMaxCities = 8;
-	MapUnit botExplorer;
 
 	static bool Military(MapUnit u) => u.CanDefendOnLand() && !u.unitType.isSettler && !u.unitType.isWorker;
 

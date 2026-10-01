@@ -35,12 +35,15 @@ sealed partial class Session {
 			["cities"] = Json.Array(HumanCities(), CityJson),
 			["units"] = Json.Array(HumanUnits(), UnitJson),
 			["rivals"] = Json.Array(Rivals(), p => {
-				bool met = h.playerRelationships.ContainsKey(p.id);
+				bool met = h.playerRelationships.ContainsKey(p.id), war = met && PlayerRelationship.AtWar(h, p);
+				Seat other = SeatOf(p);
 				return new JsonObject {
 					["civ"] = p.civilization.name,
+					["agent"] = other != null,
 					["met"] = met,
-					["at_war"] = met && PlayerRelationship.AtWar(h, p),
-					["peace_price"] = met && PlayerRelationship.AtWar(h, p) && p.PeacePriceFor(gd, h) is int price && price != int.MaxValue ? price : null,
+					["at_war"] = war,
+					["peace_price"] = war && other == null && p.PeacePriceFor(gd, h) is int price && price != int.MaxValue ? price : null,
+					["peace_offered"] = war ? OfferJson(OpenOffer(other, h)) : null,
 					["cities_seen"] = p.cities.Count(c => h.tileKnowledge.isTileKnown(c.location)),
 				};
 			}),
@@ -398,7 +401,9 @@ sealed partial class Session {
 
 	IEnumerable<MapUnit> HumanUnits() => human.units.Where(u => ids.Of(u) != null).OrderBy(u => Ids.Number(ids.Of(u)));
 
-	IEnumerable<City> HumanCities() => human.cities.Where(c => ids.Of(c) != null).OrderBy(c => Ids.Number(ids.Of(c)));
+	IEnumerable<City> HumanCities() => CitiesOf(seat);
+
+	static IEnumerable<City> CitiesOf(Seat s) => s.Player.cities.Where(c => s.Ids.Of(c) != null).OrderBy(c => Ids.Number(s.Ids.Of(c)));
 
 	bool Alive(MapUnit u) => u.hitPointsRemaining > 0 && human.units.Contains(u);
 

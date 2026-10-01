@@ -58,7 +58,7 @@ async def test_revolution_changes_government_after_anarchy(env, tools):
 async def test_diplomacy_war_and_the_price_of_peace(env, tools):
     assert "none yet: explore to meet them" in await tools("diplomacy")
     await env.bridge.call("_game", met=True)
-    env.cache = None
+    env.seat.cache = None
     assert "Greece · at peace · score" in await tools("diplomacy")
     text = await tools("diplomacy", action="declare_war", civ="greece")
     assert text.startswith("(read 'greece' as 'Greece') Rome declared war on Greece")
@@ -79,7 +79,7 @@ async def test_attack_targets_are_listed_and_taken(env, tools):
     await tools("end_turn", skip_idle=True)
     await tools("end_turn", skip_idle=True)
     await env.bridge.call("_unit", id="u4", pos=[17, 11], moves=1.0)
-    env.cache = None
+    env.seat.cache = None
     assert "attack: (18,12) SE Barbarians Warrior 3/3 hp 50% to win" in await tools("list_units", filter="all")
     text = await tools("unit_order", unit="u4", order="attack", x=18, y=12)
     assert "and won: the Barbarians Warrior was destroyed." in text
@@ -374,7 +374,7 @@ async def test_data_plane(env, tools):
         {"turn": 1, "turn_limit": 8, "game_over": False, "defeated": False, "seed": 3, "civ": "Rome"}
     assert data["score"] == {"total": 30, "cities": 1, "pop": 1, "tiles": 9, "techs": 2}
     assert data["metrics"] == {"cities": 1, "pop": 1, "techs": 2, "tiles": 9, "units": 3, "gold": 10,
-                               "explored_pct": 6.7}
+                               "explored_pct": 6.7, "government": "Despotism"}
     assert data["actions"] == {"ok": 1, "invalid": 1, "max_consecutive_errors": 1}
     assert data["baselines"] == {p: {"status": "disabled"} for p in ("engine_ai", "settler_bot", "null")}
     assert data["decisions"] == {"production": {"agent": 0, "engine": 0}, "research": {"agent": 0, "engine": 0}}
@@ -473,7 +473,7 @@ async def test_buy(env, tools):
 async def test_disorder_blocks_with_its_fixes(env, tools):
     await settle_everything(tools)
     await env.bridge.call("_city", id="c1", size=5)
-    env.cache = None
+    env.seat.cache = None
     brief = await tools("get_turn_brief")
     assert ("!! Rome is in civil disorder: raise luxury (set_rates), move a military unit into the city, or let it "
             'shrink → set_rates(science=4, luxury=2) or unit_order(unit="u4", order="goto", x=12, y=10) then fortify'
@@ -581,7 +581,7 @@ async def test_autoplay_is_counted_and_chunked(env, tools, monkeypatch):
     assert res["turn"] == 8 and [p["turn"] for p in res["trajectory"]] == list(range(2, 9))
     [part] = await env.data_get()
     assert part.data["harness"] == {"autoplay_turns": 7, "new_games": 1, "extension_calls": 2, "engine_restarts": 0}
-    assert env.actions.timeline[1] == [{"text": "autoplay 7 turns (settler_bot)", "ok": True}]
+    assert env.seat.actions.timeline[1] == [{"text": "autoplay 7 turns (settler_bot)", "ok": True}]
 
 
 async def test_recording_extension(env, tools):

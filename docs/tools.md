@@ -38,6 +38,21 @@ the valid alternatives and the exact call to make instead.
   comes from the engine's attack and defense strengths and both units' hit points. It ignores retreats, so it is
   an estimate.
 
+## Several agents in one game
+
+A game started with `seats` (new-game extension) is played by several agents, one civ each; there are no baselines.
+
+- **Which seat a call plays:** the civ in the request's `X-OpenCiv3-Seat` header (the Claude player agent sends its
+  `OPENCIV3_SEAT`); with no header, the first civ. Each seat has its own ids, plan, notices and action log.
+- **The turn:** all seats play it at the same time. `end_turn` holds until every seat has ended the turn, then
+  returns this seat's turn report and the next brief; meanwhile the env serves the other seats. After 10 minutes it
+  answers `WAITING …` instead, and the next `end_turn` keeps waiting (or reports the turn, if it has advanced since).
+  `until_attention` does not apply.
+- **A silent seat:** while others wait, a seat that has made no call for 5 minutes has its turn ended for it (with
+  `skip_idle`), and its next call starts with a `!!` line saying so. `data/get` counts these per seat.
+- **Diplomacy:** another agent's civ shows as `(another agent)`. Peace with it has no price: it is signed when both
+  propose it, the second within a turn of the first; the brief marks a war whose enemy `offers peace`.
+
 ## Anti-stuck rules (server side)
 
 - When the same call fails 3 times in a turn, the error adds: "same error 3x — try one of: …".
@@ -50,8 +65,8 @@ the valid alternatives and the exact call to make instead.
 
 When `OPENCIV_ACTION_LOG` is set, the env appends one JSON line per tool call to that file:
 `{"ts", "turn", "tool", "args", "ok", "error_code", "ms"}`. For `end_turn` the line also has
-`"idle_units"` and `"turns_advanced"`. The playtest harness reads this log; it is the
-authoritative record of what the agent did.
+`"idle_units"` and `"turns_advanced"`, and in a game with seats every line has `"seat"`. The playtest
+harness reads this log; it is the authoritative record of what the agent did.
 
 ## Configuration (environment variables)
 
@@ -74,9 +89,12 @@ authoritative record of what the agent did.
 - `data/get`: one `DataPart` with the summary: `turn`, `turn_limit`, `game_over`, `defeated`, `seed`,
   `civ`, `score`, `metrics` (cities, pop, techs, tiles, units, gold, explored_pct), `baselines`
   (`null` and `engine_ai`, each with the score at the same turn and at the turn limit when known), and
-  `actions` (`ok`, `invalid`, `max_consecutive_errors`).
+  `actions` (`ok`, `invalid`, `max_consecutive_errors`). With seats, these describe the first seat, and `seats`
+  lists every seat: `civ`, `label`, `defeated`, `score`, `metrics`, `decisions`, `actions`, `rank`, `share` and
+  `auto_ended_turns`; `standings` entries carry `seat`.
 - Extensions (REST, for harnesses and `apply_server_config`):
-  - `urn:openciv3:new-game/v1`: scenario args.
+  - `urn:openciv3:new-game/v1`: scenario args, plus `seats` (more civs played by agents) and `labels`
+    (`{civ: label}` for recordings and reports).
   - `urn:openciv3:autoplay/v1`: `turns`, `policy` (`null`, `found_capital`, `engine_ai`).
 
 ## Round 2 additions (from the post-playtest audit)

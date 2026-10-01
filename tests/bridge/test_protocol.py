@@ -162,7 +162,8 @@ def test_initial_state(game):
     assert "can_found_city" not in unit(s, "u2") and "auto_work" in unit(s, "u2")["orders"]
     assert [(b["kind"], b["id"]) for b in s["blockers"]] == [("idle_unit", "u1"), ("idle_unit", "u2")]
     assert {r["civ"] for r in s["rivals"]} == set(game.call("score")["players"][i]["civ"] for i in (1, 2, 3))
-    assert all(r == {"civ": r["civ"], "met": False, "at_war": False, "peace_price": None, "cities_seen": 0}
+    assert all(r == {"civ": r["civ"], "agent": False, "met": False, "at_war": False, "peace_price": None,
+                     "peace_offered": None, "cities_seen": 0}
                for r in s["rivals"])
 
 
@@ -566,3 +567,121 @@ def test_watchdog_answers_timeout_and_exits(launch):
     reply = b.send("new_game", seed=SEED)
     assert reply["ok"] is False and reply["error"]["code"] == "timeout" and reply["id"] == b.last_id
     assert b.proc.wait(10) != 0
+
+
+SEATS = ("Rome", "Greece", "Egypt")
+
+
+def seat_game(launch, *extra: str) -> Bridge:
+    b = launch(*extra)
+    b.call("new_game", seed=SEED, opponents=2, seats=["Greece", "Egypt"], labels={"Rome": "A", "Greece": "B"},
+           turn_limit=80)
+    return b
+
+
+def end_round(b: Bridge) -> dict:
+    """Every seat ends the turn with skip_idle, Egypt last; returns each seat's result."""
+    for civ in SEATS[:-1]:
+        assert b.call("end_turn", seat=civ, skip_idle=True)["waiting_for"]
+    return b.call("end_turn", seat=SEATS[-1], skip_idle=True)["seats"]
+
+
+def kinds(result: dict) -> list[tuple[str, str]]:
+    return [(e["kind"], e["text"]) for e in result["events"]]
+
+
+def test_seats_play_their_own_civs_and_end_turns_together(launch):
+    b = launch()
+    info = b.call("new_game", seed=SEED, opponents=2, seats=["greece", "Egypt"], labels={"Rome": "A", "Greece": "B"})
+    assert info["opponents"] == ["Greece", "Egypt"]
+    assert info["seats"] == [{"civ": "Rome", "label": "A"}, {"civ": "Greece", "label": "B"},
+                             {"civ": "Egypt", "label": None}]
+    for civ in SEATS:
+        s = b.call("state", seat=civ)
+        assert s["civ"] == civ and [u["id"] for u in s["units"]] == ["u1", "u2"]
+        assert [(r["civ"], r["agent"]) for r in s["rivals"]] == [(c, True) for c in SEATS if c != civ]
+    assert b.call("state")["civ"] == "Rome"
+    assert b.error("state", seat="Babylon")["alternatives"] == list(SEATS)
+    assert b.error("autoplay", turns=1)["code"] == "multi_seat"
+    assert b.error("new_game", seed=SEED)["code"] == "already_started"
+
+    b.call("unit_order", seat="Greece", unit="u1", order="found_city")
+    assert b.call("end_turn", seat="Rome", skip_idle=True) == {
+        "blocked": False, "turns_advanced": 0, "turn": 0, "waiting_for": ["Greece", "Egypt"]}
+    assert b.call("end_turn", seat="Greece")["blocked"]
+    assert b.call("end_turn", seat="Greece", skip_idle=True)["waiting_for"] == ["Egypt"]
+    assert b.call("state", seat="Rome")["turn"] == 0
+    res = b.call("end_turn", seat="Egypt", skip_idle=True)
+    assert res["turn"] == 1 and list(res["seats"]) == list(SEATS)
+    assert all(r["turns_advanced"] == 1 and r["turn"] == 1 and not r["game_over"] for r in res["seats"].values())
+    players = b.call("score", seat="Greece")["players"]
+    assert [(p["civ"], p["seat"], p["is_human"]) for p in players] == [
+        ("Rome", "A", False), ("Greece", "B", True), ("Egypt", "Egypt", False)]
+    assert [p["score"]["cities"] for p in players] == [0, 1, 0]
+
+
+def test_new_game_seats_must_fit_the_opponents(launch):
+    b = launch()
+    assert "opponent slots" in b.error("new_game", seed=SEED, opponents=1, seats=["Greece", "Egypt"])["message"]
+    twice = b.error("new_game", seed=SEED, seats=["Rome"])
+    assert twice["message"] == "Rome is given twice; each seat is a different civ."
+    assert b.error("new_game", seed=SEED, seats=["Atlantis"])["code"] == "bad_args"
+    assert b.error("new_game", seed=SEED, seats="Greece")["message"] == "'seats' must be a list of names."
+
+
+def test_seats_meet_declare_war_and_make_peace(launch):
+    b = seat_game(launch)
+    for civ in SEATS:
+        b.call("unit_order", seat=civ, unit="u1", order="found_city")
+        b.call("set_production", seat=civ, city="c1", item="Warrior")
+    contacts = {civ: [] for civ in SEATS}
+    for _ in range(60):
+        for civ in SEATS:
+            for u in b.call("state", seat=civ)["units"]:
+                if u["type"] == "Warrior" and u["needs_orders"]:
+                    b.call("unit_order", seat=civ, unit=u["id"], order="explore")
+        for civ, result in end_round(b).items():
+            contacts[civ] += [text for kind, text in kinds(result) if kind == "contact"]
+        if all(r["met"] for civ in SEATS for r in b.call("state", seat=civ)["rivals"]):
+            break
+    else:
+        pytest.fail("the seats never all met")
+    # Contacts made by another seat's moves reach every seat too, once each.
+    events = end_round(b)
+    for civ, result in events.items():
+        contacts[civ] += [text for kind, text in kinds(result) if kind == "contact"]
+    assert {civ: sorted(texts) for civ, texts in contacts.items()} == {
+        civ: sorted(f"Met {other}." for other in SEATS if other != civ) for civ in SEATS}
+
+    assert b.call("declare_war", seat="Rome", civ="Greece")["message"] == "Rome declared war on Greece."
+    offer = b.call("propose_peace", seat="Rome", civ="Greece")["message"]
+    turn = b.call("state")["turn"]
+    assert offer == f"Peace offered to Greece; it is signed if Greece proposes peace too before turn {turn + 2}."
+    rome = next(c for c in b.call("diplomacy", seat="Greece")["civs"] if c["civ"] == "Rome")
+    assert rome["at_war"] and rome["agent"] and rome["peace_price"] is None
+    assert rome["peace_offered"] == {"gold": 0, "until_turn": turn + 1}
+    events = end_round(b)
+    war = ("war_declared", "Rome declared war on Greece.")
+    assert war in kinds(events["Greece"]) and war in kinds(events["Egypt"]) and war not in kinds(events["Rome"])
+    assert [k for k, _ in kinds(events["Greece"])].count("peace_offered") == 1
+
+    assert b.call("propose_peace", seat="Greece", civ="Rome")["message"] == "Peace with Rome."
+    events = end_round(b)
+    assert ("peace_signed", "Peace with Greece.") in kinds(events["Rome"])
+    assert ("peace_signed", "Rome and Greece made peace.") in kinds(events["Egypt"])
+    assert not any(c["at_war"] for c in b.call("diplomacy", seat="Rome")["civs"])
+
+
+def test_a_seat_game_restores_every_seat(launch, tmp_path):
+    b = seat_game(launch, "--autosave", str(tmp_path / "a"))
+    for civ in SEATS[1:]:
+        b.call("unit_order", seat=civ, unit="u1", order="found_city")
+        b.call("unit_order", seat=civ, unit="u2", order="auto_work")
+    end_round(b)
+    end_round(b)
+    restored = launch()
+    assert restored.call("load", path=str(tmp_path / "a" / "autosave.json"))["seats"] == [
+        {"civ": "Rome", "label": "A"}, {"civ": "Greece", "label": "B"}, {"civ": "Egypt", "label": None}]
+    for civ in SEATS:
+        assert restored.call("state", seat=civ) == b.call("state", seat=civ)
+    assert restored.call("end_turn", seat="Egypt", skip_idle=True)["waiting_for"] == ["Rome", "Greece"]

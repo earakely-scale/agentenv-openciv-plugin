@@ -30,6 +30,9 @@ def test_mcp_servers_become_a_claude_code_mcp_config():
     assert player.mcp_config(servers) == {"mcpServers": {
         "openciv3": {"type": "http", "url": "http://env:18765/mcp"},
         "other": {"type": "http", "url": "http://x/mcp", "headers": {"Authorization": "Bearer t"}}}}
+    seated = player.mcp_config(servers, "Greece")["mcpServers"]
+    assert seated["openciv3"]["headers"] == {"X-OpenCiv3-Seat": "Greece"}
+    assert seated["other"]["headers"] == {"Authorization": "Bearer t", "X-OpenCiv3-Seat": "Greece"}
 
 
 def test_the_claude_command_allows_only_the_env_tools():

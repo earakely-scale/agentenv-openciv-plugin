@@ -31,6 +31,17 @@ in parallel: the outcome verifier and `save_env_recording`.
     game from wherever it is. Grading and the recording follow the last session.
   - **Time:** allow an hour or two.
 
+- `three-agents` has three agents play one game against each other: Opus as Rome, Sonnet as Greece and Haiku as
+  Egypt, on a Small map at Regent with roaming barbarians, no AI civilizations, for 300 turns (seed 1).
+  - **Seats:** the game is started with `seats` and `labels` (see `docs/tools.md`). Each agent is its own
+    `deploy_agent` step (`agent_name` opus, sonnet, haiku) with `OPENCIV3_SEAT` naming its civ, and each plays four
+    75-turn `prompt_agent` sessions with its model. The turn advances when all three have ended it.
+  - **Grade:** `artifacts/seats-verifier/verify.py` grades the match, not the players: the turn limit was reached,
+    the engine kept running and every agent played (the env ended at most a tenth of any seat's turns). Each
+    agent's rank, score, metrics and world share are reported in a row of weight 0.
+  - **Models:** the task names LiteLLM model ids (`anthropic/claude-opus-5-5`, …); change them for another
+    endpoint.
+
 **The Claude player agent.** The repository ships an agent for these tasks: `agents/claude-player`, an A2A
 agent that runs Claude Code against the env's MCP tools, one session per prompt.
 - It plays until the turn its prompt names ("until turn 180") or GAME OVER, nudging as the playtest harness

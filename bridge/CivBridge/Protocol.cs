@@ -46,6 +46,18 @@ sealed class Args(JsonObject o) {
 		throw new BridgeError("bad_args", $"'{name}' must be true or false.");
 	}
 
+	public List<string> Strings(string name) {
+		if (Get(name) is JsonArray items && items.All(n => n is JsonValue v && v.TryGetValue(out string _)))
+			return [.. items.Select(n => n.GetValue<string>())];
+		throw new BridgeError("bad_args", $"'{name}' must be a list of names.");
+	}
+
+	public JsonObject Object(string name) => Get(name) switch {
+		null => null,
+		JsonObject o when o.All(kv => kv.Value is JsonValue v && v.TryGetValue(out string _)) => o,
+		_ => throw new BridgeError("bad_args", $"'{name}' must be an object of names to names."),
+	};
+
 	static BridgeError Missing(string name) => new("bad_args", $"Missing required argument '{name}'.");
 }
 

@@ -11,15 +11,6 @@ static class Source {
 // after every completion, and the next tech after one is learned (unless the agent queued it); those
 // picks stay pending (a blocker) until the agent sets its own or accepts them with end_turn(skip_idle).
 sealed partial class Session {
-	readonly Dictionary<City, string> producingSource = [];
-	readonly HashSet<City> pendingProduction = [];
-	string researchSource = Source.Engine;
-	bool researchPending;
-	HashSet<Tech> agentResearch = [];
-	readonly Dictionary<string, int> decided = new() {
-		["production/agent"] = 0, ["production/engine"] = 0, ["research/agent"] = 0, ["research/engine"] = 0,
-	};
-
 	string ProducingSource(City c) => producingSource.GetValueOrDefault(c, Source.Engine);
 
 	void AgentPickedProduction(City c) {

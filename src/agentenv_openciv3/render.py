@@ -389,7 +389,8 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
     head.append(f"gold {s.get('gold', 0)} ({s.get('gold_per_turn', 0):+d}/t)")
     if rates := rates_text(s):
         head.append(rates)
-    wars = [r["civ"] + (f" (peace: {r['peace_price']} gold)" if r.get("peace_price") is not None else "")
+    wars = [r["civ"] + (" (offers peace)" if r.get("peace_offered")
+                        else f" (peace: {r['peace_price']} gold)" if r.get("peace_price") is not None else "")
             for r in s.get("rivals", []) if r.get("at_war")]
     if wars:
         head.append("!! at war with " + ", ".join(wars))
@@ -482,16 +483,26 @@ def governments(g: dict) -> str:
     return "\n".join(lines)
 
 
+def offer_text(o: dict) -> str:
+    return (f" with {o['gold']} gold" if o.get("gold") else "") + f", until T{o['until_turn']}"
+
+
 def civ_line(c: dict) -> str:
     sc = c.get("score") or {}
-    if c.get("at_war"):
+    if c.get("at_war") and c.get("agent"):
+        terms = (f"offers peace{offer_text(c['peace_offered'])}: accept with "
+                 + call("diplomacy", action="propose_peace", civ=c["civ"]) if c.get("peace_offered")
+                 else f"you offered peace{offer_text(c['you_offered'])}" if c.get("you_offered")
+                 else "peace when both propose it")
+        relation = f"AT WAR ({terms})"
+    elif c.get("at_war"):
         terms = (f"talks refused until T{c['refuses_talks_until']}" if c.get("refuses_talks_until")
                  else f"peace for {c['peace_price']} gold" if c.get("peace_price") is not None else "no peace yet")
         relation = f"AT WAR ({terms})"
     else:
         relation = "at peace"
     score = f"score {sc.get('total', '?')} ({sc.get('cities', '?')} cities, {sc.get('techs', '?')} techs)"
-    parts = [c["civ"], relation, score, c.get("government")]
+    parts = [c["civ"] + (" (another agent)" if c.get("agent") else ""), relation, score, c.get("government")]
     if c.get("military_vs_yours") is not None:
         parts.append(f"military {num(c['military_vs_yours'])}× yours")
     if c.get("at_war_with"):
@@ -503,8 +514,11 @@ def diplomacy(d: dict) -> str:
     civs = d.get("civs", [])
     lines = [f"CIVILIZATIONS you know ({len(civs)}; {d.get('unmet', 0)} not met yet)"]
     lines += ["  " + civ_line(c) for c in civs] or ["  none yet: explore to meet them"]
-    if any(c.get("at_war") for c in civs):
+    if any(c.get("at_war") and not c.get("agent") for c in civs):
         lines.append('Peace: diplomacy(action="propose_peace", civ="...", gold=...) at the price above.')
+    if any(c.get("at_war") and c.get("agent") for c in civs):
+        lines.append("Peace with another agent's civ: both propose it (" + call("diplomacy", action="propose_peace",
+                     civ="...") + "), the second within a turn of the first; each pays the gold it offers.")
     return "\n".join(lines)
 
 
@@ -525,6 +539,12 @@ def turn_report(result: dict, prev_turn: int) -> str:
     lines += ["  " + line for line in events_lines(result.get("events", []), cap=15)]
     lines += ["  " + line for line in auto_lines(result.get("auto", []))]
     return "\n".join(lines)
+
+
+def waiting(turn: int, others: list[str], seconds: int) -> str:
+    who = f"{', '.join(others)} {'is' if len(others) == 1 else 'are'}" if others else "the others are"
+    return (f"WAITING — you ended turn T{turn}; {who} still playing it (waited {seconds // 60} min). The turn "
+            "advances once every civilization has ended it: call end_turn() again to keep waiting.")
 
 
 def blocked(result: dict, state: dict) -> str:

@@ -75,6 +75,12 @@ sealed partial class Session {
 		string fell = razed ? $" {e.City.name} fell and was razed (this engine destroys the cities it takes)." : "";
 		if (foe == null) return $"{label} entered {At(target)}.{fell}{hp}.";
 		string outcome = !alive ? $"lost: {label} was destroyed" : killed ? $"won: {foe} was destroyed" : "ended with a retreat";
+		if (SeatOf(e.Owner) is Seat victim) {
+			string theirs = $"{victim.Ids.Of(e.Defender)} {e.Defender.unitType.name}", attacker = $"{Owner(human)} {u.unitType.name}";
+			Notify(e.Owner, killed ? "unit_lost" : "attacked", killed
+				? $"{theirs} was lost at {At(target)} to an attacking {attacker}."
+				: $"{theirs} at {At(target)} held off an attacking {attacker}{(alive ? "" : ", which was destroyed")}.", target);
+		}
 		return $"{label} attacked {foe} at {At(target)} (win chance about {odds:P0}) and {outcome}{hp}.{fell}";
 	}
 
@@ -118,7 +124,9 @@ sealed partial class Session {
 			if (c.residents.Count < size) hits.Add($"{c.name} lost {size - c.residents.Count} population");
 			if (c.constructed_buildings.Count < buildings) hits.Add($"{c.name} lost a building");
 		}
-		return $"{Label(u)} bombarded {At(target)}: " + (hits.Count == 0 ? "no damage." : string.Join(", ", hits) + ".");
+		string damage = hits.Count == 0 ? "no damage." : string.Join(", ", hits) + ".";
+		if (hits.Count > 0) Notify(owner, "bombarded", $"{Owner(human)} {u.unitType.name} bombarded {At(target)}: {damage}", target);
+		return $"{Label(u)} bombarded {At(target)}: {damage}";
 	}
 
 	BridgeError NoBombardTarget(MapUnit u, string why) {

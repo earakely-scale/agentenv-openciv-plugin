@@ -7,7 +7,7 @@ using Serilog;
 namespace CivBridge;
 
 // The world snapshot (docs/recording.md): every tile, city and unit regardless of fog, the players with
-// their scores, and the human's events of the turn that just ended. --record writes one per turn.
+// their scores, and the seats' events of the turn that just ended. --record writes one per turn.
 sealed partial class Session {
 	// Stand-ins for Civ III's 32 player colours (the originals are palettes in the game's art files).
 	static readonly int[][] Palette = [
@@ -28,7 +28,7 @@ sealed partial class Session {
 			tiles.Add(new JsonArray(
 				t.XCoordinate, t.YCoordinate, t.baseTerrainType.Key,
 				t.overlayTerrainType != t.baseTerrainType ? t.overlayTerrainType.Key : null,
-				owner == null ? -1 : index[owner], t.BordersRiver() ? 1 : 0, human.tileKnowledge.isTileKnown(t) ? 1 : 0));
+				owner == null ? -1 : index[owner], t.BordersRiver() ? 1 : 0, seats.Any(s => s.Player.tileKnowledge.isTileKnown(t)) ? 1 : 0));
 		}
 		return new JsonObject {
 			["turn"] = gd.turn,
@@ -38,7 +38,8 @@ sealed partial class Session {
 			["players"] = Json.Array(gd.players, p => new JsonObject {
 				["index"] = index[p],
 				["civ"] = Owner(p),
-				["is_human"] = p == human,
+				["is_human"] = SeatOf(p) != null,
+				["label"] = SeatOf(p)?.Label,
 				["defeated"] = p.defeated,
 				["color"] = new JsonArray(colors[index[p]].Select(v => (JsonNode)v).ToArray()),
 				["score"] = ScoreOf(p),
@@ -51,7 +52,11 @@ sealed partial class Session {
 			["units"] = Json.Array(gd.mapUnits.Where(u => Tile.IsTileValid(u.location)), u => new JsonObject {
 				["x"] = u.location.XCoordinate, ["y"] = u.location.YCoordinate, ["owner"] = index[u.owner], ["type"] = u.unitType.name,
 			}),
-			["events"] = Json.Array(turnEvents, e => e.DeepClone()),
+			["events"] = new JsonArray(seats.SelectMany(s => s.TurnEvents.Select(e => {
+				JsonObject copy = e.DeepClone().AsObject();
+				if (MultiSeat) copy["civ"] = Owner(s.Player);
+				return (JsonNode)copy;
+			})).ToArray()),
 		};
 	}
 

@@ -14,7 +14,7 @@ command returns the same snapshot on demand.
 {
   "turn": 12, "turn_limit": 60, "seed": 3,
   "map": {"width": 60, "height": 60, "wrap_x": true},
-  "players": [{"index": 0, "civ": "Rome", "is_human": true, "defeated": false, "color": [196, 52, 52],
+  "players": [{"index": 0, "civ": "Rome", "is_human": true, "label": null, "defeated": false, "color": [196, 52, 52],
                "score": {"total": 61, "cities": 2, "pop": 5, "tiles": 21, "techs": 3}}],
   "tiles": [[13, 9, "grassland", "forest", 0, 1, 1]],
   "cities": [{"x": 12, "y": 10, "name": "Rome", "owner": 0, "size": 3, "capital": true}],
@@ -23,9 +23,10 @@ command returns the same snapshot on demand.
 }
 ```
 
-- **`tiles`:** every tile of the map, regardless of fog. Each row is `[x, y, base_terrain, overlay or null, owner index or -1, river 0|1, known_by_human 0|1]`. Terrain names are lower-case engine keys.
-- **`players`:** includes the barbarians. `color` is RGB, derived from the civ's primary colour index.
-- **`events`:** the human player's events from the turn that just ended.
+- **`tiles`:** every tile of the map, regardless of fog. Each row is `[x, y, base_terrain, overlay or null, owner index or -1, river 0|1, known_by_human 0|1]`, where `known_by_human` is any seat's knowledge. Terrain names are lower-case engine keys.
+- **`players`:** includes the barbarians. `color` is RGB, derived from the civ's primary colour index. `is_human` marks every civ an agent plays (one, or one per seat), and `label` the seat's label from `new_game`.
+- **`events`:** the human player's events from the turn that just ended. In a game with seats, every seat's, each with `"civ"`.
+- **Several agents:** the renderers outline and bold every seat, name each as `civ (label)` in the scoreboard and on the chart, title the frame `Rome (Opus) vs Greece (Sonnet) vs …`, and prefix each action and event with its seat.
 - **Cost:** reading a snapshot never draws from the engine RNG.
 
 ## 2. The env renders on demand
