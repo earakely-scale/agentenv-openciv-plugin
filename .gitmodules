@@ -1,0 +1,3 @@
+[submodule "vendor/OpenCiv3"]
+	path = vendor/OpenCiv3
+	url = https://github.com/C7-Game/OpenCiv3.git
