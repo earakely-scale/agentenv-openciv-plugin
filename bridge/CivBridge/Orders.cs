@@ -391,8 +391,14 @@ sealed partial class Session {
 		return foes.Count == 0 ? null : $"a {Owner(foes[0].owner)} {foes[0].unitType.name}{(foes.Count > 1 ? $" and {foes.Count - 1} more" : "")}";
 	}
 
-	BridgeError Occupied(MapUnit u, Tile t, string who) =>
-		new("occupied", $"{At(t)} is occupied by {who}; {Label(u)} only moves peacefully. Pick a free tile.");
+	BridgeError Occupied(MapUnit u, Tile t, string who) {
+		var sites = u.unitType.isSettler ? RankSites(u.location, u, 6).Where(s => s.tile != t && Occupant(s.tile) == null).Take(5).ToList() : [];
+		string next = sites.Count == 0 ? " Pick a free tile, or wait for it to move on." :
+			$" Wait for it to move on, or settle elsewhere: the best free site is {At(sites[0].tile)}, {u.location.DistanceTo(sites[0].tile)} tiles {Direction(u.location, sites[0].tile)}.";
+		return new BridgeError("occupied", $"{At(t)} is occupied by {who}; {Label(u)} only moves peacefully.{next}",
+			u.unitType.isSettler ? sites.Select(s => (JsonNode)SiteJson(u.location, u, s.tile, s.score)) : null,
+			sites.Count > 0 ? SettleCall(u, sites[0].tile) : null);
+	}
 
 	BridgeError NoPath(MapUnit u, Tile t) {
 		var sites = u.unitType.isSettler ? RankSites(u.location, u, 5) : [];

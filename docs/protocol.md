@@ -240,7 +240,7 @@ Implemented. These extend the sections above; folding them in is still to do.
 ### Sites and messages
 - **`city_sites`** also returns `nearby`: every legal site within 4 tiles of the unit, with its score, so agents never have to guess coordinates.
 - **Settle suggestions only for settlers.** For a non-settler, `suggest` is never a `settle` call.
-- **Precise movement errors.** A goto to a tile occupied by a foreign unit or city fails with `occupied`, naming the occupant, not `no_path`.
+- **Precise movement errors.** A goto or settle to a tile occupied by a foreign unit or city fails with `occupied`, naming the occupant, not `no_path`. For a settler it also lists the best free sites and suggests settling the first.
 
 ### A scripted baseline
 - **`autoplay` gains `settler_bot`.** It follows the env's own suggestions, with no LLM:
