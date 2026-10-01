@@ -17,13 +17,19 @@ and a game is deterministic: the same seed and the same actions give the same ga
 
 ## Scope
 
-This is the expand-and-grow core of a 4X game, not the whole game. The agent founds and places
-cities, chooses what they build and what to research, sets the science and luxury rates, buys
-production with gold, and moves, automates and fortifies units. It has no combat orders, no
-diplomacy (every trade offer is declined, and the brief says so), no government choice and no
-direct tax rate (tax is what science and luxury leave). The rivals are OpenCiv3's own AI. The score
-rewards cities, citizens, territory and techs, so the env measures early-game expansion, growth and
-research, typically over 50 to 100 turns.
+This is a 4X game short of its endgame. The agent:
+- founds and places cities, and chooses what they build and what to research;
+- sets the science and luxury rates (tax is what they leave) and buys production with gold;
+- moves, automates and fortifies units, and attacks and bombards enemies;
+- changes government;
+- declares war and makes peace, at the price the other civ asks.
+
+It cannot trade techs or gold outside a peace treaty. The env still declines every AI trade offer, and
+the brief says so.
+
+The rivals are OpenCiv3's own AI. Cities that fall are razed, not captured, and the engine has no victory
+conditions, so a game ends at its turn limit (docs/full-game.md). The score rewards cities, citizens,
+territory and techs.
 
 ## Quickstart
 
@@ -86,7 +92,7 @@ claude --allowedTools "mcp__openciv3__*" "Play OpenCiv3 with the openciv3 tools.
 
 ## Tools
 
-Twelve tools. They return compact text, end every game action with a status footer such as
+Fourteen tools. They return compact text, end every game action with a status footer such as
 `[T23/60 · needs orders: u7, c1]`, and fail with the reason, the valid alternatives and, when one
 would succeed, the call to make instead. Full contract: [docs/tools.md](docs/tools.md).
 
@@ -96,12 +102,14 @@ would succeed, the call to make instead. Full contract: [docs/tools.md](docs/too
 | `list_units` | One line per unit: position, moves, status, valid orders, whether it can found a city here |
 | `view_map` | ASCII map of explored tiles around a point, a unit or a city, plus notable things with distance and direction |
 | `find_city_sites` | Ranked city sites with travel time and yields, and every legal site nearby |
-| `unit_order` | `settle`, `found_city`, `goto`, `explore`, `auto_work`, `fortify`, worker jobs, and more |
+| `unit_order` | `settle`, `found_city`, `goto`, `explore`, `auto_work`, `fortify`, worker jobs, `attack` (with the estimated chance to win) and `bombard` |
 | `city_info` | Growth, production, mood and what each city can build |
 | `set_production` | Choose what a city builds |
 | `research` | List researchable techs, or set one (prerequisites are queued) |
 | `set_rates` | Set the science and luxury rates; luxury is the main fix for disorder |
 | `buy` | Rush a city's current production with gold |
+| `revolution` | Change government, after a few turns of anarchy |
+| `diplomacy` | The civilizations you know: war or peace, score, government, military against yours, the price of peace; declare war or propose peace |
 | `end_turn` | End the turn, or several quiet ones until something needs attention; lists blockers instead when something needs orders |
 | `plan` | Read or replace the agent's plan, which every brief shows back |
 
@@ -309,6 +317,15 @@ is built from a copy of it with these patches applied (`patches/`):
    mid-turn.
 4. `0004-ai-turn-exceptions-are-contained`: an exception in one AI player's turn ends that player's
    turn instead of aborting or stalling the game.
+5. `0005-building-prerequisites-check-the-city`: buildings that need another building (Bank,
+   University, Cathedral, ...) become buildable.
+6. `0006-small-wonders-are-buildable`: small wonders can be built, once per civ.
+7. `0007-ai-keeps-its-science-funded`: the AI keeps its science funded, stops building units it cannot
+   support, and changes government.
+8. `0008-research-cost-follows-the-difficulty`: harder difficulties make AI research cheaper, as they
+   make its production cheaper, instead of dearer.
+9. `0009-ai-makes-peace`: an AI asks a price for peace, makes peace with other AIs and offers it to the
+   player, and remembers broken treaties.
 
 The image also contains Blast (Apache-2.0), Serilog (Apache-2.0), MoonSharp (BSD-3-Clause),
 ini-parser (MIT), the .NET runtime (MIT) and a static FFmpeg build (GPL-3.0-or-later); the image

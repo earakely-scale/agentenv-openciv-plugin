@@ -71,15 +71,18 @@ rotated at a 100K context cap.
    - The turn loop is `while (true)`, score is a TODO, and the ruleset's turn limit is never read.
    - Conquest, domination and score-at-the-limit checks can live in the bridge (M).
    - Space race and UN need the engine (L).
-2. **Tech and economy stall.** Five causes:
-   - 15 buildings are blocked by a prerequisite check (S);
-   - small wonders are blocked (S);
-   - the AI never changes government (M);
-   - the AI cuts its own science to 0 (M);
-   - harder difficulties make research cheaper for the human seat, not the AI (S).
+2. **Tech and economy stall: fixed** by patches 0005-0008.
+   - The causes: 15 buildings were blocked by a prerequisite check, small wonders were blocked, the AI never
+     changed government, the AI cut its own science to 0, and harder difficulties made AI research dearer.
+   - Now, at Regent: mean AI techs at T540 went from 32 to 43-45, 3 to 7 civs reach the Industrial era, and
+     most AIs end in Republic or Democracy.
+   - Still slow: buildings have no economic effect in this engine (a Library adds no science), which is a
+     rules change left for later (M).
 3. **No city capture** (L). In the meantime, conquest has to mean razing.
-4. **Diplomacy only goes one way.** The AI never proposes peace, and it values peace at 0, so it would
-   accept it for free (M).
+4. **Diplomacy only went one way: fixed** by patch 0009.
+   - An AI now asks a price for peace (`Player.PeacePriceFor`) and makes peace with other AIs.
+   - It offers the player peace, and remembers a broken treaty.
+   - At Regent, 6 to 15 wars per game end in peace, where none did.
 5. **Military tops out around 1700.** The standalone ruleset keeps 27 of 124 units, and there are no
    upgrades, air units or armies (S to switch the ruleset, M to L for the rest).
 6. **The AI ignores water**, so play on Pangaea only (L).
@@ -88,9 +91,9 @@ rotated at a 100K context cap.
 
 | Missing | Fix |
 |---|---|
-| Attack and bombard | an `attack` order through the engine's own combat, with the odds shown (M) |
-| Revolution | `revolution(government)` through the engine's own message (S) |
-| Diplomacy | declare war, propose peace, trade, with a queue for AI offers and a guard against free peace (M) |
+| Attack and bombard | **done:** `attack` and `bombard` orders through the engine's combat, with an estimated chance to win |
+| Revolution | **done:** the `revolution` tool |
+| Diplomacy | **done for war and peace:** the `diplomacy` tool, with peace at the AI's price and AI offers reported as events. Trading techs and gold is not done (M) |
 | Acting at scale | at T300 all 13 cities waited on a production choice, and the brief cuts off at 6 cities; needs orders for many units, production queues and filtered views (M) |
 | Seeing rivals | a rivals view and seen foreign cities (S) |
 | The date and victory status | in the brief and `data/get` (S) |

@@ -60,8 +60,8 @@ The human player's full situation. Result:
 ```json
 {
   "turn": 12, "turn_limit": 60, "game_over": false, "defeated": false,
-  "civ": "Rome", "government": "Despotism", "anarchy_until": null,
-  "gold": 34, "gold_per_turn": 3, "rates": {"tax": 4, "science": 6, "luxury": 0},
+  "civ": "Rome", "government": "Despotism", "anarchy_until": null, "governments": ["Monarchy"],
+  "revolution_target": null, "gold": 34, "gold_per_turn": 3, "rates": {"tax": 4, "science": 6, "luxury": 0},
   "research": {"current": "Bronze Working", "turns_left": 3, "beakers": 8, "cost": 20, "queue": ["Bronze Working"]},
   "known_techs": ["Alphabet", "Pottery"],
   "score": {"total": 61, "cities": 2, "pop": 5, "tiles": 21, "techs": 3},
@@ -79,7 +79,7 @@ The human player's full situation. Result:
     "orders": ["settle", "found_city", "goto", "fortify", "hold", "disband"],
     "needs_orders": true
   }],
-  "rivals": [{"civ": "Greece", "met": true, "at_war": false, "cities_seen": 1}],
+  "rivals": [{"civ": "Greece", "met": true, "at_war": false, "peace_price": null, "cities_seen": 1}],
   "blockers": [{"kind": "idle_unit", "id": "u3", "message": "u3 Settler has moves and no orders"}],
   "last_events": [{"turn": 11, "kind": "city_grew", "text": "Rome grew to size 3"}]
 }
@@ -88,7 +88,11 @@ The human player's full situation. Result:
 - `status` is one of `idle`, `fortified`, `exploring`, `auto_work`, `goto`, `settle`,
   `working:<job>` (e.g. `working:build_road`), `done` (no moves left this turn).
 - `target` is `{"x", "y", "dist", "dir"}` for `goto`/`settle`, else null.
-- `orders` lists the orders `unit_order` would accept for this unit right now.
+- `orders` lists the orders `unit_order` would accept for this unit right now. A unit with moves next to an
+  enemy also has `attack_targets` (see `unit_order`).
+- `governments` lists the governments a revolution can change to now; `revolution_target` is the one a revolution
+  under way ends in. `rivals[].peace_price` is the gold that civ asks for peace while at war (null at peace, or
+  while it refuses to talk).
 - `needs_orders` is true when the unit can move, is not under a standing order, and is not fortified.
 - `blockers` lists what stops `end_turn`: `no_research` (has a city, nothing being researched),
   `no_production` (a city producing nothing), `idle_unit` (one per unit with `needs_orders`).
@@ -136,13 +140,21 @@ Args: `unit` (id), `order`, and `x`, `y` where the order needs a target.
 | `hold` | — | Skip this unit for this turn. |
 | `disband` | — | Remove the unit. |
 | `build_road`, `build_mine`, `irrigate`, `clear_forest` | — | Worker job on the current tile. |
+| `attack` | x, y | Attack the adjacent tile: the top defender of a civ at war with you (barbarians always are), or move into an undefended enemy city, which the engine razes. |
+| `bombard` | x, y | Bombard a tile in range (`bombard` units): an enemy unit, city or improvement, at war. |
+
+`attack_targets` on a unit: `[{"x", "y", "dir", "owner", "defender": "Spearman 3/3 hp"|null, "city": name|null,
+"win_chance": 0.62}]`. The chance comes from the engine's own strengths: each combat round the attacker wins
+with a/(a+d) and the loser loses a hit point; retreats and defensive bombard are left out. An attack reports the
+chance, who died, the attacker's remaining hit points, and any city that fell.
 
 Result: `{"message": "<one line>", "unit": {<unit object as in state, or null if gone>},
 "city": {<city object as in state>}|null, "path": {"length", "turns"}|null}`.
 
 Error codes: `unknown_unit`, `invalid_order` (alternatives = the unit's valid orders),
 `cannot_found` (alternatives = top city sites; suggest = a `settle` call), `bad_target` (off map,
-`x+y` odd, or not explored), `no_path`, `no_moves`, `game_over`.
+`x+y` odd, or not explored; for `attack` and `bombard`, alternatives = the unit's targets), `no_path`, `no_moves`,
+`at_peace` (attacking a civ you are at peace with; suggest = declare war), `game_over`.
 
 Standing orders are carried out at the start of each human turn (multi-turn `goto`/`settle`, explore,
 auto_work, worker jobs). When one cannot make progress, `end_turn` reports an event (e.g.
@@ -190,6 +202,35 @@ false). Result: `{"turn", "game_over", "defeated", "score": {...}, "trajectory":
 ### `score`
 Result: `{"turn", "human": {score}, "players": [{"civ", "is_human", "defeated", "score": {...}}]}`.
 
+### `revolution`
+Args: `government` (a name from `state.governments`). Starts anarchy (the engine's own transition: 2 to 6 turns,
+longer for big empires, 2 for religious civs; no taxes and no science), after which the bridge sets the chosen
+government at the start of the turn anarchy ends (event `government_picked`). Called during anarchy, it changes
+the target. Result: `{"message", "government": {"current", "anarchy_until", "revolution_target", "available":
+[{"name", "corruption", "hurry": "population"|"gold"|"none", "tile_penalty", "trade_bonus", "unit_cost",
+"free_units_per_city"}]}}`. Errors: `unknown_government` (alternatives = the choices), `same_government`.
+
+### `diplomacy`
+No args. Result: `{"civs": [<civ>], "unmet": n}`, where a civ (one you have met and that is alive) is `{"civ",
+"at_war", "talks", "refuses_talks_until", "peace_price", "score": {...}, "government", "military_vs_yours" (sum of
+each combat unit's best strength, theirs over yours), "at_war_with": [known civs]}`.
+
+### `declare_war`
+Args: `civ`. The engine's `DeclareWarOn`; the civ refuses to talk for 5 to 16 turns (longer after a sneak attack
+from inside its borders). Result: `{"message", "civ": <civ>}`. Errors: `unknown_civ` (alternatives = the civs you
+have met), `already_at_war`.
+
+### `propose_peace`
+Args: `civ`, `gold` (default 0, paid to them). Peace is signed through the engine's deal path when `gold` is at
+least the civ's `Player.PeacePriceFor` (patch 0009): 0 when it is losing or tired of the war, more when it is
+winning, and never inside its refuse-contact window or a war younger than its minimum. Result: `{"message",
+"civ": <civ>}`. Errors: `unknown_civ`, `not_at_war`, `no_talks`, `refused`, `price` (suggest = the call at the
+asked price, when you can pay), `not_enough_gold`.
+
+An AI that wants peace offers it during its turn; the bridge cannot hold the AI's turn open, so it reports a
+`peace_offered` event (which stops `end_turn(until_attention)`) and the agent accepts with `propose_peace`. Peace
+between any two civs the human knows is reported as `peace_signed`.
+
 ## Engine patches
 
 `patches/*.patch` apply to the pinned OpenCiv3 sources at build time (`scripts/prepare-engine.sh`
@@ -201,6 +242,36 @@ submodule itself stays untouched):
    forever.
 2. `0002-declare-war-uses-game-rng.patch`: `Player.DeclareWarOn` draws `refuseContactUntilTurn` from
    `GameData.rng`, so games stay deterministic.
+3. `0003-budget-never-throws.patch`: when the budget cannot be balanced, gold stays at 0 instead of
+   throwing mid-turn.
+4. `0004-ai-turn-exceptions-are-contained.patch`: an exception in one AI or barbarian turn ends that
+   player's turn instead of aborting or stalling the game.
+5. `0005-building-prerequisites-check-the-city.patch`: a building that needs another (Bank, University,
+   Cathedral and 12 more) becomes buildable once the city has the prerequisite; the check compared the
+   building with itself, so none could ever be built.
+6. `0006-small-wonders-are-buildable.patch`: small wonders can be built, once per civ and by one city at
+   a time (Heroic Epic and The Pentagon stay blocked: they need armies, which the engine lacks). The AI
+   values a Forbidden Palace by the corruption it removes.
+7. `0007-ai-keeps-its-science-funded.patch`: the AI runs a deficit only while its treasury covers it,
+   builds no units it cannot support, gives up science before units when broke and then disbands its
+   least useful unit, and leaves Despotism for the best government it knows (at most once per 50 turns).
+   The human seat's budget is unchanged.
+8. `0008-research-cost-follows-the-difficulty.patch`: the difficulty's AI cost factor scales the AI's
+   research the way it scales production (the AI pays 200% at Chieftain and 40% at Sid; it paid 50% and
+   250%). Regent and the human's costs are unchanged.
+9. `0009-ai-makes-peace.patch`: `Player.PeacePriceFor(gameData, other)`, the gold an AI asks for peace
+   (`propose_peace` above); `WouldAcceptDealFrom` charges it for a peace offer; AIs sign peace with each
+   other (the loser paying the winner's price) and offer a human peace every 5 turns when they want
+   nothing; a war declared within 50 turns of a treaty counts as breaking it, which makes the victim refuse
+   peace for longer. The new war records are saved with the game.
+
+Measured over full 540-turn Standard games with 7 AIs at Regent (seeds 1-3), patches 0005-0009 take:
+- mean AI techs at T540 from 32 to 43-45, and civs with an Industrial-era tech from 0 to 3-7;
+- Banks, Universities and Cathedrals from 0 to 6-8, 25-45 and 81-110;
+- wars ending in peace from 0 to 6-15 per game;
+- AI governments at T540 from all Despotism to mostly Republic and Democracy.
+
+Wall time per game is unchanged at 74-78 s, and a seed replays byte-identically.
 
 ## Round 2 additions (from the post-playtest audit)
 

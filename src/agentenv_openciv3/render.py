@@ -9,11 +9,12 @@ from typing import Any
 from .bridge import BridgeError
 
 URGENT = {"threat", "unit_lost", "war_declared", "city_destroyed", "disorder", "disorder_started", "city_starved",
-          "settle_failed", "goto_blocked", "gold_stolen", "defenseless", "riot_risk", "engine_restarted"}
+          "settle_failed", "goto_blocked", "gold_stolen", "defenseless", "riot_risk", "engine_restarted",
+          "peace_offered"}
 # Kept first when a turn has more events than fit; threats go last, they repeat the most.
 FIRST = {"city_founded", "unit_lost", "city_destroyed", "civ_destroyed", "war_declared", "disorder", "disorder_started",
          "gold_stolen", "defenseless", "tech_learned", "city_starved", "settle_failed", "goto_blocked",
-         "engine_restarted"}
+         "engine_restarted", "peace_offered", "peace_signed", "government_picked"}
 CITY_TARGETS = ((1, 1), (15, 2), (30, 3), (45, 4), (60, 5), (80, 6), (100, 7))
 TECHS_LEARNED_TARGETS = ((20, 2), (40, 4), (60, 6), (80, 8), (100, 10))
 TERRAIN = {"grassland": "g", "plains": "p", "desert": "d", "tundra": "t", "floodplain": "f", "hills": "h",
@@ -90,7 +91,15 @@ def unit_line(u: dict, detail: bool = False) -> str:
         parts.append("orders: " + " ".join(u["orders"]))
     if found := found_text(u):
         parts.append(found)
+    if targets := u.get("attack_targets"):
+        parts.append("attack: " + ", ".join(target_text(t) for t in targets))
     return " · ".join(parts)
+
+
+def target_text(t: dict) -> str:
+    city = f"in {t['city']}" if t.get("city") else ""
+    what = " ".join(x for x in (t.get("owner"), t.get("defender") or "undefended", city) if x)
+    return f"({t['x']},{t['y']}) {t.get('dir', '')} {what} {round(100 * t.get('win_chance', 0))}% to win"
 
 
 def units_list(state: dict, everything: bool) -> str:
@@ -380,7 +389,8 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
     head.append(f"gold {s.get('gold', 0)} ({s.get('gold_per_turn', 0):+d}/t)")
     if rates := rates_text(s):
         head.append(rates)
-    wars = [r["civ"] for r in s.get("rivals", []) if r.get("at_war")]
+    wars = [r["civ"] + (f" (peace: {r['peace_price']} gold)" if r.get("peace_price") is not None else "")
+            for r in s.get("rivals", []) if r.get("at_war")]
     if wars:
         head.append("!! at war with " + ", ".join(wars))
     if s.get("defeated"):
@@ -397,6 +407,11 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
                      + (" (engine pick)" if r.get("source") == "engine" else ""))
     else:
         lines.append("RESEARCH none — research() lists techs")
+    if s.get("revolution_target"):
+        lines.append(f"GOVERNMENT anarchy, then {s['revolution_target']}")
+    elif s.get("governments"):
+        lines.append(f"GOVERNMENT {s.get('government')} · can choose {', '.join(s['governments'])} → "
+                     + call("revolution", government=s["governments"][0]))
     lines.append(f"SCORE {score_text(s['score'])} · explored {num(s.get('explored_pct', 0))}%")
     lines.append(pace_line(s, start_techs))
     if baselines:
@@ -440,6 +455,47 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
     if events and s.get("last_events"):
         lines.append("EVENTS " + " | ".join(events_lines(s["last_events"])))
     lines.append(f"PLAN (T{plan_turn}) {plan}" if plan else "PLAN none — record your strategy with plan(text=...)")
+    return "\n".join(lines)
+
+
+# ---- government and diplomacy ----
+
+def governments(g: dict) -> str:
+    head = f"Government: {g.get('current', '?')}"
+    head += f", anarchy until T{g['anarchy_until']}" if g.get("anarchy_until") else ""
+    head += f", then {g['revolution_target']}" if g.get("revolution_target") else ""
+    lines = [head]
+    for o in g.get("available", []):
+        traits = [f"corruption {o['corruption']}", f"hurry with {o['hurry']}",
+                  "tile penalty" if o.get("tile_penalty") else None, "trade bonus" if o.get("trade_bonus") else None,
+                  f"{o['free_units_per_city']} free units per city" if o.get("free_units_per_city") else None]
+        lines.append(f"  {o['name']}: " + ", ".join(t for t in traits if t))
+    return "\n".join(lines)
+
+
+def civ_line(c: dict) -> str:
+    sc = c.get("score") or {}
+    if c.get("at_war"):
+        terms = (f"talks refused until T{c['refuses_talks_until']}" if c.get("refuses_talks_until")
+                 else f"peace for {c['peace_price']} gold" if c.get("peace_price") is not None else "no peace yet")
+        relation = f"AT WAR ({terms})"
+    else:
+        relation = "at peace"
+    score = f"score {sc.get('total', '?')} ({sc.get('cities', '?')} cities, {sc.get('techs', '?')} techs)"
+    parts = [c["civ"], relation, score, c.get("government")]
+    if c.get("military_vs_yours") is not None:
+        parts.append(f"military {num(c['military_vs_yours'])}× yours")
+    if c.get("at_war_with"):
+        parts.append("at war with " + ", ".join(c["at_war_with"]))
+    return " · ".join(p for p in parts if p)
+
+
+def diplomacy(d: dict) -> str:
+    civs = d.get("civs", [])
+    lines = [f"CIVILIZATIONS you know ({len(civs)}; {d.get('unmet', 0)} not met yet)"]
+    lines += ["  " + civ_line(c) for c in civs] or ["  none yet: explore to meet them"]
+    if any(c.get("at_war") for c in civs):
+        lines.append('Peace: diplomacy(action="propose_peace", civ="...", gold=...) at the price above.')
     return "\n".join(lines)
 
 

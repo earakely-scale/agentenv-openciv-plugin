@@ -3,8 +3,9 @@
     python playtest/replay.py playtest/runs/<batch>/seed-1 [more run or batch dirs] [--server-cmd ...]
 
 The engine is deterministic, so replaying the run's successful game-changing calls (unit_order,
-set_production, research with a tech, set_rates, buy, end_turn) in order, through the env's MCP tools,
-on a new game with the run's seed and scenario reproduces the game. end_turn is replayed as single
+set_production, research with a tech, set_rates, buy, revolution, diplomacy other than status, end_turn)
+in order, through the env's MCP tools, on a new game with the run's seed and scenario reproduces the
+game. end_turn is replayed as single
 turns with skip_idle=true, as many as the original advanced, so blockers and attention stops added
 since the run was played cannot change what happened. The turn is checked before every replayed call
 and the final turn and score against summary.json; on any difference the replay stops, writes
@@ -23,7 +24,7 @@ from envctl import DEFAULT_SERVER_CMD, Env, HarnessError, free_ports, save_recor
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
-REPLAYED = ("unit_order", "set_production", "research", "set_rates", "buy", "end_turn")
+REPLAYED = ("unit_order", "set_production", "research", "set_rates", "buy", "revolution", "diplomacy", "end_turn")
 SCORE_KEYS = ("total", "cities", "pop", "tiles", "techs")
 
 
@@ -33,7 +34,8 @@ class Mismatch(Exception):
 
 def replayable(row: dict) -> bool:
     tool, args = row.get("tool"), row.get("args") or {}
-    return bool(row.get("ok")) and tool in REPLAYED and (tool != "research" or bool(args.get("tech")))
+    return bool(row.get("ok")) and tool in REPLAYED and (tool != "research" or bool(args.get("tech"))) and (
+        tool != "diplomacy" or args.get("action", "status") != "status")
 
 
 def steps(row: dict) -> list[tuple[str, dict]]:

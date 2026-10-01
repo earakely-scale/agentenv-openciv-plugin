@@ -22,8 +22,9 @@ CMD = shlex.split(os.environ.get("CIVBRIDGE_CMD", str(ROOT / "build" / "bridge" 
 pytestmark = pytest.mark.skipif(not Path(CMD[0]).exists(), reason="CivBridge is not built; run scripts/build-bridge.sh")
 
 SEED = 1
-# With Raging barbarians the do-nothing player on seed 8 loses its settler mid-game (checked when written).
-DEFEAT_SEED = 8
+# With Raging barbarians the do-nothing player on seed 15 loses its settler mid-game (checked when written,
+# before and after patches 0005-0009, which shift the random stream).
+DEFEAT_SEED = 15
 SCORE_KEYS = {"total", "cities", "pop", "tiles", "techs"}
 DIRS = {"N", "NE", "E", "SE", "S", "SW", "W", "NW", "here"}
 
@@ -161,7 +162,8 @@ def test_initial_state(game):
     assert "can_found_city" not in unit(s, "u2") and "auto_work" in unit(s, "u2")["orders"]
     assert [(b["kind"], b["id"]) for b in s["blockers"]] == [("idle_unit", "u1"), ("idle_unit", "u2")]
     assert {r["civ"] for r in s["rivals"]} == set(game.call("score")["players"][i]["civ"] for i in (1, 2, 3))
-    assert all(r == {"civ": r["civ"], "met": False, "at_war": False, "cities_seen": 0} for r in s["rivals"])
+    assert all(r == {"civ": r["civ"], "met": False, "at_war": False, "peace_price": None, "cities_seen": 0}
+               for r in s["rivals"])
 
 
 def test_map(game):
@@ -441,6 +443,96 @@ def test_null_autoplay_survives_defeat(launch):
     assert s["defeated"] and s["units"] == [] and s["blockers"] == []
     assert len(res["trajectory"]) == 61
     assert b.error("end_turn", skip_idle=True)["code"] == "game_over"
+
+
+def until(b: Bridge, done, turns: int, chunk: int = 20) -> dict:
+    """Autoplay the engine AI in chunks until done(state) holds; returns that state."""
+    for _ in range(0, turns, chunk):
+        state = b.call("state")
+        if done(state):
+            return state
+        b.call("autoplay", turns=chunk, policy="engine_ai")
+    state = b.call("state")
+    assert done(state), f"not reached by T{state['turn']}"
+    return state
+
+
+def test_revolution_ends_in_the_chosen_government(launch):
+    b = launch()
+    b.call("new_game", seed=SEED, turn_limit=400)
+    state = until(b, lambda s: s["governments"], 300)
+    target = state["governments"][-1]
+    assert b.error("revolution", government="Fascism")["code"] == "unknown_government"
+    res = b.call("revolution", government=target)
+    assert res["government"]["revolution_target"] == target and res["government"]["anarchy_until"] > state["turn"]
+    assert set(res["government"]["available"][0]) == {"name", "corruption", "hurry", "tile_penalty", "trade_bonus",
+                                                      "unit_cost", "free_units_per_city"}
+    autos = []
+    for _ in range(10):
+        if b.call("state")["government"] == target:
+            break
+        autos += b.call("end_turn", skip_idle=True)["auto"]
+    assert b.call("state")["government"] == target and b.call("state")["revolution_target"] is None
+    assert any(x["kind"] == "government_picked" and target in x["text"] for x in autos)
+
+
+def test_war_then_peace_at_the_asked_price(launch):
+    b = launch()
+    b.call("new_game", seed=SEED, turn_limit=400)
+    state = until(b, lambda s: any(r["met"] for r in s["rivals"]), 120)
+    civ = next(r["civ"] for r in state["rivals"] if r["met"])
+    assert b.error("propose_peace", civ=civ)["code"] == "not_at_war"
+    war = b.call("declare_war", civ=civ)
+    assert war["civ"]["at_war"] and war["civ"]["refuses_talks_until"] > state["turn"]
+    assert b.error("declare_war", civ=civ)["code"] == "already_at_war"
+    assert b.error("propose_peace", civ=civ)["code"] == "no_talks"
+    assert b.error("declare_war", civ="Atlantis")["code"] == "unknown_civ"
+    # A stronger civ asks gold at first; its price fades to 0 over the 60 turns after the 10-turn minimum.
+    for _ in range(80):
+        b.call("end_turn", skip_idle=True)
+        them = next(c for c in b.call("diplomacy")["civs"] if c["civ"] == civ)
+        if them["peace_price"] is not None and them["peace_price"] <= b.call("state")["gold"]:
+            peace = b.call("propose_peace", civ=civ, gold=them["peace_price"])
+            assert not peace["civ"]["at_war"] and peace["message"].startswith(f"Peace with {civ}")
+            break
+    else:
+        raise AssertionError(f"{civ} never offered terms the human could pay")
+    assert not next(r for r in b.call("state")["rivals"] if r["civ"] == civ)["at_war"]
+
+
+def test_attack_an_adjacent_enemy_with_its_win_chance(launch):
+    b = launch()
+    b.call("new_game", seed=SEED, turn_limit=400)
+    state = until(b, lambda s: any(r["met"] for r in s["rivals"]), 140)
+    civ = next(r["civ"] for r in state["rivals"] if r["met"])
+    b.call("declare_war", civ=civ)
+    world = b.call("world")
+    enemy = next(p["index"] for p in world["players"] if p["civ"] == civ)
+    cities = [c for c in world["cities"] if c["owner"] == enemy]
+    soldiers = [u for u in state["units"] if u["type"] not in ("Settler", "Worker")]
+    unit, city = min(((u, c) for u in soldiers for c in cities),
+                     key=lambda uc: abs(uc[0]["x"] - uc[1]["x"]) + abs(uc[0]["y"] - uc[1]["y"]))
+    near = [(city["x"] + dx, city["y"] + dy) for dx, dy in ((1, 1), (-1, 1), (1, -1), (-1, -1), (2, 0), (-2, 0))]
+    for _ in range(30):
+        me = next((u for u in b.call("state")["units"] if u["id"] == unit["id"]), None)
+        assert me is not None, "the unit died on the way"
+        if me.get("attack_targets"):
+            break
+        for x, y in near:
+            if b.send("unit_order", unit=unit["id"], order="goto", x=x, y=y)["ok"]:
+                break
+        b.call("end_turn", skip_idle=True)
+    else:
+        raise AssertionError("never got next to an enemy")
+    target = me["attack_targets"][0]
+    assert {"x", "y", "dir", "owner", "defender", "city", "win_chance"} <= set(target)
+    assert 0 <= target["win_chance"] <= 1
+    assert "attack" in me["orders"]
+    far = b.send("unit_order", unit=unit["id"], order="attack", x=me["x"] + 4, y=me["y"])
+    assert far["error"]["code"] == "bad_target" and far["error"]["alternatives"]
+    res = b.call("unit_order", unit=unit["id"], order="attack", x=target["x"], y=target["y"])
+    assert f"{unit['id']} {unit['type']} attacked" in res["message"] or "entered" in res["message"]
+    assert (res["unit"] is None) == ("was destroyed" in res["message"] and "lost" in res["message"])
 
 
 def test_saves_keeps_every_turn_as_a_loadable_save(launch, tmp_path):

@@ -398,11 +398,13 @@ class OpenCiv3Env(AgentEnvEnvironment):
                 "Standing orders (run every turn until done): settle (walk to x,y and found a city there), goto (x,y), "
                 "explore, auto_work. Now: found_city (on this tile), fortify (a military unit fortified in a city "
                 "also keeps an unhappy citizen content), wake, hold (skip this turn), disband, build_road, build_mine, "
-                "irrigate, clear_forest."))],
+                "irrigate, clear_forest, attack (an adjacent enemy unit or city, x,y; only civs you are at war "
+                "with) and bombard (x,y in range, for units that can)."))],
             x: Coord = None, y: Coord = None):
         """Order one of your units. Standing orders keep working on later turns without further calls, so prefer
         them: settle for settlers, explore for one scout, auto_work for workers; keep a military unit in every city.
-        A standing order that cannot progress is reported as an event and the unit becomes idle again."""
+        A standing order that cannot progress is reported as an event and the unit becomes idle again. A unit next to
+        an enemy lists its attack targets with an estimated chance to win; a city that falls is razed."""
         args = {"unit": unit, "order": order, "x": x, "y": y}
 
         async def body():
@@ -497,6 +499,41 @@ class OpenCiv3Env(AgentEnvEnvironment):
                 lines.append(render.city_line(res["city"]))
             return "\n".join(lines + [await self._footer()])
         return await self._run("buy", {"city": city}, body, mutating=True)
+
+    @tool()
+    async def revolution(self, government: Annotated[str, Field(
+            description='The government to change to, e.g. "Monarchy"; the brief lists the ones you can choose.')]):
+        """Change government. Anarchy follows for a few turns (no taxes and no science), then the new government
+        starts. Governments differ in corruption, how production is hurried (population or gold), unit support and
+        tile yields; Despotism loses a point on rich tiles."""
+        async def body():
+            res, read_as = await self._call_resolving("revolution", "unknown_government", "government", government)
+            return "\n".join([read_as + res.get("message", "revolution"),
+                              render.governments(res.get("government") or {}), await self._footer()])
+        return await self._run("revolution", {"government": government}, body, mutating=True)
+
+    @tool()
+    async def diplomacy(
+            self,
+            action: Annotated[Literal["status", "declare_war", "propose_peace"], Field(description=(
+                "status (default): the civilizations you know; declare_war or propose_peace with civ."))] = "status",
+            civ: Annotated[str | None, Field(description='A civilization you know, e.g. "Arabia".')] = None,
+            gold: Annotated[int, Field(ge=0, description="Gold you pay with a peace proposal.")] = 0):
+        """The civilizations you know: war or peace, their score, government and military against yours, and their
+        wars. Declare war to attack a civ; a civ you attack refuses to talk for some turns. At war, the status shows the
+        gold a civ asks for peace (it asks more when it is winning); propose_peace pays it."""
+        args = {"action": action, "civ": civ, "gold": gold}
+
+        async def body():
+            if action == "status":
+                return "\n".join([render.diplomacy(await self.bridge.call("diplomacy")), await self._footer()])
+            if not civ:
+                raise BridgeError("bad_args", f"{action} needs civ; diplomacy() lists the civilizations you know.",
+                                  suggest='diplomacy(action="status")')
+            res, read_as = await self._call_resolving(action, "unknown_civ", "civ", civ,
+                                                      **({"gold": gold} if action == "propose_peace" else {}))
+            return "\n".join([read_as + res.get("message", "done"), render.civ_line(res["civ"]), await self._footer()])
+        return await self._run("diplomacy", args, body, mutating=action != "status")
 
     @tool()
     async def end_turn(

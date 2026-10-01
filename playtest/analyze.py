@@ -29,7 +29,7 @@ STALL_CALLS = 25    # calls within one game turn; the env starts suggesting end_
 REPEAT_FAILS = 3    # the same failing call this many times in one turn; the env flags it too
 ERROR_STREAK = 5
 DISORDER_TURNS = 10
-GAME_CHANGES = ("unit_order", "set_production", "set_rates", "buy")
+GAME_CHANGES = ("unit_order", "set_production", "set_rates", "buy", "revolution")
 # Action-log error codes that mean the engine or env failed, not the agent. `engine_restarted` is not one:
 # the env restored the game from its autosave, which is flagged but leaves the run valid.
 ENV_FAILURES = ("engine_error", "turn_failed", "engine_failed", "bridge_failed", "bridge_down", "timeout",
@@ -69,7 +69,8 @@ def _rate(n: int, d: int) -> float | None:
 
 
 def _is_game_change(tool: str, args: dict) -> bool:
-    return tool in GAME_CHANGES or (tool == "research" and bool(args.get("tech")))
+    return tool in GAME_CHANGES or (tool == "research" and bool(args.get("tech"))) or (
+        tool == "diplomacy" and args.get("action", "status") != "status")
 
 
 def _per_turn(turns: list) -> dict:

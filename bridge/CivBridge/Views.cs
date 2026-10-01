@@ -19,6 +19,8 @@ sealed partial class Session {
 			["civ"] = h.civilization.name,
 			["government"] = h.government.name,
 			["anarchy_until"] = h.government.transitionType ? (JsonNode)h.inAnarchyUntilTurn : null,
+			["governments"] = Json.Strings(h.GetAvailableGovernments(gd).Where(g => g != h.government).Select(g => g.name)),
+			["revolution_target"] = revolutionTarget?.name,
 			["gold"] = h.gold,
 			["gold_per_turn"] = h.CalculateGoldPerTurn(),
 			["rates"] = Rates(),
@@ -35,6 +37,7 @@ sealed partial class Session {
 					["civ"] = p.civilization.name,
 					["met"] = met,
 					["at_war"] = met && PlayerRelationship.AtWar(h, p),
+					["peace_price"] = met && PlayerRelationship.AtWar(h, p) && p.PeacePriceFor(gd, h) is int price && price != int.MaxValue ? price : null,
 					["cities_seen"] = p.cities.Count(c => h.tileKnowledge.isTileKnown(c.location)),
 				};
 			}),
@@ -158,6 +161,7 @@ sealed partial class Session {
 			o["can_found_city"] = why == null ? new JsonObject { ["ok"] = true } : new JsonObject { ["ok"] = false, ["reason"] = why };
 		}
 		o["orders"] = Json.Strings(ValidOrders(u));
+		if (AttackTargets(u) is { Count: > 0 } targets) o["attack_targets"] = Json.Array(targets, e => TargetJson(u, e));
 		o["needs_orders"] = NeedsOrders(u);
 		return o;
 	}
@@ -302,7 +306,7 @@ sealed partial class Session {
 	IEnumerable<string> Unlocks(Tech t) =>
 		gd.unitPrototypes.Where(u => u.requiredTech == t && !u.unproducible && u.producibleBy.Contains(human.civilization)).Select(u => u.name)
 			.Concat(gd.Buildings.Where(b => b.requiredTech == t).Select(b => b.name))
-			.Concat(gd.governments.Where(g => g.prerequisiteTech == t.id).Select(g => g.name))
+			.Concat(gd.governments.Where(g => g.prerequisiteTech == t.id).Select(g => $"{g.name} (government)"))
 			.Concat(gd.Terraforms.Where(f => f.RequiredTech == t.id).Select(f => f.Name));
 
 	static string EraName(Tech t) => EraNames[Math.Clamp(EraUtils.GetEraIndex(t.EraCivilopediaName), 0, EraNames.Length - 1)];

@@ -14,7 +14,7 @@ sealed partial class Session {
 
 	sealed record Snapshot(
 		Dictionary<City, CitySnap> Cities, Dictionary<MapUnit, UnitSnap> Units, HashSet<ID> Techs, HashSet<ID> Met, Tech Research,
-		Dictionary<MapUnit, Tile> Barbarians);
+		Dictionary<MapUnit, Tile> Barbarians, HashSet<(Player, Player)> Wars);
 
 	readonly Dictionary<City, int> shieldsLost = [];
 	HashSet<City> riskSeen = [], cappedSeen = [], defenselessSeen = [];
@@ -28,7 +28,8 @@ sealed partial class Session {
 			[.. human.knownTechs],
 			[.. human.playerRelationships.Keys],
 			gd.GetTech(human.currentlyResearchedTech),
-			gd.mapUnits.Where(u => u.owner.isBarbarians).ToDictionary(u => u, u => u.location));
+			gd.mapUnits.Where(u => u.owner.isBarbarians).ToDictionary(u => u, u => u.location),
+			Wars());
 	}
 
 	List<JsonObject> Diff(Snapshot before) {
@@ -81,6 +82,9 @@ sealed partial class Session {
 		}
 		foreach (ID id in human.playerRelationships.Keys.Where(id => !before.Met.Contains(id)))
 			events.Add(Event("contact", $"Met {gd.GetPlayer(id)?.civilization.name}."));
+		foreach (var (p, o) in before.Wars.Where(w => !w.Item1.defeated && !w.Item2.defeated && !PlayerRelationship.AtWar(w.Item1, w.Item2)))
+			events.Add(Event("peace_signed", p == human || o == human
+				? $"Peace with {Owner(p == human ? o : p)}." : $"{Owner(p)} and {Owner(o)} made peace."));
 		return events;
 	}
 

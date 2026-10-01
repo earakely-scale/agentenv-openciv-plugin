@@ -15,13 +15,14 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 
 	static readonly string[] Commands = [
 		"new_game", "load", "state", "map", "city_sites", "unit_order", "city", "set_production", "set_rates", "hurry",
-		"techs", "set_research", "end_turn", "autoplay", "score", "world",
+		"techs", "set_research", "end_turn", "autoplay", "score", "world", "revolution", "diplomacy", "declare_war", "propose_peace",
 	];
 	static readonly string[] Policies = ["null", "found_capital", "settler_bot", "engine_ai"];
 
 	/// <summary>Events that end an end_turn(until_attention) run even when no blocker appears.</summary>
 	static readonly HashSet<string> AttentionEvents =
-		["disorder_started", "riot_risk", "unit_lost", "city_destroyed", "gold_stolen", "war_declared", "defenseless", "threat"];
+		["disorder_started", "riot_risk", "unit_lost", "city_destroyed", "gold_stolen", "war_declared", "defenseless", "threat",
+		 "peace_offered", "government_picked"];
 
 	GameMode mode;
 	GameData gd;
@@ -60,6 +61,10 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 			"end_turn" => await EndTurn(a),
 			"autoplay" => await Autoplay(a),
 			"world" => World(),
+			"revolution" => Revolution(a),
+			"diplomacy" => Diplomacy(),
+			"declare_war" => DeclareWar(a),
+			"propose_peace" => ProposePeace(a),
 			_ => ScoreAll(),
 		};
 	}
@@ -275,15 +280,6 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 		}
 	}
 
-	void PickGovernment() {
-		if (!human.government.transitionType || gd.turn < human.inAnarchyUntilTurn) return;
-		var options = human.GetAvailableGovernments(gd);
-		Government g = options.FirstOrDefault(x => x.name == "Monarchy") ?? options.FirstOrDefault(x => x.defaultType) ?? options.FirstOrDefault();
-		if (g == null) return;
-		human.government = g;
-		autos.Add(Auto("government_picked", $"Anarchy ended and the government became {g.name}."));
-	}
-
 	void EnsurePlaying() {
 		if (!GameOver) return;
 		string why = human.defeated
@@ -308,6 +304,15 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 	void DrainUi() {
 		while (EngineStorage.TryDequeueNextMessageToUI(out MessageToUI m)) {
 			switch (m) {
+				case MsgShowTradeOffer o when o.aiWant.partOfPeaceTreaty || o.aiGive.partOfPeaceTreaty:
+					// The AI's turn waits on this "screen", so the offer is reported and answered at once; the agent can
+					// take it up with propose_peace, at the price the AI asks.
+					uiEvents.Add(Event("peace_offered", $"{o.aiPlayer.civilization.name} offered peace"
+						+ (o.aiWant.gold is > 0 ? $" for {o.aiWant.gold} gold" : "")
+						+ $". Accept with diplomacy(action=\"propose_peace\", civ=\"{o.aiPlayer.civilization.name}\")."));
+					new MsgDiplomacyCompleted().send();
+					EngineStorage.ProcessNextMessageToEngine();
+					break;
 				case MsgShowTradeOffer o:
 					// The AI's turn is suspended until the "diplomacy screen" closes: decline right away.
 					autos.Add(Auto("trade_declined",

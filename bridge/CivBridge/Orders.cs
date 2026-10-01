@@ -10,7 +10,8 @@ namespace CivBridge;
 
 sealed partial class Session {
 	static readonly string[] AllOrders =
-		["settle", "found_city", "goto", "explore", "auto_work", "fortify", "wake", "hold", "disband", "build_road", "build_mine", "irrigate", "clear_forest"];
+		["settle", "found_city", "goto", "explore", "auto_work", "fortify", "wake", "hold", "disband", "build_road", "build_mine", "irrigate", "clear_forest",
+		 "attack", "bombard"];
 
 	static readonly Dictionary<string, string> Jobs = new() {
 		["build_road"] = C7Action.UnitBuildRoad,
@@ -41,6 +42,12 @@ sealed partial class Session {
 				break;
 			case "explore":
 				message = Explore(u);
+				break;
+			case "attack":
+				message = await Attack(u, TargetArg(a));
+				break;
+			case "bombard":
+				message = await BombardOrder(u, TargetArg(a));
 				break;
 			case "auto_work":
 				message = AutoWork(u);
@@ -95,6 +102,8 @@ sealed partial class Session {
 			if (moves && FoundSite(u.location) == null) list.Add("found_city");
 		}
 		if (actions.Contains(UnitAction.Goto)) list.Add("goto");
+		if (AttackTargets(u).Count > 0) list.Add("attack");
+		if (BombardTargets(u).Count > 0) list.Add("bombard");
 		if (u.canExplore()) list.Add("explore");
 		if (u.canAutomate()) list.Add("auto_work");
 		if (actions.Contains(UnitAction.Fortify) && !u.isFortified) list.Add("fortify");

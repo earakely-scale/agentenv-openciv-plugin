@@ -1,6 +1,6 @@
 # Agent tools
 
-The env (`agentenv_openciv3.server.OpenCiv3Env`, card name `openciv3`) exposes ten MCP tools. They
+The env (`agentenv_openciv3.server.OpenCiv3Env`, card name `openciv3`) exposes fourteen MCP tools. They
 return compact text, not JSON: briefs are under about 600 tokens, a radius-3 map under about 700.
 Every tool that changes the game ends with a one-line footer: `[T23/60 · needs orders: u7, c1]`.
 
@@ -13,12 +13,30 @@ the valid alternatives and the exact call to make instead.
 | `list_units` | `filter`: `needs_orders` (default) or `all` | One line per unit: id, type, `(x,y)`, moves, status or standing order, valid orders, and why `found_city` is or isn't possible here. |
 | `view_map` | `x`, `y`, `radius` (default 3, max 6), or `around` (`"u7"`, `"c1"`) | Staggered ASCII of the explored tiles, a legend, then a "notable" list (resources, rivers, foreign units, cities, good sites) with distance and direction. Unexplored tiles are blank. |
 | `find_city_sites` | `unit` (optional), `top` (default 5) | Ranked sites: `(x,y)`, score, distance and direction, travel turns, yields, river or coast. |
-| `unit_order` | `unit`, `order`, `x`, `y` | Result line plus footer. `settle` walks to the site and founds the city on arrival. |
+| `unit_order` | `unit`, `order`, `x`, `y` | Result line plus footer. `settle` walks to the site and founds the city on arrival. `attack` (an adjacent enemy unit or city of a civ at war) and `bombard` (in range) fight with the engine's own combat; a unit next to an enemy lists its targets with an estimated chance to win, and a city that falls is razed. |
 | `city_info` | `city` (optional; all cities when omitted) | Size, food, growth ETA, production and ETA, and what it can build with cost and turns. |
 | `set_production` | `city`, `item` | Result line plus footer. |
 | `research` | `tech` (optional) | With no tech: researchable techs with turns and what each unlocks. With a tech: sets it, queuing any prerequisites. |
 | `end_turn` | `skip_idle` (default false), `until_attention` (default false), `max_turns` (default 5) | Either END TURN BLOCKED with each blocker and the call that resolves it, or the turn report plus the next brief. At the turn limit: `GAME OVER` and final metrics. |
+| `revolution` | `government` | Starts anarchy (no taxes or science for a few turns), then the chosen government. The brief lists the choices. |
+| `diplomacy` | `action` (`status`, `declare_war`, `propose_peace`), `civ`, `gold` | Status: one line per civ you know (war or peace, score, government, military against yours, its wars, and at war the gold it asks for peace or the turn it talks again). `declare_war` starts a war; `propose_peace` pays the asked price. |
 | `plan` | `text` (optional) | Reads, or replaces, the agent's plan (at most 1,000 characters), which every brief shows back. |
+
+## War, peace and government
+
+- **Brief:**
+  - the head shows every war with the price of peace, e.g. `!! at war with Arabia (peace: 120 gold)`;
+  - a `GOVERNMENT` line lists the governments a revolution can switch to, with the call;
+  - during anarchy, the line names the government that follows.
+- **Peace costs what the other civ asks:**
+  - nothing when it is losing or tired of the war, gold when it is winning;
+  - never while it refuses to talk, which happens for some turns after you declare war on it, and longer after
+    breaking a peace.
+  - An AI that wants peace offers it as a `peace_offered` event, which `end_turn(until_attention)` stops for.
+    Accept it with `diplomacy(action="propose_peace", civ=...)`.
+- **Attacks:** an attack on a civ you are at peace with fails with the call that declares war. The win chance
+  comes from the engine's attack and defense strengths and both units' hit points. It ignores retreats, so it is
+  an estimate.
 
 ## Anti-stuck rules (server side)
 

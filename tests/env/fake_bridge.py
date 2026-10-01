@@ -59,6 +59,8 @@ ORDERS = {
     "Warrior": ["explore", "goto", "fortify", "hold", "disband"],
 }
 UNIT_STATS = {"Settler": (1, 3), "Worker": (1, 3), "Warrior": (1, 3)}  # moves, hp
+GOVERNMENTS = ["Monarchy"]
+PEACE_PRICE = 50
 MAX_RATE, BORN_CONTENT, POLICE_LIMIT = 6, 2, 2
 ATTENTION = {"disorder_started", "riot_risk", "unit_lost", "city_destroyed", "gold_stolen", "war_declared",
              "defenseless", "threat"}
@@ -145,6 +147,8 @@ class Game:
         self.explored = set(area(START, 5))
         self.foreign_city = {"name": "Athens", "owner": "Greece", "size": 2, "pos": (18, 6)}
         self.met = False
+        self.government, self.anarchy_until, self.revolution_target = "Despotism", None, None
+        self.wars, self.talks_from, self.barbarian_killed = set(), {}, False
         self.threats_seen = set()
         self.risk_seen = set()
 
@@ -174,13 +178,16 @@ class Game:
         moves, hp = UNIT_STATS[u["type"]]
         status = u["status"] if u["status"] != "idle" or u["moves"] > 0 else "done"
         orders = list(ORDERS[u["type"]]) + (["wake"] if u["status"] not in ("idle", "done") else [])
+        targets = self.attack_targets(u)
+        orders += ["attack"] if targets else []
         target = None
         if u["target"]:
             target = {"x": u["target"][0], "y": u["target"][1], **rel(u["pos"], u["target"])}
         return {"id": u["id"], "type": u["type"], "x": u["pos"][0], "y": u["pos"][1], "moves_left": u["moves"],
                 "moves_max": moves, "hp": u["hp"], "hp_max": hp, "status": status, "target": target,
                 "can_found_city": self.can_found(u["pos"]) if u["type"] == "Settler" else None,
-                "orders": orders, "needs_orders": u["status"] == "idle" and u["moves"] > 0}
+                "orders": orders, "needs_orders": u["status"] == "idle" and u["moves"] > 0,
+                **({"attack_targets": targets} if targets else {})}
 
     def unit(self, uid):
         if uid not in self.units:
@@ -298,7 +305,9 @@ class Game:
         r = self.research
         return {
             "turn": self.turn, "turn_limit": self.turn_limit, "game_over": self.game_over(), "defeated": False,
-            "civ": self.civ, "government": "Despotism", "anarchy_until": None,
+            "civ": self.civ, "government": self.government, "anarchy_until": self.anarchy_until,
+            "governments": [g for g in GOVERNMENTS if g != self.government and not self.anarchy_until],
+            "revolution_target": self.revolution_target,
             "gold": self.gold, "gold_per_turn": self.gpt(),
             "rates": {"tax": 10 - self.rates["science"] - self.rates["luxury"], **self.rates},
             "research": {"current": r, "turns_left": self.tech_turns(r) if r else None, "beakers": self.beakers,
@@ -308,14 +317,76 @@ class Game:
             "explored_pct": round(100 * len(self.explored) / (WIDTH * HEIGHT / 2), 1),
             "cities": [self.city_view(c) for c in self.cities.values()],
             "units": [self.unit_view(u) for u in self.units.values()],
-            "rivals": [{"civ": o, "met": o == "Greece" and self.met, "at_war": False,
-                        "cities_seen": 1 if o == "Greece" else 0} for o in self.opponents],
+            "rivals": [{"civ": o, "met": o == "Greece" and self.met, "at_war": o in self.wars,
+                        "peace_price": self.peace_price(o), "cities_seen": 1 if o == "Greece" else 0}
+                       for o in self.opponents],
             "blockers": self.blockers(), "decisions": json.loads(json.dumps(self.decisions)),
             "last_events": self.last_events,
         }
 
     def barbarian(self):
-        return (18, 12) if self.turn >= 3 else None
+        return (18, 12) if self.turn >= 3 and not self.barbarian_killed else None
+
+    # ---- government and diplomacy ----
+
+    def peace_price(self, civ):
+        return PEACE_PRICE if civ in self.wars and self.turn >= self.talks_from.get(civ, 0) else None
+
+    def civ_view(self, civ) -> dict:
+        war = civ in self.wars
+        return {"civ": civ, "at_war": war, "talks": self.turn >= self.talks_from.get(civ, 0),
+                "refuses_talks_until": (self.talks_from[civ] if war and self.turn < self.talks_from.get(civ, 0)
+                                        else None),
+                "peace_price": self.peace_price(civ), "government": "Despotism", "military_vs_yours": 1.5,
+                "score": {"total": 30 + self.turn, "cities": 1, "pop": 2, "tiles": 9, "techs": 3}, "at_war_with": []}
+
+    def met_civ(self, name) -> str:
+        met = ["Greece"] if self.met else []
+        if name not in met:
+            raise Refused("unknown_civ", f"'{name}' is not a civilization you have met.", met)
+        return name
+
+    def governments_view(self) -> dict:
+        return {"current": self.government, "anarchy_until": self.anarchy_until,
+                "revolution_target": self.revolution_target,
+                "available": [{"name": g, "corruption": "problematic", "hurry": "gold", "tile_penalty": False,
+                               "trade_bonus": False, "unit_cost": 1, "free_units_per_city": 3} for g in GOVERNMENTS]}
+
+    def revolution(self, a) -> dict:
+        if a["government"] not in GOVERNMENTS:
+            raise Refused("unknown_government", f"'{a['government']}' is not a government you can choose.", GOVERNMENTS)
+        self.government, self.anarchy_until, self.revolution_target = "Anarchy", self.turn + 2, a["government"]
+        return {"message": f"Revolution: anarchy until turn {self.anarchy_until}, then {a['government']}.",
+                "government": self.governments_view()}
+
+    def declare_war(self, a) -> dict:
+        civ = self.met_civ(a["civ"])
+        if civ in self.wars:
+            raise Refused("already_at_war", f"You are already at war with {civ}.")
+        self.wars.add(civ)
+        self.talks_from[civ] = self.turn + 2
+        return {"message": f"Rome declared war on {civ}, which refuses to talk until turn {self.talks_from[civ]}.",
+                "civ": self.civ_view(civ)}
+
+    def propose_peace(self, a) -> dict:
+        civ, gold = self.met_civ(a["civ"]), a.get("gold", 0)
+        if civ not in self.wars:
+            raise Refused("not_at_war", f"You are not at war with {civ}.")
+        if self.turn < self.talks_from[civ]:
+            raise Refused("no_talks", f"{civ} refuses to talk to you until turn {self.talks_from[civ]}.")
+        if gold < PEACE_PRICE:
+            raise Refused("price", f"{civ} wants {PEACE_PRICE} gold for peace; you offered {gold}.",
+                          suggest=f'diplomacy(action="propose_peace", civ="{civ}", gold={PEACE_PRICE})')
+        self.wars.discard(civ)
+        self.gold -= gold
+        return {"message": f"Peace with {civ}, for {gold} gold.", "civ": self.civ_view(civ)}
+
+    def attack_targets(self, u) -> list:
+        b = self.barbarian()
+        if u["type"] != "Warrior" or u["moves"] <= 0 or b is None or dist(u["pos"], b) != 1:
+            return []
+        return [{"x": b[0], "y": b[1], **rel(u["pos"], b), "owner": "Barbarians", "defender": "Warrior 3/3 hp",
+                 "city": None, "win_chance": 0.5}]
 
     def occupant(self, p) -> str | None:
         if p == self.foreign_city["pos"]:
@@ -394,6 +465,13 @@ class Game:
         if order in ("found_city", "build_road", "build_mine", "irrigate") and u["moves"] <= 0:
             raise Refused("no_moves", f"{u['id']} {u['type']} has no moves left this turn; give the order next turn.")
         city, path, msg = None, None, ""
+        if order == "attack":
+            if target != self.barbarian():
+                raise Refused("bad_target", f"There is nothing to attack at {target}.", self.attack_targets(u))
+            self.barbarian_killed, u["moves"] = True, 0.0
+            return {"message": f"{u['id']} Warrior attacked the Barbarians Warrior at ({target[0]},{target[1]}) "
+                               "(win chance about 50%) and won: the Barbarians Warrior was destroyed.",
+                    "unit": self.unit_view(u), "city": None, "path": None}
         if order == "found_city" or (order == "settle" and target == u["pos"]):
             if not self.can_found(u["pos"])["ok"]:
                 self.raise_cannot_found(u, u["pos"])
@@ -550,6 +628,10 @@ class Game:
             self.met = True
             events.append({"turn": t, "kind": "contact", "text": "met Greece"})
         self.turn += 1
+        if self.anarchy_until and self.turn >= self.anarchy_until:
+            self.government, self.anarchy_until, self.revolution_target = self.revolution_target, None, None
+            auto.append({"kind": "government_picked",
+                         "text": f"Anarchy ended and the government became {self.government}."})
         self.gold += self.gpt()
         for u in self.units.values():
             u["moves"] = float(UNIT_STATS[u["type"]][0])
@@ -702,6 +784,14 @@ class Game:
             return {"message": f"{c['name']} now builds {item}.", "city": self.city_view(c)}
         if cmd == "set_rates":
             return self.set_rates(a)
+        if cmd == "revolution":
+            return self.revolution(a)
+        if cmd == "diplomacy":
+            return {"civs": [self.civ_view("Greece")] if self.met else [], "unmet": len(self.opponents) - self.met}
+        if cmd == "declare_war":
+            return self.declare_war(a)
+        if cmd == "propose_peace":
+            return self.propose_peace(a)
         if cmd == "hurry":
             return self.hurry(a)
         if cmd == "techs":
@@ -744,6 +834,10 @@ class Game:
             c.update(a)
             self.refresh_moods()
             return self.city_view(c)
+        if cmd == "_unit":
+            u = self.unit(a.pop("id"))
+            u.update({k: tuple(v) if k == "pos" else v for k, v in a.items()})
+            return self.unit_view(u)
         if cmd == "_game":
             for k, v in a.items():
                 setattr(self, k, v)

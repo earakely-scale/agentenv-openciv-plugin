@@ -30,12 +30,57 @@ async def settle_everything(tools):
     await tools("unit_order", unit="u4", order="explore")
 
 
-async def test_twelve_tools_with_descriptions(env):
+async def test_fourteen_tools_with_descriptions(env):
     listed = {t.name: t for t in await env.mcp.list_tools()}
     assert set(listed) == {"get_turn_brief", "list_units", "view_map", "find_city_sites", "unit_order", "city_info",
-                           "set_production", "research", "set_rates", "buy", "end_turn", "plan"}
+                           "set_production", "research", "set_rates", "buy", "revolution", "diplomacy", "end_turn",
+                           "plan"}
     assert all(t.description and t.outputSchema is None for t in listed.values())
     assert "Lost context? Call get_turn_brief." in listed["get_turn_brief"].description
+
+
+async def test_revolution_changes_government_after_anarchy(env, tools):
+    await found_capital(tools)
+    brief = await tools("get_turn_brief")
+    assert 'GOVERNMENT Despotism · can choose Monarchy → revolution(government="Monarchy")' in brief
+    text = await tools("revolution", government="monarchy")
+    assert text.startswith("(read 'monarchy' as 'Monarchy') Revolution: anarchy until turn 3, then Monarchy.")
+    assert "Government: Anarchy, anarchy until T3, then Monarchy" in text
+    assert "GOVERNMENT anarchy, then Monarchy" in await tools("get_turn_brief")
+    await tools("end_turn", skip_idle=True)
+    await tools("end_turn", skip_idle=True)
+    brief = await tools("get_turn_brief")
+    assert brief.startswith("T3/8 · Rome · Monarchy") and "GOVERNMENT" not in brief
+
+
+async def test_diplomacy_war_and_the_price_of_peace(env, tools):
+    assert "none yet: explore to meet them" in await tools("diplomacy")
+    await env.bridge.call("_game", met=True)
+    env.cache = None
+    assert "Greece · at peace · score" in await tools("diplomacy")
+    text = await tools("diplomacy", action="declare_war", civ="greece")
+    assert text.startswith("(read 'greece' as 'Greece') Rome declared war on Greece")
+    assert "Greece · AT WAR (talks refused until T3)" in text
+    assert "!! at war with Greece" in await tools("get_turn_brief")
+    assert "refuses to talk to you until turn 3" in await tools.error("diplomacy", action="propose_peace", civ="Greece")
+    await tools("end_turn", skip_idle=True)
+    await tools("end_turn", skip_idle=True)
+    assert "!! at war with Greece (peace: 50 gold)" in await tools("get_turn_brief")
+    err = await tools.error("diplomacy", action="propose_peace", civ="Greece")
+    assert "Greece wants 50 gold for peace" in err and 'diplomacy(action="propose_peace", civ="Greece", gold=50)' in err
+    text = await tools("diplomacy", action="propose_peace", civ="Greece", gold=50)
+    assert text.startswith("Peace with Greece, for 50 gold.") and "Greece · at peace" in text
+    assert "needs civ" in await tools.error("diplomacy", action="declare_war")
+
+
+async def test_attack_targets_are_listed_and_taken(env, tools):
+    await tools("end_turn", skip_idle=True)
+    await tools("end_turn", skip_idle=True)
+    await env.bridge.call("_unit", id="u4", pos=[17, 11], moves=1.0)
+    env.cache = None
+    assert "attack: (18,12) SE Barbarians Warrior 3/3 hp 50% to win" in await tools("list_units", filter="all")
+    text = await tools("unit_order", unit="u4", order="attack", x=18, y=12)
+    assert "and won: the Barbarians Warrior was destroyed." in text
 
 
 async def test_turn_brief(tools):
