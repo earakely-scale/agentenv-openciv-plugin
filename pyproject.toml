@@ -39,6 +39,7 @@ openciv3 = "agentenv_openciv3.bundles"
 openciv3 = "agentenv_openciv3.cli:openciv3"
 
 [project.entry-points."agent_env.task_steps"]
+openciv3_match = "agentenv_openciv3.steps:OpenCiv3MatchTaskStep"
 save_env_recording = "agentenv_openciv3.steps:SaveEnvRecordingTaskStep"
 
 [tool.hatch.build.targets.wheel]
