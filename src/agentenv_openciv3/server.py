@@ -34,11 +34,14 @@ from agentenv_protocol import (
     reset_data,
     tool,
 )
+from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.lowlevel.server import request_ctx
 from pydantic import Field
+from starlette.requests import Request
+from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
-from . import client, recording, render
+from . import client, live, recording, render
 from .actionlog import ActionLog
 from .baselines import POLICIES, Baselines
 from .bridge import DEAD, Bridge, BridgeError
@@ -937,6 +940,47 @@ class OpenCiv3Env(AgentEnvEnvironment):
         return {"turns": len(snapshots), "notes": notes,
                 "files": [{"name": f.name, "content_type": f.content_type, "bytes": len(f.data),
                            "base64": base64.b64encode(f.data).decode()} for f in files]}
+
+    # ---- live view: GET /live follows the game while it plays ----
+
+    def create_app(self) -> FastMCP:
+        app = super().create_app()
+        self.live = live.Live()
+        for path, handler in (("/live", self._live_page), ("/live/state.json", self._live_state),
+                              ("/live/frame.png", self._live_frame), ("/live/client.png", self._live_client)):
+            app.custom_route(path, methods=["GET"])(handler)
+        return app
+
+    async def _live_page(self, request: Request) -> Response:
+        return HTMLResponse(live.PAGE)
+
+    async def _live_state(self, request: Request) -> Response:
+        async with self.lock:
+            game_dir, timeline = self.game_dir, self._timeline()
+        snap = await asyncio.to_thread(live.latest, game_dir / "record") if game_dir else None
+        return JSONResponse(live.state(snap, timeline, game=game_dir and game_dir.name, has_client=self.client))
+
+    async def _live_frame(self, request: Request) -> Response:
+        turn, view = request.query_params.get("turn", ""), request.query_params.get("view", "spectator")
+        if not (turn == "" or turn.isdigit()) or view not in live.VIEWS:
+            return PlainTextResponse(f"turn is a number and view one of {', '.join(live.VIEWS)}", 400)
+        async with self.lock:
+            game_dir = self.game_dir
+        png = game_dir and await self.live.frame(game_dir / "record", int(turn) if turn else None, view)
+        if png is None:
+            return PlainTextResponse("the game has not reached that turn", 404)
+        return Response(png, media_type="image/png")
+
+    async def _live_client(self, request: Request) -> Response:
+        if not self.client:
+            return PlainTextResponse(f"no client view here: {self.client_missing}", 404)
+        async with self.lock:
+            game_dir = self.game_dir
+        shown = self.live.client_view(game_dir / "saves") if game_dir else None
+        if shown is None:
+            return PlainTextResponse("The client is drawing its first frame.", 503, headers={"Retry-After": "2"})
+        turn, png = shown
+        return Response(png, media_type="image/png", headers={"X-OpenCiv3-Turn": str(turn)})
 
 
 def main() -> None:

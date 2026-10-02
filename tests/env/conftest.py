@@ -86,3 +86,23 @@ async def tool_env(env_vars, monkeypatch):
     yield make
     for e in made:
         await e.close()
+
+
+@pytest.fixture
+def fake_client(env_vars, tmp_path, monkeypatch):
+    """A client install whose capture.sh draws one PNG per save it is given: the env's client path, without Godot."""
+    home = tmp_path / "client"
+    (home / "OpenCiv3/C7").mkdir(parents=True)
+    (home / "OpenCiv3/C7/project.godot").write_text("")
+    (home / "capture.sh").write_text(f"""#!{sys.executable}
+import sys
+from pathlib import Path
+from PIL import Image
+saves, out = Path(sys.argv[2]), Path(sys.argv[3])
+for save in [saves] if saves.is_file() else sorted(saves.glob("turn-*.json.gz")):
+    Image.new("RGB", (64, 48), (40, 90, 160)).save(out / (save.name.split(".")[0] + ".png"))
+""")
+    (home / "capture.sh").chmod(0o755)
+    monkeypatch.setenv("OPENCIV_CLIENT", str(home))
+    monkeypatch.setenv("GODOT", sys.executable)
+    return home
