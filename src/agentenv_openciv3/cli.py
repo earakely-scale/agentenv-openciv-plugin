@@ -71,6 +71,9 @@ def setup(env_id: str, source: Path | None, build_platform: str | None, image: s
         build_platform = build_platform or _docker_platform()
         with_client = " with the OpenCiv3 client" if client else ""
         click.echo(f"Building {image} for {build_platform} from {root}{with_client}")
+        if subprocess.run(["docker", "buildx", "version"], capture_output=True).returncode:
+            raise click.ClickException("Docker's buildx plugin is required for the image builds. Docker Desktop has "
+                                       "it; on Debian or Ubuntu: sudo apt-get install docker-buildx")
         target = ["--target", "client"] if client else []
         build = ["docker", "build", "--platform", build_platform, *target, "-t", image, str(root)]
         if subprocess.run(build).returncode:

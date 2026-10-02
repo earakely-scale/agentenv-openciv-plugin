@@ -45,6 +45,11 @@ need git "https://git-scm.com"
 need docker "https://docs.docker.com/get-docker/ (Docker Desktop, Rancher Desktop or OrbStack on a Mac)"
 need uv "curl -LsSf https://astral.sh/uv/install.sh | sh"
 docker info >/dev/null 2>&1 || { echo "Docker is installed but not running; start it and run this again." >&2; exit 1; }
+docker buildx version >/dev/null 2>&1 || {
+	echo "Docker's buildx plugin is required for the image builds. Docker Desktop has it; on Debian or Ubuntu:" >&2
+	echo "  sudo apt-get install docker-buildx" >&2
+	exit 1
+}
 
 # A checkout when run as scripts/install.sh from one, else clone (or update) one.
 here=$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd || true)

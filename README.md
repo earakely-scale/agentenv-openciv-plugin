@@ -36,7 +36,8 @@ territory and techs.
 
 ## Quickstart
 
-You need Docker, [uv](https://docs.astral.sh/uv/) and git. One command clones the repository, installs
+You need Docker with its buildx plugin (Docker Desktop has it; on Debian or Ubuntu, `apt-get install docker.io
+docker-buildx`), [uv](https://docs.astral.sh/uv/) and git. One command clones the repository, installs
 `agent-env` with the plugin, builds and registers the env, and plays the smoke game:
 
 ```bash

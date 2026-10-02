@@ -35,3 +35,16 @@ def test_recordings_lists_and_copies_out_one_runs_files(local_stores, tmp_path):
     listed = CliRunner().invoke(openciv3, ["recordings"]).output
     assert "play-recording-bbb.mp4 v1" in listed and "other.mp4" not in listed
     assert CliRunner().invoke(openciv3, ["recordings", "zzz"]).exit_code == 1
+
+
+def test_setup_asks_for_buildx_before_building(tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+    docker.write_text('#!/bin/sh\ncase "$1 $2" in\n  "version --format") echo linux/amd64 ;;\n'
+                      '  "buildx version") exit 1 ;;\n  *) echo "unexpected: docker $*" >&2; exit 2 ;;\nesac\n')
+    docker.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+    result = CliRunner().invoke(openciv3, ["setup", "--source", str(Path(__file__).resolve().parents[2])])
+    assert result.exit_code == 1
+    assert "sudo apt-get install docker-buildx" in result.output and "unexpected" not in result.output
