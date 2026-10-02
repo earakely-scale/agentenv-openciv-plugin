@@ -10,12 +10,11 @@ fourteen MCP tools; every game is graded, recorded, and can be watched live whil
 environment plugin for the [AgentEnv Framework](https://www.agentenvframework.com), Scale AI's open-source framework
 for building RL environments.
 
-![Opus (Rome), Sonnet (Greece) and Haiku (Egypt) playing one 300-turn game, in the real OpenCiv3 client](docs/media/three-agents-client.gif)
+![Nine models from five labs play one 200-turn game of OpenCiv3: the map, the scoreboard and the score chart, turn by turn](docs/media/frontier.gif)
 
-*Opus 5.5 (Rome), Sonnet 5.5 (Greece) and Haiku 4.5 (Egypt) play one 300-turn game against each other, in the real
-OpenCiv3 client, from Rome's side ([full video](docs/media/three-agents-client.mp4),
-[the whole map](docs/media/three-agents.mp4), [the task](src/agentenv_openciv3/bundles/openciv3/tasks/three-agents.json)).
-Opus won with 45 cities; see [Results](#results).*
+*The `frontier` match: nine models from five labs, a civilization each, play one 200-turn game. GPT-5.6 Sol (Codex)
+won with 40 cities, ahead of Opus 5.5 and Sonnet 5.5 (Claude Code); see [Results](#results)
+([video](docs/media/frontier.mp4), [the task](src/agentenv_openciv3/bundles/openciv3/tasks/frontier.json)).*
 
 **Contents:** [Run it yourself](#run-it-yourself) · [Watch it live](#watch-it-live) ·
 [How a match is built](#how-a-match-is-built) · [Built on the AgentEnv Framework](#built-on-the-agentenv-framework) ·
@@ -43,7 +42,11 @@ line like this, and the run, its grade and its recording are stored under `~/.lo
 tasks/three-agents-quick.json v1: passed (grade: 1), 182.4s, instance @local/agentenv-openciv3/openciv3/three-agents-quick-...
 ```
 
-While it plays, open a second terminal and [watch it live](#watch-it-live):
+With a [LiteLLM](https://docs.litellm.ai/) proxy that serves all nine models, the same command plays the flagship
+nine-model match: `bash -s -- --base-url https://your-litellm-proxy --run frontier-quick` (10 turns), then
+`agent-env run openciv3 --task frontier` for the full 200.
+
+While a match plays, open a second terminal and [watch it live](#watch-it-live):
 `cd agentenv-openciv-plugin && agent-env openciv3 watch --open`. Run `agent-env` from inside the checkout: its
 `.agentenv/config.toml` names the default agent and where the model key is. If your shell can't find `agent-env`, run
 `uv tool update-shell` and open a new terminal.
@@ -69,7 +72,7 @@ Then, from the checkout (`cd agentenv-openciv-plugin`), play any task in the bun
 | `full-game` | one agent against 7 AI civs, at Civilization III's own settings | Standard, 540 | 46 min, $13 on Sonnet |
 | `three-agents` | Opus, Sonnet and Haiku against each other | Small, 300 | 68 min, $32 |
 | `three-agents-quick` | the same match | Small, 10 | 3 min, $0.30 |
-| `frontier` | nine models from five labs: Claude, GPT, Gemini, Grok, Kimi | Standard, 200 | 1 h 52 min, about $80 |
+| **`frontier`** | nine models from five labs: Claude, GPT, Gemini, Grok, Kimi (the flagship) | Standard, 200 | 1 h 52 min, about $80 |
 | `frontier-quick` | the same match | Standard, 10 | 8 min, $1.70 |
 
 ```bash
@@ -152,8 +155,8 @@ recordings` lists them and copies them out ([docs/recording.md](docs/recording.m
 ## How a match is built
 
 An AgentEnv [task](https://www.agentenvframework.com/docs/tasks) is a DAG of steps; agent-env runs every step whose
-dependencies are done, so independent steps run at the same time. This is the `three-agents` task (`frontier` is the
-same with nine players):
+dependencies are done, so independent steps run at the same time. Every match has this shape, shown here with three
+players as in `three-agents`; `frontier` has nine:
 
 ```mermaid
 flowchart LR
@@ -347,41 +350,13 @@ founding a city, and the score as a fraction of `settler_bot`'s, with gates for 
 
 ## Results
 
-### Three agents in one game
-
-`three-agents`: Opus 5.5 as Rome, Sonnet 5.5 as Greece and Haiku 4.5 as Egypt, on a Small map at Regent with roaming
-barbarians and no AI civilizations, 300 turns (seed 1). It passed with grade 1: the game reached T300 in 68 minutes,
-the engine never restarted, and every agent played every one of its turns.
-
-| At T300 | Opus (Rome) | Haiku (Egypt) | Sonnet (Greece) |
-|---|---|---|---|
-| Rank and score | **1st, 1,546** | 2nd, 1,233 | 3rd, 1,082 |
-| Cities, population | 45, 212 | 28, 163 | 29, 144 |
-| Techs | 22 | 21 | **26** |
-| Share of the land, of the population | 27.7%, 40.9% | **32.3%**, 31.4% | 20.5%, 27.8% |
-| Government | Monarchy | Despotism | Monarchy |
-| Production picks (agent / engine) | 285 / 1 | 51 / 248 | 146 / 36 |
-| Tool calls (failed) | 1,282 (3.0%) | 545 (1.8%) | 805 (4.0%) |
-| Cost | $20.95 | $4.64 | $6.58 |
-
-- **Expansion decided it.** Opus reached 45 cities by T150, then stopped founding them; its score rose from 1,261
-  to 1,546 over the last 150 turns. Haiku left most production picks to the engine but kept settling to the end,
-  and passed Sonnet's score around T250.
-- **No war between the agents.** All three stayed at peace all game; their nine attacks were all on barbarians.
-- **The engine's upkeep rule bites.** When a civ's gold would go negative, the engine disbands random units to pay
-  their support: Egypt lost 12 at once on T277.
-
 ### Nine models in one game
 
 `frontier`: nine models from five labs, each through its lab's own CLI where there is one, on a Standard map at
 Regent with roaming barbarians and no AI civilizations, 200 turns (seed 1). It passed with grade 1 in 1 hour 52
 minutes on an 8-core machine. Every agent played to T200; the env ended 10 of the 1,800 seat-turns for an agent that
-had gone quiet (9 of them Kimi's, under the 10% limit).
-
-[![The frontier match at turn 200: the map with nine civilizations, the final scores and the score chart](docs/media/frontier-final.jpg)](docs/media/frontier.mp4)
-
-*The last turn of the `frontier` match ([the whole game as a video](docs/media/frontier.mp4),
-[the task](src/agentenv_openciv3/bundles/openciv3/tasks/frontier.json)).*
+had gone quiet (9 of them Kimi's, under the 10% limit). The [video](docs/media/frontier.mp4) shows
+the whole game, a frame per turn.
 
 | Rank | Model (CLI) | Civ | Score | Cities | Population | Techs | Government | Tool calls (failed) | Cost |
 |---|---|---|---|---|---|---|---|---|---|
@@ -403,6 +378,32 @@ had gone quiet (9 of them Kimi's, under the 10% limit).
   the map; no one else passed 38%.
 - **Cost:** about $80 in all. Opus, Sonnet and Haiku's costs are Claude Code's own; the others are their tokens at
   list prices (LiteLLM's price table).
+
+### Three agents in one game
+
+`three-agents`: Opus 5.5 as Rome, Sonnet 5.5 as Greece and Haiku 4.5 as Egypt, on a Small map at Regent with roaming
+barbarians and no AI civilizations, 300 turns (seed 1). It passed with grade 1: the game reached T300 in 68 minutes,
+the engine never restarted, and every agent played every one of its turns. Watch it in the real OpenCiv3 client, from
+Rome's side ([video](docs/media/three-agents-client.mp4), [GIF](docs/media/three-agents-client.gif)), or
+[the whole map](docs/media/three-agents.mp4).
+
+| At T300 | Opus (Rome) | Haiku (Egypt) | Sonnet (Greece) |
+|---|---|---|---|
+| Rank and score | **1st, 1,546** | 2nd, 1,233 | 3rd, 1,082 |
+| Cities, population | 45, 212 | 28, 163 | 29, 144 |
+| Techs | 22 | 21 | **26** |
+| Share of the land, of the population | 27.7%, 40.9% | **32.3%**, 31.4% | 20.5%, 27.8% |
+| Government | Monarchy | Despotism | Monarchy |
+| Production picks (agent / engine) | 285 / 1 | 51 / 248 | 146 / 36 |
+| Tool calls (failed) | 1,282 (3.0%) | 545 (1.8%) | 805 (4.0%) |
+| Cost | $20.95 | $4.64 | $6.58 |
+
+- **Expansion decided it.** Opus reached 45 cities by T150, then stopped founding them; its score rose from 1,261
+  to 1,546 over the last 150 turns. Haiku left most production picks to the engine but kept settling to the end,
+  and passed Sonnet's score around T250.
+- **No war between the agents.** All three stayed at peace all game; their nine attacks were all on barbarians.
+- **The engine's upkeep rule bites.** When a civ's gold would go negative, the engine disbands random units to pay
+  their support: Egypt lost 12 at once on T277.
 
 ### One agent against seven AI civilizations
 
