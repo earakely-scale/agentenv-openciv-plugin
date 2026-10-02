@@ -7,12 +7,13 @@ same-seed baselines (one of them a scripted bot that plays through the same tool
 play one game against each other, a civilization each. Every game can be saved as a video and an HTML
 replay.
 
-![Opus (Rome), Sonnet (Greece) and Haiku (Egypt) playing one 300-turn game](docs/media/three-agents.gif)
+![Opus (Rome), Sonnet (Greece) and Haiku (Egypt) playing one 300-turn game, in the real OpenCiv3 client](docs/media/three-agents-client.gif)
 
-*The `three-agents` task: Opus 5.5 (Rome), Sonnet 5.5 (Greece) and Haiku 4.5 (Egypt) play one 300-turn game
-against each other, shown every third turn ([full video](docs/media/three-agents.mp4), [the task's
-JSON](src/agentenv_openciv3/bundles/openciv3/tasks/three-agents.json)). Opus finished first with 1,546 points and 45
-cities; see [Results](#three-agents-in-one-game).*
+*The `three-agents` task in the real OpenCiv3 client: Opus 5.5 (Rome), Sonnet 5.5 (Greece) and Haiku 4.5 (Egypt)
+play one 300-turn game against each other, shown every third turn from Rome's side, so the other two appear where
+Rome has explored ([full video](docs/media/three-agents-client.mp4), [the whole map](docs/media/three-agents.mp4),
+[the task's JSON](src/agentenv_openciv3/bundles/openciv3/tasks/three-agents.json)). Opus finished first with 1,546
+points and 45 cities; see [Results](#three-agents-in-one-game).*
 
 The game runs headless: no Godot, no display and no Civilization III files. One env serves one game
 at a time, and a game is deterministic: the same seed and the same actions give the same game.
