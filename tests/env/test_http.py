@@ -1,6 +1,7 @@
 """The env as deployed: `python -m agentenv_openciv3.server` on a free port, driven over HTTP and MCP."""
 
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -19,6 +20,7 @@ SRC = Path(__file__).resolve().parents[2] / "src"
 REAL_CMD = os.environ.get("CIVBRIDGE_CMD", str(SRC.parent / "build" / "bridge" / "CivBridge"))
 TOOLS = {"get_turn_brief", "list_units", "view_map", "find_city_sites", "unit_order", "city_info", "set_production",
          "research", "set_rates", "buy", "revolution", "diplomacy", "end_turn", "plan"}
+END_TURN = ("end_turn", {"skip_idle": True})
 
 
 def free_port() -> int:
@@ -140,6 +142,93 @@ async def test_the_seat_header_over_http(env_vars):
             await session.initialize()
             brief = await session.call_tool("get_turn_brief", {})
             assert not brief.isError and brief.content[0].text.startswith("T0/8 · Egypt")
+    finally:
+        proc.terminate()
+        proc.wait(10)
+
+
+async def play(base: str, civ: str, *calls: tuple[str, dict]) -> None:
+    """The agent playing `civ` makes these tool calls."""
+    async with httpx.AsyncClient(headers={"X-OpenCiv3-Seat": civ}, timeout=60) as http, \
+            streamable_http_client(f"{base}/mcp", http_client=http) as (read, write, _), \
+            ClientSession(read, write) as session:
+        await session.initialize()
+        for name, args in calls:
+            assert not (await session.call_tool(name, args)).isError
+
+
+async def test_the_live_view_follows_the_game(env_vars):
+    proc, base = await serve(env_vars, CIVBRIDGE_CMD=REAL_CMD)
+    try:
+        async with httpx.AsyncClient(base_url=base) as http:
+            page = await http.get("/live")
+            assert page.headers["content-type"].startswith("text/html") and 'fetch("live/state.json"' in page.text
+            assert (await http.get("/live/state.json")).json() == {
+                "game": None, "turn": None, "turn_limit": None, "game_over": False, "victory": None, "players": [],
+                "events": [], "actions": [], "client": False}
+            assert (await http.get("/live/frame.png")).status_code == 404
+
+            await client.invoke_extension(base, await client.get_card(base), "urn:openciv3:new-game/v1", {
+                "seed": 1, "opponents": 2, "seats": ["Greece", "Egypt"],
+                "labels": {"Rome": "A", "Greece": "B", "Egypt": "C"}})
+            state = (await http.get("/live/state.json")).json()
+            assert (state["turn"], state["turn_limit"], state["game_over"], state["victory"]) == (0, 8, False, None)
+            assert sorted((p["civ"], p["label"]) for p in state["players"] if p["is_agent"]) == [
+                ("Egypt", "C"), ("Greece", "B"), ("Rome", "A")]
+            for view in ("spectator", "agent"):
+                frame = await http.get("/live/frame.png", params={"turn": 0, "view": view})
+                assert frame.headers["content-type"] == "image/png" and frame.content.startswith(b"\x89PNG")
+            assert (await http.get("/live/frame.png", params={"turn": 1})).status_code == 404
+            assert (await http.get("/live/frame.png", params={"view": "god"})).status_code == 400
+            assert (await http.get("/live/client.png")).status_code == 404
+
+            async with anyio.create_task_group() as tg:
+                for civ in ("Rome", "Greece", "Egypt"):
+                    tg.start_soon(play, base, civ, ("unit_order", {"unit": "u1", "order": "found_city"}), END_TURN)
+            state = (await http.get("/live/state.json")).json()
+            assert state["turn"] == 1
+            assert sorted(a["text"] for a in state["actions"]) == ["A: u1 found_city", "B: u1 found_city",
+                                                                   "C: u1 found_city"]
+            assert {p["civ"]: p["score"]["cities"] for p in state["players"] if p["is_agent"]} == {
+                "Rome": 1, "Greece": 1, "Egypt": 1}
+            latest = await http.get("/live/frame.png")
+            assert latest.content == (await http.get("/live/frame.png", params={"turn": 1})).content
+
+            await client.invoke_extension(base, await client.get_card(base), "urn:openciv3:new-game/v1", {
+                "seed": 1, "opponents": 1, "seats": ["Greece"], "labels": {"Rome": "A", "Greece": "B"}})
+            await play(base, "Greece", *(("unit_order", {"unit": u, "order": "disband"}) for u in ("u2", "u1")))
+            await play(base, "Rome", END_TURN)
+            won = (await http.get("/live/state.json")).json()
+            assert won["victory"] == {"kind": "conquest", "civ": "Rome", "label": "A", "turn": 1} and won["game_over"]
+            assert won["game"] != state["game"] and [(p["label"], p["defeated"]) for p in won["players"]] == [
+                ("A", False), ("B", True)]
+            assert (await http.get("/live/frame.png")).content.startswith(b"\x89PNG")
+    finally:
+        proc.terminate()
+        proc.wait(10)
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+async def test_the_live_client_view_draws_the_newest_save(fake_client, env_vars):
+    proc, base = await serve(env_vars, OPENCIV_CLIENT=str(fake_client))
+    try:
+        await client.reset_data(base)
+        async with httpx.AsyncClient(base_url=base) as http:
+            assert (await http.get("/live/state.json")).json()["client"] is True
+            first = await http.get("/live/client.png", params={"turn": 1})
+            assert first.status_code == 503 and first.headers["retry-after"] == "2"
+            with anyio.fail_after(10):
+                while (shown := await http.get("/live/client.png", params={"turn": 1})).status_code == 503:
+                    await anyio.sleep(0.1)
+            assert shown.headers["x-openciv3-turn"] == "1" and shown.content.startswith(b"\x89PNG")
+
+            await client.invoke_extension(base, await client.get_card(base), "urn:openciv3:autoplay/v1", {"turns": 3})
+            turns = []
+            with anyio.fail_after(10):
+                while not turns or turns[-1] != "4":
+                    turns.append((await http.get("/live/client.png", params={"turn": 4})).headers["x-openciv3-turn"])
+                    await anyio.sleep(0.1)
+        assert turns[0] == "1" and set(turns) == {"1", "4"}
     finally:
         proc.terminate()
         proc.wait(10)

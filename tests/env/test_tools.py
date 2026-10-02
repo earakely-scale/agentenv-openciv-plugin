@@ -2,7 +2,6 @@ import base64
 import io
 import re
 import shutil
-import sys
 
 import anyio
 import pytest
@@ -608,26 +607,6 @@ async def test_recording_mp4_or_gif_fallback(env, tools, monkeypatch):
     res = await env.recording(formats=["mp4"])
     assert [f["name"] for f in res["files"]] == ["openciv3-seed3.gif"]
     assert "the mp4 was replaced by an animated gif" in res["notes"][0]
-
-
-@pytest.fixture
-def fake_client(env_vars, tmp_path, monkeypatch):
-    """A client install whose capture.sh draws one PNG per kept save: the env's client path, without Godot."""
-    home = tmp_path / "client"
-    (home / "OpenCiv3/C7").mkdir(parents=True)
-    (home / "OpenCiv3/C7/project.godot").write_text("")
-    (home / "capture.sh").write_text(f"""#!{sys.executable}
-import sys
-from pathlib import Path
-from PIL import Image
-saves, out = Path(sys.argv[2]), Path(sys.argv[3])
-for save in sorted(saves.glob("turn-*.json.gz")):
-    Image.new("RGB", (64, 48), (40, 90, 160)).save(out / (save.name.split(".")[0] + ".png"))
-""")
-    (home / "capture.sh").chmod(0o755)
-    monkeypatch.setenv("OPENCIV_CLIENT", str(home))
-    monkeypatch.setenv("GODOT", sys.executable)
-    return home
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")

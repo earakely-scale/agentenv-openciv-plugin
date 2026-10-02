@@ -2,6 +2,7 @@ import shlex
 import sys
 from pathlib import Path
 
+import click
 from agent_env.artifact import FileArtifact
 from click.testing import CliRunner
 
@@ -37,14 +38,39 @@ def test_recordings_lists_and_copies_out_one_runs_files(local_stores, tmp_path):
     assert CliRunner().invoke(openciv3, ["recordings", "zzz"]).exit_code == 1
 
 
-def test_setup_asks_for_buildx_before_building(tmp_path, monkeypatch):
+def fake_docker(tmp_path, monkeypatch, cases: str) -> None:
+    """A docker on PATH that runs the shell `case` arms in `cases` on its first two arguments."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     docker = bin_dir / "docker"
-    docker.write_text('#!/bin/sh\ncase "$1 $2" in\n  "version --format") echo linux/amd64 ;;\n'
-                      '  "buildx version") exit 1 ;;\n  *) echo "unexpected: docker $*" >&2; exit 2 ;;\nesac\n')
+    docker.write_text(f'#!/bin/sh\ncase "$1 $2" in\n{cases}  *) echo "unexpected: docker $*" >&2; exit 2 ;;\nesac\n')
     docker.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+
+
+def test_setup_asks_for_buildx_before_building(tmp_path, monkeypatch):
+    fake_docker(tmp_path, monkeypatch, '  "version --format") echo linux/amd64 ;;\n  "buildx version") exit 1 ;;\n')
     result = CliRunner().invoke(openciv3, ["setup", "--source", str(Path(__file__).resolve().parents[2])])
     assert result.exit_code == 1
     assert "sudo apt-get install docker-buildx" in result.output and "unexpected" not in result.output
+
+
+def test_watch_prints_the_live_view_of_each_running_env(tmp_path, monkeypatch):
+    ps = ("localhost:5000/mcp-server-openciv3:v2\t127.0.0.1:49293->18765/tcp\tagent-local-new\n"
+          "registry:2\t127.0.0.1:5000->5000/tcp\tregistry\n"
+          "mcp-server-openciv3\t0.0.0.0:41000->18765/tcp, [::]:41000->18765/tcp\tagent-local-old\n"
+          "a2a-agent-openciv3-claude\t\tplayer\n")
+    (tmp_path / "ps.txt").write_text(ps)
+    fake_docker(tmp_path, monkeypatch, f'  "ps --format") cat {tmp_path / "ps.txt"} ;;\n')
+    opened = []
+    monkeypatch.setattr(click, "launch", opened.append)
+    result = CliRunner().invoke(openciv3, ["watch", "--open"])
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines() == ["http://127.0.0.1:49293/live  (agent-local-new)",
+                                          "http://127.0.0.1:41000/live  (agent-local-old)"]
+    assert opened == ["http://127.0.0.1:49293/live"]
+
+    (tmp_path / "ps.txt").write_text("registry:2\t127.0.0.1:5000->5000/tcp\tregistry\n")
+    result = CliRunner().invoke(openciv3, ["watch"])
+    assert result.exit_code == 1
+    assert "no OpenCiv3 env is running; agent-env run starts one" in result.output

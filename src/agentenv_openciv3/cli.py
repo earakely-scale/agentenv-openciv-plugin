@@ -1,7 +1,9 @@
-"""`agent-env openciv3`: register the OpenCiv3 env, serve it locally without Docker, and fetch game recordings."""
+"""`agent-env openciv3`: register the OpenCiv3 env, serve it locally without Docker, watch a game live, and fetch game
+recordings."""
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -15,11 +17,12 @@ from agent_env.env import MCPServerEnv
 ENVIRONMENT_NAME = "openciv3"
 PLAYER_ID = "openciv3-claude"
 REPO = "https://github.com/earakely-scale/agentenv-openciv-plugin"
+ENV_PORT = re.compile(r":(\d+)->18765/tcp")
 
 
 @click.group()
 def openciv3():
-    """OpenCiv3: build and register the env, serve it locally, and fetch game recordings."""
+    """OpenCiv3: build and register the env, serve it locally, watch a game live, and fetch game recordings."""
 
 
 def _checkout(source: Path | None) -> Path:
@@ -35,16 +38,19 @@ def _checkout(source: Path | None) -> Path:
     raise click.UsageError(f"no checkout of agentenv-openciv-plugin found; clone {REPO} and pass --source")
 
 
-def _docker_platform() -> str:
-    """The Docker host's own platform: the local `server` provider pulls images without emulation."""
+def _docker(*args: str) -> str:
     try:
-        out = subprocess.run(["docker", "version", "--format", "{{.Server.Os}}/{{.Server.Arch}}"],
-                             capture_output=True, text=True, timeout=60)
+        out = subprocess.run(["docker", *args], capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as e:
         raise click.ClickException(f"docker is not available: {e}") from e
     if out.returncode:
         raise click.ClickException(f"docker is not running: {out.stderr.strip()}")
     return out.stdout.strip()
+
+
+def _docker_platform() -> str:
+    """The Docker host's own platform: the local `server` provider pulls images without emulation."""
+    return _docker("version", "--format", "{{.Server.Os}}/{{.Server.Arch}}")
 
 
 @openciv3.command()
@@ -166,3 +172,21 @@ def recordings(instance: str | None, out: Path | None):
             path.write_bytes(a.load())
             line += f"  -> {path}"
         click.echo(line)
+
+
+@openciv3.command()
+@click.option("--open", "open_page", is_flag=True, help="Open the newest env's live view in the browser.")
+def watch(open_page: bool):
+    """Print the live view of every OpenCiv3 env running in Docker, newest first: a page that follows the game while
+    the agents play it."""
+    urls = []
+    for line in _docker("ps", "--format", "{{.Image}}\t{{.Ports}}\t{{.Names}}").splitlines():
+        image, ports, name = line.split("\t")
+        if "mcp-server-openciv3" in image and (port := ENV_PORT.search(ports)):
+            urls.append(f"http://127.0.0.1:{port[1]}/live")
+            click.echo(f"{urls[-1]}  ({name})")
+    if not urls:
+        raise click.ClickException("no OpenCiv3 env is running; agent-env run starts one, e.g. "
+                                   "agent-env run openciv3 --task three-agents-quick")
+    if open_page:
+        click.launch(urls[0])
