@@ -152,11 +152,15 @@ def test_defeated_seats_rank_after_the_undefeated_ones():
     assert [r["rank"] for r in rows[1:4]] == [1, 3, 2]
 
 
-def test_a_match_that_did_not_end_or_an_agent_sat_out_does_not_count():
+def test_an_unfinished_match_a_failed_engine_or_a_sat_out_agent_does_not_count():
     unfinished = victor_verifier.grade(match_summary(turn=120))
     assert [r["criterion"] for r in unfinished if r["result"] is False and r.get("weight") != 0] == [
         "the match has a victor", "the match was played to its end"]
     assert score(unfinished) == 0.0
+    failed = victor_verifier.grade(match_summary(engine_failed=True))
+    assert [r["criterion"] for r in failed if r["result"] is False and r.get("weight") != 0] == [
+        "the engine kept running"]
+    assert score(failed) == 0.0
     sat_out = victor_verifier.grade(match_summary(auto_ended=(0, 31, 0)))
     assert sat_out[-1]["result"] is False and sat_out[-1]["auto_ended_turns"] == {"Rome": 0, "Greece": 31, "Egypt": 0}
     assert score(sat_out) == 0.0
