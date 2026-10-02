@@ -22,7 +22,7 @@ ENV_PORT = re.compile(r":(\d+)->18765/tcp")
 
 @click.group()
 def openciv3():
-    """OpenCiv3: build and register the env, serve it locally, and fetch game recordings."""
+    """OpenCiv3: build and register the env, serve it locally, watch a game live, and fetch game recordings."""
 
 
 def _checkout(source: Path | None) -> Path:

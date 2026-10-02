@@ -962,7 +962,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
 
     async def _live_frame(self, request: Request) -> Response:
         turn, view = request.query_params.get("turn", ""), request.query_params.get("view", "spectator")
-        if not (turn == "" or turn.isdigit()) or view not in live.VIEWS:
+        if not (turn == "" or turn.isdecimal()) or view not in live.VIEWS:
             return PlainTextResponse(f"turn is a number and view one of {', '.join(live.VIEWS)}", 400)
         async with self.lock:
             game_dir = self.game_dir

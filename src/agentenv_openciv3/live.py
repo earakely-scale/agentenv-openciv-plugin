@@ -22,14 +22,20 @@ def turn_of(path: Path) -> int:
     return int(path.name.split(".")[0].removeprefix("turn-"))
 
 
+def read(path: Path) -> dict | None:
+    """A snapshot, or None while the bridge is still writing it."""
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, EOFError, ValueError):
+        return None
+
+
 def latest(record: Path) -> dict | None:
     """The newest snapshot that reads whole: the bridge may be writing the next one."""
     for path in sorted(record.glob("turn-*.json.gz"), reverse=True):
-        try:
-            with gzip.open(path, "rt", encoding="utf-8") as f:
-                return json.load(f)
-        except (OSError, EOFError, ValueError):
-            continue
+        if (snap := read(path)) is not None:
+            return snap
     return None
 
 
@@ -55,12 +61,15 @@ def state(snap: dict | None, timeline: dict[int, list[dict]], *, game: str | Non
 
 
 def render_frame(record: Path, turn: int, view: str) -> bytes | None:
-    """The map and score chart of `turn`, as the HTML replay shows them; None until its snapshot is written."""
-    snaps = [s for s in recording.load_snapshots(record) if s["turn"] <= turn]
-    if not snaps or snaps[-1]["turn"] != turn:
+    """The map and score chart of `turn`, as the HTML replay shows them; None until its snapshot is written. Of the
+    turns before, only the players are kept for the chart: a long game's whole snapshots take hundreds of MB."""
+    paths = [p for p in sorted(record.glob("turn-*.json.gz")) if turn_of(p) <= turn]
+    if not paths or turn_of(paths[-1]) != turn or (last := read(paths[-1])) is None:
         return None
-    r = recording.Renderer(snaps, view=view)
-    return recording._png(r.frame(snaps[-1]).crop(r.map_box), colors=128)
+    before = [{"turn": s["turn"], "turn_limit": s["turn_limit"], "players": s["players"]}
+              for s in map(read, paths[:-1]) if s is not None]
+    r = recording.Renderer([*before, last], view=view)
+    return recording._png(r.frame(last).crop(r.map_box), colors=128)
 
 
 class Live:
