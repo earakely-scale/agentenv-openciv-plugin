@@ -181,6 +181,34 @@ A run reports `passed` only at 1.0: every check passes and the agent matches or 
 
 ## Results
 
+### Three agents in one game
+
+`agent-env run openciv3 --task three-agents`: Opus 5.5 as Rome, Sonnet 5.5 as Greece and Haiku 4.5 as Egypt, each
+the Claude player agent on its own model, in one game with no AI civilizations.
+- **Setup:** seed 1, a Small map, Regent, roaming barbarians, 300 turns, four 75-turn sessions per agent.
+- **Run:** passed with grade 1. The game reached T300 in 68 minutes, the engine never restarted, and every agent
+  played every one of its turns (the env ended none for them).
+
+| At T300 | Opus (Rome) | Haiku (Egypt) | Sonnet (Greece) |
+|---|---|---|---|
+| Rank and score | **1st, 1,546** | 2nd, 1,233 | 3rd, 1,082 |
+| Cities, population | 45, 212 | 28, 163 | 29, 144 |
+| Techs | 22 | 21 | **26** |
+| Share of the land, of the population | 27.7%, 40.9% | **32.3%**, 31.4% | 20.5%, 27.8% |
+| Government | Monarchy | Despotism | Monarchy |
+| Production picks (agent / engine) | 285 / 1 | 51 / 248 | 146 / 36 |
+| Tool calls (failed) | 1,282 (3.0%) | 545 (1.8%) | 805 (4.0%) |
+| Cost | $20.95 | $4.64 | $6.58 |
+
+- **Expansion decided it.** Opus reached 45 cities by T150, then stopped founding them; its score rose from 1,261
+  to 1,546 over the last 150 turns. Haiku left most production picks to the engine but kept settling to the end,
+  and passed Sonnet's score around T250.
+- **No war between the agents.** All three stayed at peace with each other all game. Their nine attacks were all
+  on barbarians.
+- **The engine's upkeep rule bites.** When a civ's gold would go negative, the engine disbands random units to pay
+  their support: Egypt lost 12 at once on T277. The env reports these as lost units without the reason yet.
+- **Total cost** $32.16. The recording names each seat (`Rome (Opus) vs Greece (Sonnet) vs Egypt (Haiku)`).
+
 ### The full game as an agent-env task
 
 `agent-env run openciv3 --task full-game`, on the patched engine (patches 0005-0009: AI science, governments
