@@ -1,6 +1,6 @@
-OpenCiv3: play a seeded Civilization III-style game through MCP tools, grade it against same-seed baselines, and save a recording.
+OpenCiv3: play a seeded Civilization III-style game through MCP tools, alone against the AI or against other agents, grade it, and save a recording.
 
-Both tasks deploy the env registered as `openciv3` (run `agent-env openciv3 setup` once), start a
+Every task deploys the env registered as `openciv3` (run `agent-env openciv3 setup` once), start a
 seeded game through the env's `urn:openciv3:new-game/v1` extension, and end with two steps that run
 in parallel: the outcome verifier and `save_env_recording`.
 
