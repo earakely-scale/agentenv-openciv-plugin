@@ -12,7 +12,7 @@
 #   --model NAME     the model the agent runs on (default: the agent's own, sonnet; a LiteLLM proxy may need its name,
 #                    e.g. anthropic/claude-sonnet-5-5)
 #   --client         also install the real OpenCiv3 client, for recordings of the real game's view. Its art carries
-#                    no licence: keep that image and its videos private.
+#                    no licence, so don't push that image to a public registry.
 #   --no-smoke       skip the smoke game at the end
 #
 # With --agent the model key (an Anthropic API key, a `claude setup-token` token or a LiteLLM key) comes from

@@ -78,7 +78,7 @@ jobs:
           path: recording/
 
   # The image with the real OpenCiv3 client, on x86_64: the smoke task's recording must include the client's
-  # view, one frame per turn. Those frames carry the client's unlicensed art, so they are never uploaded.
+  # view, one frame per turn. The job checks the frames; it doesn't upload them.
   client:
     runs-on: ubuntu-latest
     steps:

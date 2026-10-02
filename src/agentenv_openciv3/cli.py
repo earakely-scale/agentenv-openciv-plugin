@@ -58,7 +58,8 @@ def _docker_platform() -> str:
 @click.option("--image", help="Register this existing local image instead of building one.")
 @click.option("--client", is_flag=True,
               help="Also install the real OpenCiv3 client, so recordings include its view (client_mp4). Adds about "
-                   "350 MB and fetches OpenCiv3's community art, which carries no license: keep the image private.")
+                   "350 MB and fetches OpenCiv3's community art, which carries no license: don't push the image to a "
+                   "public registry.")
 @click.option("--agent", is_flag=True,
               help=f"Also build and register the Claude player agent ({PLAYER_ID}, agents/claude-player), which plays "
                    "the bundle's tasks with Claude Code.")

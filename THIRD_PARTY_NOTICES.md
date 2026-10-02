@@ -153,8 +153,7 @@ client's view (docs/recording.md).
 | Xvfb, Mesa and the other Debian packages the target installs | their own licences, in `/usr/share/doc/*/copyright` | their authors | Debian |
 | OpenCiv3's art, from `C7-Game/Assets` | **none**: mostly community art from CivFanatics, not licensed for redistribution | its artists | <https://github.com/C7-Game/Assets>, at the commit the client pins |
 
-Because of the art, the client image and anything rendered with it are for private use: do not publish
-them.
+Because the client image contains the art, it is not pushed to a public registry.
 
 ## In the Python environment
 

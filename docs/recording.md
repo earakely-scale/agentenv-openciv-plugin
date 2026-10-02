@@ -106,8 +106,8 @@ display. In that image:
 
 **Art licensing.** The client draws OpenCiv3's community art from
 [C7-Game/Assets](https://github.com/C7-Game/Assets), which carries no licence. The image fetches it at
-build time, and it is never committed here. Keep client images and their videos private: do not push
-them to a public registry or publish the videos.
+build time, and it is never committed here. Because a client image contains the art, don't push it to a
+public registry.
 
 [client/README.md](../client/README.md) has the capture's details, measurements and how to run it on a
 Mac for debugging.
