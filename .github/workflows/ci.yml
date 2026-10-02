@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# A pull request's newer push supersedes its running checks; main keeps every run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   DOTNET_CLI_TELEMETRY_OPTOUT: "1"
   DOTNET_NOLOGO: "1"
@@ -19,6 +24,7 @@ defaults:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -29,6 +35,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       matrix:
         python: ["3.11", "3.12"]
@@ -47,7 +54,8 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: scripts/build-bridge.sh
       # ffmpeg, so the recording tests that encode mp4 run here too.
-      - run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+      - run: sudo apt-get -o Acquire::Retries=3 update -q && sudo apt-get -o Acquire::Retries=3 install -y -q ffmpeg
+        timeout-minutes: 10
       - run: pip install -e '.[dev]'
       # tests/ (bridge, env, packaging) and the playtest harness's offline tests.
       - run: pytest
@@ -55,6 +63,7 @@ jobs:
 
   image:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -81,6 +90,7 @@ jobs:
   # view, one frame per turn. The job checks the frames; it doesn't upload them.
   client:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:

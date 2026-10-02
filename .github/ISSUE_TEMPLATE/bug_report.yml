@@ -1,0 +1,28 @@
+name: Bug report
+description: Something in the env, a tool, a task or a player agent doesn't work as documented.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to reproduce
+      description: The command or task you ran (e.g. `agent-env run openciv3 --task three-agents-quick`), the seed and turn if it's in a game.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output
+      description: The relevant output or the run's instance id. Remove any keys or tokens first.
+      render: text
+  - type: input
+    id: env
+    attributes:
+      label: Platform
+      description: OS and architecture, Docker version, and the commit you're on.

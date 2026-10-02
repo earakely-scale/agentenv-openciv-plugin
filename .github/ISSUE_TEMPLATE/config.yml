@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: AgentEnv Framework
+    url: https://github.com/scaleapi/agentenv-framework
+    about: Questions about agent-env itself (tasks, steps, providers, stores) belong in the framework's repository.

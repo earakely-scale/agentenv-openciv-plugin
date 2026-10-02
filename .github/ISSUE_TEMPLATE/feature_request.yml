@@ -1,0 +1,20 @@
+name: Idea or proposal
+description: A new tool, task, player agent, game rule or improvement.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What it would let an agent (or you) do
+    validations:
+      required: true
+  - type: textarea
+    id: shape
+    attributes:
+      label: The shape you have in mind
+      description: The tool's arguments and output, the task's steps, or the change to the game.
+  - type: dropdown
+    id: help
+    attributes:
+      label: Would you like to build it?
+      options: ["Yes, I'll send a pull request", "Maybe, with some guidance", "No, just suggesting it"]
