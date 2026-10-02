@@ -238,7 +238,7 @@ def test_frontier_seats_nine_models_on_a_standard_map(local_stores):
     match = next(s for s in steps if s["type"] == "openciv3_match")
     players = [s for s in steps if s["type"] == "prompt_agent"]
     agents = [s for s in steps if s["type"] == "deploy_agent"]
-    assert (match["turns"], match["size"], len(players)) == (300, "Standard", 9)
+    assert (match["turns"], match["size"], len(players)) == (200, "Standard", 9)
     assert set(match["civs"]) == {s["agent_name"] for s in players} == {s["agent_name"] for s in agents}
     assert len(set(match["civs"].values())) == 9 and len({s["model"] for s in players}) == 9
     assert all(s["env_vars"] == {"OPENCIV3_SESSION_TURNS": "40"} for s in agents)

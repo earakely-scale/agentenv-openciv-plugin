@@ -55,7 +55,7 @@ in parallel: the outcome verifier and `save_env_recording`.
   - **Models:** the ids are LiteLLM-style (`anthropic/claude-opus-5-5`, …); the player agents also take them on
     their providers' own APIs.
 - `frontier` is the same kind of match with nine models, each its own agent and civilization, on a Standard map for
-  300 turns: Opus 5.5 (Rome), Sonnet 5.5 (Greece), Haiku 4.5 (Egypt), GPT-5.6 Sol (America), Luna (Babylon) and
+  200 turns: Opus 5.5 (Rome), Sonnet 5.5 (Greece), Haiku 4.5 (Egypt), GPT-5.6 Sol (America), Luna (Babylon) and
   Terra (Persia), Gemini 3.1 Pro (England), Grok 4.7 (Carthage) and Kimi K3 (China). Each `deploy_agent` step
   names the player agent for its model with `a2a_agent_id`: Codex plays the GPT models, Gemini CLI plays Gemini,
   and Claude Code plays the rest (Grok and Kimi through a LiteLLM proxy). Each agent starts a fresh session every

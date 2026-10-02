@@ -114,7 +114,7 @@ agent-env run openciv3 --task play        # 50 turns on a Tiny map
 agent-env run openciv3 --task full-game   # 540 turns at Civilization III's own settings, as six 90-turn sessions
 agent-env run openciv3 --task three-agents        # Opus, Sonnet and Haiku play one 300-turn game against each other
 agent-env run openciv3 --task three-agents-quick  # the same match in 10 turns, to check a setup
-agent-env run openciv3 --task frontier            # nine models, from three labs and more, on one 300-turn map
+agent-env run openciv3 --task frontier            # nine models from five labs in one 200-turn match
 agent-env run openciv3 --task frontier-quick      # the same match in 10 turns
 agent-env openciv3 watch --open                   # meanwhile: watch the game live in the browser
 ```

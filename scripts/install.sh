@@ -153,7 +153,7 @@ echo "  agent-env run openciv3 --task smoke                 # the scripted check
 if [ "$agent" = 1 ]; then
 	echo "  agent-env run openciv3 --task play                  # the default agent plays 50 turns"
 	echo "  agent-env run openciv3 --task three-agents          # Opus, Sonnet and Haiku play one 300-turn match"
-	echo "  agent-env run openciv3 --task frontier              # nine models from five labs play one 300-turn match"
+	echo "  agent-env run openciv3 --task frontier              # nine models from five labs play one 200-turn match"
 	echo "  agent-env openciv3 watch --open                     # watch a running game live"
 else
 	echo "  scripts/install.sh --agent                          # add the player agents, to have models play"
