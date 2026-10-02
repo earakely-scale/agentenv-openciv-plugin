@@ -177,5 +177,38 @@ sealed partial class Session {
 		other.Incoming.Add(e);
 	}
 
+	sealed record Victory(string Kind, Seat Seat, int Turn);
+
+	/// <summary>How a game with seats is won before its turn limit; at the limit the verifier ranks the seats by score.</summary>
+	Victory victory;
+
+	/// <summary>
+	/// Conquest: one seat's civilization is the only one an agent still plays. Domination (Civ III's rule): one seat
+	/// holds two thirds of the world's land and two thirds of its population.
+	/// </summary>
+	Victory CheckVictory() {
+		var live = seats.Where(s => !s.Player.defeated).ToList();
+		if (live.Count == 1) return new Victory("conquest", live[0], gd.turn);
+		foreach (Seat s in live) {
+			var (land, pop) = ShareOf(s.Player);
+			if (land >= Domination && pop >= Domination) return new Victory("domination", s, gd.turn);
+		}
+		return null;
+	}
+
+	const double Domination = 2.0 / 3;
+
+	string SeatName(Seat s) => s.Label == null ? Owner(s.Player) : $"{Owner(s.Player)} ({s.Label})";
+
+	string VictoryText(Victory v) {
+		if (v.Kind == "conquest") return $"{SeatName(v.Seat)} won by conquest: it is the last civilization an agent still plays.";
+		var (land, pop) = ShareOf(v.Seat.Player);
+		return $"{SeatName(v.Seat)} won by domination: {land:P0} of the world's land and {pop:P0} of its population.";
+	}
+
+	JsonObject VictoryJson() => victory == null ? null : new JsonObject {
+		["kind"] = victory.Kind, ["civ"] = Owner(victory.Seat.Player), ["label"] = victory.Seat.Label, ["turn"] = victory.Turn,
+	};
+
 	JsonArray SeatsJson() => Json.Array(seats, s => new JsonObject { ["civ"] = Owner(s.Player), ["label"] = s.Label });
 }

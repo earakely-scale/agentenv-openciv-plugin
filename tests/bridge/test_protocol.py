@@ -685,3 +685,20 @@ def test_a_seat_game_restores_every_seat(launch, tmp_path):
     for civ in SEATS:
         assert restored.call("state", seat=civ) == b.call("state", seat=civ)
     assert restored.call("end_turn", seat="Egypt", skip_idle=True)["waiting_for"] == ["Rome", "Greece"]
+
+
+def test_the_last_seat_standing_wins_by_conquest(launch, tmp_path):
+    b = launch("--autosave", str(tmp_path / "a"))
+    b.call("new_game", seed=SEED, opponents=1, seats=["Greece"], labels={"Rome": "A", "Greece": "B"})
+    b.call("unit_order", seat="Greece", unit="u2", order="disband")
+    b.call("unit_order", seat="Greece", unit="u1", order="disband")
+    assert b.call("state", seat="Greece")["defeated"]
+    res = b.call("end_turn", seat="Rome", skip_idle=True)["seats"]["Rome"]
+    victory = {"kind": "conquest", "civ": "Rome", "label": "A", "turn": 1}
+    won = "Rome (A) won by conquest: it is the last civilization an agent still plays."
+    assert res["game_over"] and res["events"][-1] == {"turn": 0, "kind": "victory", "text": won}
+    assert b.call("state")["victory"] == victory and b.call("score")["victory"] == victory
+    assert "Rome (A) won by conquest on turn 1" in b.error("end_turn", seat="Rome", skip_idle=True)["message"]
+    restored = launch()
+    restored.call("load", path=str(tmp_path / "a" / "autosave.json"))
+    assert restored.call("state", seat="Greece")["victory"] == victory and restored.call("state")["game_over"]

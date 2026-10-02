@@ -398,6 +398,8 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
         head.append("DEFEATED")
     lines = [" · ".join(head)]
     lines += [f"!! {n['text']}" for n in notices or []]
+    if line := match_line(s):
+        lines.append(line)
 
     r = s.get("research") or {}
     if r.get("current"):
@@ -571,9 +573,23 @@ def blocked(result: dict, state: dict) -> str:
     return "\n".join(lines)
 
 
+def match_line(s: dict) -> str | None:
+    """The rules of a game other agents play too, so a prompt need not explain them."""
+    agents = [r["civ"] for r in s.get("rivals", []) if r.get("agent")]
+    if not agents:
+        return None
+    ai = [r["civ"] for r in s.get("rivals", []) if not r.get("agent")]
+    return (f"MATCH vs agents {', '.join(agents)}" + (f" and the AI's {', '.join(ai)}" if ai else "")
+            + " · every agent plays each turn at once; end_turn waits for the others"
+            + f" · it ends at T{s['turn_limit']}, or once one agent's civilization is the last an agent plays"
+            + " (conquest) or holds 2/3 of the world's land and population (domination); else the top score wins")
+
+
 def game_over(state: dict, baselines: dict[str, dict | str | None] | None) -> str:
     s = state
-    why = (f"your civilization was destroyed (T{s['turn']})" if s.get("defeated")
+    v = s.get("victory")
+    why = (f"{'you' if v['civ'] == s.get('civ') else v['civ']} won by {v['kind']} on T{v['turn']}" if v
+           else f"your civilization was destroyed (T{s['turn']})" if s.get("defeated")
            else f"turn {s['turn']}/{s['turn_limit']} reached")
     lines = [f"GAME OVER — {why}.",
              f"FINAL score {score_text(s['score'])} · units {len(s.get('units', []))} · gold {s.get('gold', 0)}"

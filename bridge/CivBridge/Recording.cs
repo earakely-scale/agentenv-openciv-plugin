@@ -52,6 +52,7 @@ sealed partial class Session {
 			["units"] = Json.Array(gd.mapUnits.Where(u => Tile.IsTileValid(u.location)), u => new JsonObject {
 				["x"] = u.location.XCoordinate, ["y"] = u.location.YCoordinate, ["owner"] = index[u.owner], ["type"] = u.unitType.name,
 			}),
+			["victory"] = VictoryJson(),
 			["events"] = new JsonArray(seats.SelectMany(s => s.TurnEvents.Select(e => {
 				JsonObject copy = e.DeepClone().AsObject();
 				if (MultiSeat) copy["civ"] = Owner(s.Player);

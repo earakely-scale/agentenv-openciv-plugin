@@ -68,6 +68,9 @@ sealed partial class Session {
 			["seed"] = seed,
 			["turn_limit"] = turnLimit,
 			["seats"] = states,
+			["victory"] = victory == null ? null : new JsonObject {
+				["kind"] = victory.Kind, ["civ"] = Owner(victory.Seat.Player), ["turn"] = victory.Turn,
+			},
 			["rng"] = RngState.Get(GameData.rng),
 		};
 	}
@@ -156,6 +159,8 @@ sealed partial class Session {
 			SeeRelations();
 		}
 		seat = seats[0];
+		if (state["victory"] is JsonObject v)
+			victory = new Victory((string)v["kind"], seats.First(s => Owner(s.Player) == (string)v["civ"]), (int)v["turn"]);
 		if (state["rng"] is JsonObject rng && !RngState.Set(GameData.rng, rng))
 			Log.Warning("could not restore the engine's random state; the restored game continues from a fresh one");
 	}

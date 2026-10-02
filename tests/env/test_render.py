@@ -388,3 +388,16 @@ def test_war_with_another_agent_needs_both_to_propose_peace():
         "WAITING — you ended turn T4; Egypt is still playing it (waited 10 min). The turn advances once every "
         "civilization has ended it: call end_turn() again to keep waiting.")
 
+
+def test_a_match_brief_states_its_rules_and_game_over_names_the_victor():
+    rivals = [{"civ": "Greece", "agent": True}, {"civ": "Egypt", "agent": True}, {"civ": "Zululand", "agent": False}]
+    line = render.match_line({"turn_limit": 300, "rivals": rivals})
+    assert line.startswith("MATCH vs agents Greece, Egypt and the AI's Zululand · every agent plays each turn at once")
+    assert render.match_line({"turn_limit": 300, "rivals": rivals[2:]}) is None
+    over = {"turn": 120, "turn_limit": 300, "civ": "Rome", "score": {"total": 9, "cities": 1, "pop": 1, "tiles": 1,
+                                                                     "techs": 1}}
+    victory = {"kind": "domination", "civ": "Greece", "label": "sonnet", "turn": 120}
+    text = render.game_over({**over, "victory": victory}, None)
+    assert text.startswith("GAME OVER — Greece won by domination on T120.")
+    assert render.game_over({**over, "victory": {**victory, "civ": "Rome"}}, None).startswith("GAME OVER — you won by")
+

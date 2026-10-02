@@ -196,12 +196,15 @@ class OpenCiv3Env(AgentEnvEnvironment):
     def multi(self) -> bool:
         return len(self.seats) > 1
 
-    def _seat_named(self, civ: str | None) -> Seat:
-        if not civ:
+    def _seat_named(self, name: str | None) -> Seat:
+        """The seat a header names: by its civ, or by its label (the agent's name in a match)."""
+        if not name:
             return self.seats[0]
-        seat = next((s for s in self.seats if s.civ.lower() == civ.strip().lower()), None)
+        wanted = name.strip().lower()
+        seat = next((s for s in self.seats if s.civ.lower() == wanted), None) or next(
+            (s for s in self.seats if (s.label or "").lower() == wanted), None)
         if seat is None:
-            raise BridgeError("unknown_seat", f"{civ!r} is not a seat in this game; the seats are "
+            raise BridgeError("unknown_seat", f"{name!r} is not a seat in this game; the seats are "
                               f"{', '.join(s.civ for s in self.seats)}.", [s.civ for s in self.seats])
         return seat
 
@@ -822,6 +825,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
             "engine_failed": self.failed is not None,
             "standings": standings,
             "share": world.get("human_share"),
+            "victory": s.get("victory"),
         }
         if self.multi:
             players = {p["civ"]: p for p in world.get("players", [])}

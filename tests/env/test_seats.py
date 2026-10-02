@@ -77,6 +77,33 @@ async def test_each_request_plays_its_seat(seats):
         await env.autoplay(turns=1)
 
 
+async def test_an_agent_names_its_seat_by_its_label(seats):
+    env, _ = seats
+    assert (await SeatTools(env, "b")("get_turn_brief")).startswith("T0/10 · Greece")
+    brief = await SeatTools(env, "Egypt")("get_turn_brief")
+    assert ("MATCH vs agents Rome, Greece · every agent plays each turn at once; end_turn waits for the others · it "
+            "ends at T10, or once one agent's civilization is the last an agent plays (conquest)") in brief
+
+
+async def test_the_last_agent_standing_wins_and_the_game_ends(env_vars, monkeypatch):
+    monkeypatch.setenv("CIVBRIDGE_CMD", REAL_CMD)
+    env = OpenCiv3Env()
+    env.create_app()
+    try:
+        await env.new_game(seed=1, opponents=1, seats=["Greece"], labels={"Rome": "A", "Greece": "B"}, turn_limit=10)
+        greece, rome = SeatTools(env, "Greece"), SeatTools(env, "A")
+        await greece("unit_order", unit="u2", order="disband")
+        await greece("unit_order", unit="u1", order="disband")
+        text = await rome("end_turn", skip_idle=True)
+        assert "Rome (A) won by conquest: it is the last civilization an agent still plays." in text
+        assert "GAME OVER — you won by conquest on T1." in text
+        [part] = await env.data_get()
+        assert part.data["victory"] == {"kind": "conquest", "civ": "Rome", "label": "A", "turn": 1}
+        assert part.data["game_over"]
+    finally:
+        await env.close()
+
+
 async def test_end_turn_waits_for_every_seat(seats):
     env, tools = seats
     await settle(tools)

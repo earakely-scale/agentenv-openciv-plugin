@@ -33,7 +33,7 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 	readonly List<(MessageToUI Message, Seat Actor)> uiMessages = [];
 	bool advancing;
 
-	bool GameOver => human.defeated || gd.turn >= turnLimit;
+	bool GameOver => human.defeated || gd.turn >= turnLimit || victory != null;
 
 	public async Task<JsonNode> Run(string cmd, Args a) {
 		if (cmd == "new_game") return NewGame(a);
@@ -285,6 +285,10 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 			turnEvents = events;
 			s.Ready = false;
 		});
+		if (MultiSeat && victory == null && CheckVictory() is Victory won) {
+			victory = won;
+			EachSeat(s => s.TurnEvents.Add(Event("victory", VictoryText(won))));
+		}
 		Autosave();
 		Record();
 		return turnEvents;
@@ -305,8 +309,8 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 
 	void EnsurePlaying() {
 		if (!GameOver) return;
-		string why = human.defeated
-			? "Your civilization has no cities or settlers left, so it is defeated"
+		string why = victory != null ? $"{SeatName(victory.Seat)} won by {victory.Kind} on turn {victory.Turn}"
+			: human.defeated ? "Your civilization has no cities or settlers left, so it is defeated"
 			: $"The game reached its turn limit ({turnLimit})";
 		throw new BridgeError("game_over", $"{why}; the game is over and no more orders are accepted.");
 	}
@@ -394,14 +398,20 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 		};
 	}
 
+	/// <summary>A player's fractions of the world's land tiles and of its population.</summary>
+	(double Land, double Pop) ShareOf(Player p) {
+		int land = gd.map.tiles.Count(t => t.IsLand());
+		int pop = gd.players.Where(x => !x.isBarbarians).Sum(x => x.cities.Sum(c => c.residents.Count));
+		return (land == 0 ? 0 : (double)gd.map.tiles.Count(t => t.IsLand() && t.OwningPlayer() == p) / land,
+			pop == 0 ? 0 : (double)p.cities.Sum(c => c.residents.Count) / pop);
+	}
+
 	JsonObject ScoreAll() {
-		var land = gd.map.tiles.Where(t => t.IsLand()).ToList();
-		int pop = gd.players.Where(p => !p.isBarbarians).Sum(p => p.cities.Sum(c => c.residents.Count));
 		// Civ III's domination victory needs two thirds of each: the world's land, and its population.
-		JsonObject Share(Player p) => new() {
-			["land"] = land.Count == 0 ? 0 : Math.Round((double)land.Count(t => t.OwningPlayer() == p) / land.Count, 4),
-			["pop"] = pop == 0 ? 0 : Math.Round((double)p.cities.Sum(c => c.residents.Count) / pop, 4),
-		};
+		JsonObject Share(Player p) {
+			var (land, pop) = ShareOf(p);
+			return new JsonObject { ["land"] = Math.Round(land, 4), ["pop"] = Math.Round(pop, 4) };
+		}
 		return new JsonObject {
 			["turn"] = gd.turn,
 			["human"] = ScoreOf(human),
@@ -410,6 +420,7 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 				["defeated"] = p.defeated, ["score"] = ScoreOf(p), ["share"] = Share(p),
 			}),
 			["human_share"] = Share(human),
+			["victory"] = VictoryJson(),
 		};
 	}
 

@@ -18,6 +18,7 @@ sealed partial class Session {
 			["turn_limit"] = turnLimit,
 			["game_over"] = GameOver,
 			["defeated"] = h.defeated,
+			["victory"] = VictoryJson(),
 			["civ"] = h.civilization.name,
 			["government"] = h.government.name,
 			["anarchy_until"] = h.government.transitionType ? (JsonNode)h.inAnarchyUntilTurn : null,
