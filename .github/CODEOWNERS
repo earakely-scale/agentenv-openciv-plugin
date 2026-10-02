@@ -1,2 +1,2 @@
-# Every change to main needs the maintainer's approval (branch protection requires a code owner's review).
+# Every pull request needs the maintainer's approval (branch protection on main requires a code owner's review).
 * @earakely-scale

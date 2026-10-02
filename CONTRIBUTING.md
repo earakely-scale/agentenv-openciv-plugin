@@ -10,9 +10,9 @@ Thanks for helping. New tasks, tools, player agents, engine fixes, docs and bug 
    tested it.
 3. **CI must pass:** lint, the tests on Python 3.11 and 3.12, and the image builds that play the `smoke` task with and
    without the real client.
-4. **The maintainer reviews and approves every change.** `main` is protected: a pull request merges only with an
-   approving review from the code owner ([.github/CODEOWNERS](.github/CODEOWNERS)) and green checks. Pull requests
-   are squash-merged, so the title becomes the commit message.
+4. **The maintainer reviews and approves every pull request.** `main` is protected: a pull request merges only
+   with an approving review from the code owner ([.github/CODEOWNERS](.github/CODEOWNERS)), green checks and its
+   conversations resolved. Pull requests are squash-merged, so the title becomes the commit message.
 
 First-time contributors' CI runs wait for the maintainer's approval, as GitHub does for public repositories.
 
@@ -31,8 +31,10 @@ export CIVBRIDGE_CMD=$PWD/build/bridge/CivBridge
 .venv/bin/pytest && .venv/bin/ruff check .
 ```
 
-To try a change end to end, register your checkout and play a task: `agent-env openciv3 setup --agent`, then
-`agent-env run openciv3 --task three-agents-quick` (see the [README](README.md#run-it-yourself) for the model key).
+To try a change end to end, run `scripts/install.sh --run three-agents-quick` from your checkout: it installs the
+checkout into the `agent-env` tool, registers the env and the player agents built from it, and plays the match (see
+the [README](README.md#run-it-yourself) for the model key). After that, `agent-env openciv3 setup --agent` rebuilds
+them from your changes.
 
 ## Where things go
 

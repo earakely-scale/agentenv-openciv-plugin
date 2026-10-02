@@ -1,154 +1,286 @@
-# agentenv-openciv3
+# OpenCiv3 for AgentEnv
 
-[OpenCiv3](https://github.com/C7-Game/OpenCiv3), the open-source Civilization III remake, as an
-[AgentEnv](https://github.com/scaleapi/agentenv-framework) environment. LLM agents play a seeded game
-through fourteen MCP tools. Either one agent plays against OpenCiv3's AI civilizations, graded against
-same-seed baselines (one of them a scripted bot that plays through the same tools), or several agents
-play one game against each other, a civilization each. Every game can be saved as a video and an HTML
-replay.
+[![CI](https://github.com/earakely-scale/agentenv-openciv-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/earakely-scale/agentenv-openciv-plugin/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![Built on the AgentEnv Framework](https://img.shields.io/badge/built%20on-AgentEnv%20Framework-6f42c1)](https://www.agentenvframework.com)
+
+AI agents play [OpenCiv3](https://github.com/C7-Game/OpenCiv3), the open-source Civilization III remake, against
+each other or against the game's own AI. Claude Code, Codex and Gemini CLI agents each lead a civilization through
+fourteen MCP tools; every game is graded, recorded, and can be watched live while it plays. This repository is an
+environment plugin for the [AgentEnv Framework](https://www.agentenvframework.com), Scale AI's open-source framework
+for building RL environments.
 
 ![Opus (Rome), Sonnet (Greece) and Haiku (Egypt) playing one 300-turn game, in the real OpenCiv3 client](docs/media/three-agents-client.gif)
 
-*The `three-agents` task in the real OpenCiv3 client: Opus 5.5 (Rome), Sonnet 5.5 (Greece) and Haiku 4.5 (Egypt)
-play one 300-turn game against each other, shown every third turn from Rome's side, so the other two appear where
-Rome has explored ([full video](docs/media/three-agents-client.mp4), [the whole map](docs/media/three-agents.mp4),
-[the task's JSON](src/agentenv_openciv3/bundles/openciv3/tasks/three-agents.json)). Opus finished first with 1,546
-points and 45 cities; see [Results](#three-agents-in-one-game).*
+*Opus 5.5 (Rome), Sonnet 5.5 (Greece) and Haiku 4.5 (Egypt) play one 300-turn game against each other, in the real
+OpenCiv3 client, from Rome's side ([full video](docs/media/three-agents-client.mp4),
+[the whole map](docs/media/three-agents.mp4), [the task](src/agentenv_openciv3/bundles/openciv3/tasks/three-agents.json)).
+Opus won with 45 cities; see [Results](#results).*
 
-The game runs headless: no Godot, no display and no Civilization III files. One env serves one game
-at a time, and a game is deterministic: the same seed and the same actions give the same game.
+**Contents:** [Run it yourself](#run-it-yourself) · [Watch it live](#watch-it-live) ·
+[How a match is built](#how-a-match-is-built) · [Built on the AgentEnv Framework](#built-on-the-agentenv-framework) ·
+[The tools](#the-environments-tools) · [The player agents](#the-player-agents) · [Grading](#grading) ·
+[Results](#results) · [Contributing](#contributing)
 
-## Scope
+## Run it yourself
 
-This is a 4X game short of its endgame. The agent:
-- founds and places cities, and chooses what they build and what to research;
-- sets the science and luxury rates (tax is what they leave) and buys production with gold;
-- moves, automates and fortifies units, and attacks and bombards enemies;
-- changes government;
-- declares war and makes peace, at the price the other civ asks.
-
-It cannot trade techs or gold outside a peace treaty. The env still declines every AI trade offer, and
-the brief says so.
-
-The rivals are OpenCiv3's own AI, other agents, or both. Cities that fall are razed, not captured, and the engine
-has no victory conditions, so a game ends at its turn limit (docs/full-game.md). The score rewards cities, citizens,
-territory and techs.
-
-## Quickstart
-
-You need Docker with its buildx plugin (Docker Desktop has it; on Debian or Ubuntu, `apt-get install docker.io
-docker-buildx`), [uv](https://docs.astral.sh/uv/) and git. One command clones the repository, installs
-`agent-env` with the plugin, builds and registers the env, and plays the smoke game:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/earakely-scale/agentenv-openciv-plugin/main/scripts/install.sh | bash
-```
-
-`bash -s -- --agent` (after the pipe) also sets up the player agents, so models can play: it asks for a
-model key, without echoing it. `--client` adds recordings of the real game's view. `--help` lists the
-options; [scripts/install.sh](scripts/install.sh) is short.
-
-One command also sets up the agents and plays a match, `--run` naming the bundle's task:
+You need [Docker](https://docs.docker.com/get-docker/), running and usable without `sudo`, with its buildx plugin
+(Docker Desktop has it; on Debian or Ubuntu, `apt-get install docker.io docker-buildx`), [uv](https://docs.astral.sh/uv/),
+git, about 10 GB of disk for the images, and a model key. One command sets everything up and plays a 10-turn match
+between Opus, Sonnet and Haiku:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/earakely-scale/agentenv-openciv-plugin/main/scripts/install.sh \
-  | bash -s -- --run three-agents-quick      # Opus, Sonnet and Haiku, 10 turns; then --run three-agents for 300
-curl -fsSL https://raw.githubusercontent.com/earakely-scale/agentenv-openciv-plugin/main/scripts/install.sh \
-  | bash -s -- --base-url https://litellm.example.com --run frontier   # nine models; needs a LiteLLM proxy
+  | bash -s -- --run three-agents-quick
 ```
 
-By hand, the same steps, with no model needed:
+It clones this repository into `./agentenv-openciv-plugin`, installs [`agent-env`](https://github.com/scaleapi/agentenv-framework)
+with the plugin, asks for your model key (it isn't echoed), builds and registers the OpenCiv3 env and the three player
+agents (the first build takes several minutes), and plays the match: about three minutes and $0.30. It ends with a
+line like this, and the run, its grade and its recording are stored under `~/.local/state/agent-env`:
+
+```
+tasks/three-agents-quick.json v1: passed (grade: 1), 182.4s, instance @local/agentenv-openciv3/openciv3/three-agents-quick-...
+```
+
+While it plays, open a second terminal and [watch it live](#watch-it-live):
+`cd agentenv-openciv-plugin && agent-env openciv3 watch --open`. Run `agent-env` from inside the checkout: its
+`.agentenv/config.toml` names the default agent and where the model key is. If your shell can't find `agent-env`, run
+`uv tool update-shell` and open a new terminal.
+
+- **The key:** an Anthropic API key or a `claude setup-token` token plays the Claude-only tasks (`play`, `full-game`,
+  `three-agents`). The `frontier` tasks need a [LiteLLM](https://docs.litellm.ai/) proxy that serves all nine model
+  ids in [the task](src/agentenv_openciv3/bundles/openciv3/tasks/frontier.json) (`anthropic/…`, `openai/gpt-5.6-…`,
+  `gemini/gemini-3.1-pro-preview`, `xai/grok-4.7`, `bedrock/global.moonshotai.kimi-k3`) and its `/openai/v1` and
+  `/gemini` pass-through routes, which Codex and Gemini CLI use; pass its URL with `--base-url https://your-litellm-proxy`.
+  The key is stored in `~/.config/agentenv/secrets.yaml` (mode 600), never in the repository.
+- **No key?** Leave out the options (`curl -fsSL https://raw.githubusercontent.com/earakely-scale/agentenv-openciv-plugin/main/scripts/install.sh | bash`) to play the `smoke` task instead: a scripted bot plays
+  30 turns, and the game is graded and recorded.
+- **Options:** `--client` adds the real OpenCiv3 client's view to recordings; `--model` sets the model for tasks
+  whose prompts name none (`play`, `full-game`). `scripts/install.sh --help`, in the checkout, lists the rest, and
+  [the script](scripts/install.sh) is short.
+
+Then, from the checkout (`cd agentenv-openciv-plugin`), play any task in the bundle:
+
+| Task | Who plays | Map, turns | Time, cost |
+|---|---|---|---|
+| `smoke` | a scripted bot; no model needed | Tiny, 30 | about a minute, free |
+| `play` | your default agent against 3 AI civs | Tiny, 50 | a few minutes |
+| `full-game` | one agent against 7 AI civs, at Civilization III's own settings | Standard, 540 | 46 min, $13 on Sonnet |
+| `three-agents` | Opus, Sonnet and Haiku against each other | Small, 300 | 68 min, $32 |
+| `three-agents-quick` | the same match | Small, 10 | 3 min, $0.30 |
+| `frontier` | nine models from five labs: Claude, GPT, Gemini, Grok, Kimi | Standard, 200 | about 2 h, about $125 (estimated) |
+| `frontier-quick` | the same match | Standard, 10 | 8 min, $1.70 |
+
+```bash
+agent-env run openciv3 --task three-agents     # graded, recorded; prints the instance id
+agent-env openciv3 recordings --out recordings # copy the games' videos and HTML replays here
+```
+
+<details>
+<summary>Troubleshooting</summary>
+
+- **`agent-env: command not found`:** uv installed it in a directory that isn't on your PATH yet; run
+  `uv tool update-shell` and open a new terminal.
+- **"Docker is installed but not running" while it is running (Linux):** your user can't reach Docker's socket. Add it
+  to the `docker` group (`sudo usermod -aG docker $USER`) and log in again.
+- **"Docker's buildx plugin is required":** `sudo apt-get install docker-buildx` (Debian, Ubuntu); Docker Desktop has it.
+- **A step fails because something holds port 5000:** agent-env keeps its images in a local registry on
+  `127.0.0.1:5000`. On macOS, AirPlay Receiver often holds that port; turn it off in System Settings.
+- **`deploy_agent` can't find `openciv3-claude`, `openciv3-codex` or `openciv3-gemini`:** register the player agents
+  with `agent-env openciv3 setup --agent`.
+- **An agent's model call fails:** the run's output names the agent and the error. Check the key, the `--base-url`,
+  and that the endpoint serves the model ids the task names.
+</details>
+
+<details>
+<summary>The same steps by hand</summary>
 
 ```bash
 git clone https://github.com/earakely-scale/agentenv-openciv-plugin
 git -C agentenv-openciv-plugin submodule update --init vendor/OpenCiv3   # not --recursive: its art isn't needed
 uv tool install agentenv-framework --with-editable ./agentenv-openciv-plugin
-
-agent-env openciv3 setup              # build the env image for this machine, register it as the env "openciv3"
-agent-env run openciv3 --task smoke   # the scripted bot plays 30 turns; the game is graded and recorded
-agent-env openciv3 recordings --out recordings   # copy the game's video and HTML replay here
-```
-
-`setup` builds the image `mcp-server-openciv3` for the Docker host's own platform (`linux/arm64` on
-Apple Silicon) and registers it as the MCP server env `openciv3`. Pass `--platform linux/amd64` for
-remote sandboxes, `--source <checkout>` when the plugin isn't installed from a checkout, and
-`--image <tag>` to register an image you already have. In an existing agent-env install,
-`agent-env plugin add ./agentenv-openciv-plugin` adds the plugin.
-
-The `smoke` task checks the image, the bridge, the env's extensions, the verifier and the recorder
-end to end. It ends with `passed (grade: 1)`: the scripted bot playing your seat matches the
-`settler_bot` baseline exactly.
-
-## Have an LLM play
-
-**With Claude Code, through the playtest harness.** This works out of the box with a logged-in
-`claude` CLI (a 60-turn Sonnet game cost about $0.15 in round 1). It needs a local bridge, which
-needs the .NET 8 SDK:
-
-```bash
 cd agentenv-openciv-plugin
-uv venv && uv pip install -e '.[dev]'
-scripts/build-bridge.sh                 # build/bridge/CivBridge
-export DOTNET_ROOT=<your .NET 8 dir>    # only when .NET isn't installed system-wide
-CIVBRIDGE_CMD=$PWD/build/bridge/CivBridge .venv/bin/python playtest/run.py --seed 1 --turns 60 --model sonnet
+
+agent-env openciv3 setup              # build the env image for this machine and register it as the env "openciv3"
+agent-env run openciv3 --task smoke   # the scripted bot plays 30 turns; the game is graded and recorded
+agent-env openciv3 setup --agent      # also build and register the three player agents
 ```
 
-The run directory gets the transcript, the env's action log, the final summary against the
-baselines, and the recording. See [playtest/README.md](playtest/README.md) for batches and gates.
+Then write `.agentenv/config.toml` (git-ignored) with the default agent and the model endpoint:
 
-**Through agent-env, with the player agents.** The repository ships three A2A agents for the bundle's tasks, one
-per coding-agent CLI: `openciv3-claude` runs Claude Code (`agents/claude-player`), `openciv3-codex` runs Codex
-(`agents/codex-player`) and `openciv3-gemini` runs Gemini CLI (`agents/gemini-player`). They share one game loop
-(`agents/common`) and play through the env's tools only; one prompt plays a whole game, in fresh sessions of 75 turns.
+```toml
+[agents]
+default_a2a_agent_id = "openciv3-claude"
 
-- **Setup:** `scripts/install.sh --agent` does all of it:
-  - `agent-env openciv3 setup --agent` builds and registers the three agents;
-  - `.agentenv/config.toml` makes `openciv3-claude` the default agent and names the model endpoint;
-  - the key lives in `~/.config/agentenv/secrets.yaml`, behind a `secret:` reference.
-- **Credentials:** a LiteLLM key serves all three agents, through the proxy's Anthropic, OpenAI and Gemini
-  routes; the Claude player also takes an Anthropic API key or a `claude setup-token` token.
-- **Running:** run agent-env from inside the checkout, so it finds that config:
+[model]
+base_url = "https://api.anthropic.com"   # or your LiteLLM proxy
+api_key = "secret:OPENCIV3_MODEL_KEY"     # resolved from the secret store below
+
+[stores.secret]
+impl = "agent_env.store.secret_store:LocalSecretStore"
+
+[stores.secret.config]
+file_path = "/Users/you/.config/agentenv/secrets.yaml"   # absolute; holds the line OPENCIV3_MODEL_KEY: <your key>
+```
+
+`setup` builds for the Docker host's own platform (`linux/arm64` on Apple Silicon); pass `--platform linux/amd64`
+for remote sandboxes. In an existing agent-env install, `agent-env plugin add ./agentenv-openciv-plugin` adds the
+plugin.
+</details>
+
+## Watch it live
+
+While a game plays, the env serves a live view: the map, the scoreboard and score chart, each agent's actions and the
+turn's events, refreshed every two seconds (and the real client's view, with `--client`).
 
 ```bash
-agent-env run openciv3 --task play        # 50 turns on a Tiny map
-agent-env run openciv3 --task full-game   # 540 turns at Civilization III's own settings, as six 90-turn sessions
-agent-env run openciv3 --task three-agents        # Opus, Sonnet and Haiku play one 300-turn game against each other
-agent-env run openciv3 --task three-agents-quick  # the same match in 10 turns, to check a setup
-agent-env run openciv3 --task frontier            # nine models from five labs in one 200-turn match
-agent-env run openciv3 --task frontier-quick      # the same match in 10 turns
-agent-env openciv3 watch --open                   # meanwhile: watch the game live in the browser
+agent-env openciv3 watch --open    # from the checkout: prints each running game's live view and opens the newest
 ```
 
-In a match each `deploy_agent` step is a player, the `openciv3_match` step sets the turns, the map and each agent's
-civilization, and each agent's `prompt_agent` step carries its own prompt. All agents play each turn at the same
-time, the turn advances once every agent has ended it, and the victor verifier names the winner. The
-[bundle's README](src/agentenv_openciv3/bundles/openciv3/README.md) has the details.
+![The live view of the frontier match at turn 62: the map with nine civilizations, the scoreboard and score chart, and each agent's actions](docs/media/live-view.png)
 
-The full game took 46 minutes and about $13 on Sonnet 5.5, and scored 0.86 with the full-game verifier. The
-three-agent game took 68 minutes and $32 for all three models, and passed with grade 1. Any
-other A2A agent that advertises `urn:agentenv:mcp-config/v1` works too: set it as the default, or pick it
-per run with `agent-env task run ... --a2a-agent-id <agent>`.
-[The bundle's README](src/agentenv_openciv3/bundles/openciv3/README.md) has the details.
+*The `frontier` match at turn 62: GPT-5.6 Sol (America) leads, ahead of Sonnet (Greece) and Opus (Rome).*
 
-**By hand.** Serve the env and connect Claude Code to it:
+On a remote machine, `agent-env openciv3 watch` prints the URL (`http://127.0.0.1:<port>/live`); forward that port,
+e.g. `ssh -L <port>:127.0.0.1:<port> <host>`, and open the same URL locally.
 
-```bash
-docker run --rm -p 127.0.0.1:18765:18765 mcp-server-openciv3
-# or, with a local bridge: agent-env openciv3 serve
+When the game ends, its recording is saved with the run: an MP4 of the map, scores and actions turn by turn, a
+self-contained HTML replay with a turn slider, and with `--client` the real client's view. `agent-env openciv3
+recordings` lists them and copies them out ([docs/recording.md](docs/recording.md)).
 
-claude mcp add --transport http openciv3 http://127.0.0.1:18765/mcp
-claude --allowedTools "mcp__openciv3__*" "Play OpenCiv3 with the openciv3 tools. Start with the get_turn_brief tool and keep going until GAME OVER."
+## How a match is built
+
+An AgentEnv [task](https://www.agentenvframework.com/docs/tasks) is a DAG of steps; agent-env runs every step whose
+dependencies are done, so independent steps run at the same time. This is the `three-agents` task (`frontier` is the
+same with nine players):
+
+```mermaid
+flowchart LR
+    deploy["deploy_env<br/>the OpenCiv3 env"]
+    a1["deploy_agent<br/>opus"]
+    a2["deploy_agent<br/>sonnet"]
+    a3["deploy_agent<br/>haiku"]
+    match["openciv3_match<br/>seats · civs · turns · map"]
+    p1["prompt_agent<br/>opus plays Rome"]
+    p2["prompt_agent<br/>sonnet plays Greece"]
+    p3["prompt_agent<br/>haiku plays Egypt"]
+    grade["env_outcome_verifier<br/>names the victor"]
+    rec["save_env_recording<br/>MP4 + HTML replay"]
+    deploy --> a1 & a2 & a3
+    a1 & a2 & a3 --> match
+    match --> p1 & p2 & p3
+    p1 & p2 & p3 --> grade & rec
 ```
 
-## Tools
+| Step | What it does |
+|---|---|
+| `deploy_env` | Starts the OpenCiv3 env: one container serving the game's MCP tools. |
+| `deploy_agent`, one per player | Starts a player agent and hands it the env's MCP server. `agent_name` names the player; `a2a_agent_id` picks its CLI (`openciv3-claude`, `openciv3-codex` or `openciv3-gemini`). |
+| `openciv3_match` (this plugin) | Starts the game once every agent is up: a seat per agent, each agent's civilization, the turn limit, AI civs if any, and the map (seed, size, difficulty, barbarians). It logs the live view's URL. |
+| `prompt_agent`, one per player | Sends each agent its prompt and model. All of them play at once, each a whole game. |
+| `env_outcome_verifier` | Runs `victor-verifier` against the env's final summary: who won, and each agent's rank, score and share of the world. |
+| `save_env_recording` (this plugin) | Renders the game's MP4 and HTML replay and stores them with the run. It runs alongside grading. |
+
+**Every agent plays every turn at the same time.** Each request names its seat in the `X-OpenCiv3-Seat` header, and
+the turn advances once every seat has ended it. Two of the `frontier` match's nine players:
+
+```mermaid
+sequenceDiagram
+    participant O as Opus (Claude Code)
+    participant S as Sol (Codex)
+    participant E as OpenCiv3 env
+    participant B as CivBridge and the engine
+    O->>E: get_turn_brief, unit_order, set_production … (seat: opus)
+    S->>E: get_turn_brief, research, unit_order … (seat: sol)
+    O->>E: end_turn
+    Note over O,E: Opus waits, and the env keeps serving the seats still playing
+    S->>E: end_turn, the last seat to end the turn
+    E->>B: advance the turn: AI civs and barbarians move
+    B-->>E: what happened to each seat
+    E-->>O: TURN T61 → T62, its events and next steps
+    E-->>S: TURN T61 → T62, its events and next steps
+```
+
+A seat that makes no call for five minutes has its turn ended for it; the verifier fails a match in which the env
+ended more than a tenth of any agent's turns. A game ends at its turn limit, or sooner when every other agent's
+civilization has been destroyed (conquest) or one agent holds two thirds of the world's land and population
+(domination).
+
+**Where each piece runs** (every player agent and the env run in their own containers):
+
+```mermaid
+flowchart TB
+    runner["agent-env<br/>runs the task's DAG"]
+    claude["openciv3-claude<br/>Claude Code"]
+    codex["openciv3-codex<br/>Codex"]
+    gemini["openciv3-gemini<br/>Gemini CLI"]
+    you["you, in a browser"]
+    subgraph env["The OpenCiv3 env: one container"]
+        server["agentenv_openciv3 (Python)<br/>14 MCP tools · data plane · extensions · live view"]
+        bridge["CivBridge (.NET 8)<br/>runs the game headless"]
+        engine["C7Engine<br/>OpenCiv3's engine, patched"]
+        server -- "JSON lines" --> bridge --> engine
+    end
+    runner --> claude
+    runner -- "A2A: each player's prompt" --> codex
+    runner --> gemini
+    claude --> server
+    codex -- "MCP over HTTP<br/>X-OpenCiv3-Seat header" --> server
+    gemini --> server
+    runner -- "new game · final summary · recording" --> server
+    you -- "/live" --> server
+```
+
+The game runs headless, with no Godot, no display and no Civilization III files, and it is deterministic: the same seed
+and the same actions give the same game.
+
+**Make your own match.** A match is plain JSON. To add a player, add its `deploy_agent` step (and list it in the
+match step's `depends_on`), its civilization in the match step's `civs`, and its `prompt_agent` step (and list that in
+the `depends_on` of the grading and recording steps). A `deploy_agent` without `a2a_agent_id` deploys your default
+agent, as `three-agents` does. Edit any agent's prompt to give it its own strategy:
+
+```jsonc
+{"id": "agent-sol", "type": "deploy_agent", "agent_name": "sol", "a2a_agent_id": "openciv3-codex",
+ "env_ids": ["openciv3"], "env_vars": {"OPENCIV3_SESSION_TURNS": "40"}, "depends_on": ["deploy"]},
+{"id": "match", "type": "openciv3_match", "env_id": "openciv3", "turns": 200, "size": "Standard",
+ "civs": {"opus": "Rome", "sol": "America", "gemini": "England"}, "depends_on": ["agent-opus", "agent-sol", "agent-gemini"]},
+{"id": "sol", "type": "prompt_agent", "agent_name": "sol", "model": "openai/gpt-5.6-sol", "prompt_id": "sol",
+ "prompt": "You lead a civilization in a game of OpenCiv3 ... Play to win.", "depends_on": ["match"]}
+```
+
+The [bundle's README](src/agentenv_openciv3/bundles/openciv3/README.md) lists every field, and
+[tasks/frontier.json](src/agentenv_openciv3/bundles/openciv3/tasks/frontier.json) is a complete nine-player match.
+
+## Built on the AgentEnv Framework
+
+This plugin is built on the [AgentEnv Framework](https://www.agentenvframework.com)
+([GitHub](https://github.com/scaleapi/agentenv-framework), `pip install agentenv-framework`): Scale AI's open-source
+framework for building RL environments, with composable environments behind an MCP gateway, any agent in any
+sandbox, and tasks as DAGs. The framework does the heavy lifting; this repository adds the game. Each piece maps to
+a framework concept:
+
+| AgentEnv concept | Here |
+|---|---|
+| [Environment](https://www.agentenvframework.com/docs/environments/creating): MCP tools, a data plane and extensions in one container | `src/agentenv_openciv3/server.py`, an `AgentEnvEnvironment` with 14 tools, `data/get` (the game's summary for verifiers) and the extensions `urn:openciv3:new-game/v1`, `autoplay/v1` and `recording/v1` |
+| [Plugin](https://www.agentenvframework.com/docs/plugins/environment-plugins): a pip package with entry points | `pyproject.toml`: the bundle (`agent_env.bundles`), the `agent-env openciv3` commands (`agent_env.cli_plugins`) and two task steps (`agent_env.task_steps`) |
+| [Task steps](https://www.agentenvframework.com/docs/plugins/task-step-plugins) | `openciv3_match` and `save_env_recording` in `src/agentenv_openciv3/steps.py` |
+| [Tasks](https://www.agentenvframework.com/docs/tasks/creating) and verifiers | `src/agentenv_openciv3/bundles/openciv3/`: the tasks and their verifiers, run with `agent-env run openciv3 --task <task>` |
+| [Agents](https://www.agentenvframework.com/docs/agents/creating): A2A agents handed the env's MCP server | `agents/`: the Claude Code, Codex and Gemini CLI players |
+| [Registry](https://www.agentenvframework.com/docs/registry): versioned images, envs, agents and runs | `agent-env openciv3 setup` registers the env and agents; every run, recording and grade is stored locally |
+
+Start with the framework's [getting started](https://www.agentenvframework.com/docs/getting-started) and
+[core concepts](https://www.agentenvframework.com/docs/core-concepts) to build an environment of your own.
+
+## The environment's tools
 
 Fourteen tools. They return compact text, end every game action with a status footer such as
-`[T23/60 · needs orders: u7, c1]`, and fail with the reason, the valid alternatives and, when one
-would succeed, the call to make instead. Full contract: [docs/tools.md](docs/tools.md).
+`[T23/60 · needs orders: u7, c1]`, and fail with the reason, the valid alternatives and, when one would succeed, the
+call to make instead. Full contract: [docs/tools.md](docs/tools.md).
 
 | Tool | What it does |
 |---|---|
-| `get_turn_brief` | Turn, gold, rates, research, score and pace, what needs orders, cities in disorder or at risk, undefended cities, capped production, the engine's pending picks, last turn's events, the plan |
+| `get_turn_brief` | Turn, gold, rates, research, score and pace, what needs orders, cities in disorder or at risk, undefended cities, capped production, the engine's pending picks, last turn's events, the rivals and the match's rules, the plan |
 | `list_units` | One line per unit: position, moves, status, valid orders, whether it can found a city here |
 | `view_map` | ASCII map of explored tiles around a point, a unit or a city, plus notable things with distance and direction |
 | `find_city_sites` | Ranked city sites with travel time and yields, and every legal site nearby |
@@ -157,87 +289,69 @@ would succeed, the call to make instead. Full contract: [docs/tools.md](docs/too
 | `set_production` | Choose what a city builds |
 | `research` | List researchable techs, or set one (prerequisites are queued) |
 | `set_rates` | Set the science and luxury rates; luxury is the main fix for disorder |
-| `buy` | Rush a city's current production with gold |
+| `buy` | Rush a city's current production with gold (with citizens, under Despotism) |
 | `revolution` | Change government, after a few turns of anarchy |
 | `diplomacy` | The civilizations you know: war or peace, score, government, military against yours, the price of peace; declare war or propose peace (with another agent's civilization, peace is signed when both propose it) |
 | `end_turn` | End the turn, or several quiet ones until something needs attention; lists blockers instead when something needs orders. With other agents in the game, it waits until every agent has ended the turn |
 | `plan` | Read or replace the agent's plan, which every brief shows back |
 
-The engine still makes some choices itself: what a city builds next after finishing something, and
-the next tech after one is learned. Those picks are reported and block the turn until the agent
-changes or accepts them (`end_turn` with `skip_idle` accepts them), and the summary's `decisions`
-counts who chose each completed item and learned tech.
+**What the game covers.** Agents found and place cities and choose what they build and research; set the science and
+luxury rates and buy production; move, automate, fortify, attack and bombard; change government; and declare war or
+make peace. They cannot trade techs or gold, cities that fall are razed rather than captured, and the score
+(10 × cities + 3 × citizens + 1 × tiles + 4 × techs) rewards growth. The engine still makes some choices itself (what
+a city builds after finishing something, the next tech); those picks are reported and block the turn until the agent
+changes or accepts them. [docs/full-game.md](docs/full-game.md) lists what a full game still lacks.
 
-## Scoring and baselines
+## The player agents
 
-Score = 10 × cities + 3 × citizens + 1 × owned tiles + 4 × known techs.
+Three A2A agents play the tasks, one per coding-agent CLI. They share one game loop (`agents/common`), so they play
+by the same rules, and each runs in its own container:
 
-For the same seed and scenario the env plays three baselines in the background
-(`OPENCIV_BASELINES=1`; a game with several agents has none), and the playtest harness adds a fourth:
+| Agent | CLI | Models in `frontier` | Model route |
+|---|---|---|---|
+| `openciv3-claude` (`agents/claude-player`) | Claude Code | Opus 5.5, Sonnet 5.5, Haiku 4.5, Grok 4.7, Kimi K3 | Anthropic's API, or any model behind a LiteLLM proxy |
+| `openciv3-codex` (`agents/codex-player`) | Codex | GPT-5.6 Sol, Luna, Terra | LiteLLM's OpenAI route, or OpenAI's API |
+| `openciv3-gemini` (`agents/gemini-player`) | Gemini CLI | Gemini 3.1 Pro | LiteLLM's Gemini route, or Google's API |
 
-| Baseline | Plays | What it tells you |
-|---|---|---|
-| `null` | ends every turn with every unit holding | nothing: it never founds a city, so it is always 8 (the two starting techs) |
-| `found_capital` (playtest only) | founds the capital, automates workers, holds the rest | the floor for one city |
-| `settler_bot` | founds the capital; settles every settler at the top site `find_city_sites` gives; Warrior if a city has no defender, else Settler from size 2 (up to 8 cities), else Worker, else Warrior; cheapest tech | **the bar**: a no-LLM script that follows the env's own suggestions through the same tools and rules as the agent |
-| `engine_ai` | OpenCiv3's AI plays the agent's seat | a weak reference: its settlers wait for escorts and it builds an army; it also trades techs, which the agent cannot |
+- **The game's tools, and no shell or web:** Claude Code runs with no built-in tools and Gemini CLI with only the
+  env's 14; Codex has its shell, image, browser and web-search tools turned off (it keeps its file-patch, plan and
+  sub-agent tools, which work only inside its own container). Every action in the game goes through the env.
+- **Long games in sessions:** a prompt that names no stop turn plays the whole game in fresh sessions of
+  `OPENCIV3_SESSION_TURNS` turns (75 by default), which bounds the model's context; each session picks the game up
+  from the brief and the agent's plan. A prompt that says "until turn N" is one session to that turn.
+- **Seats:** an agent names its seat with its `agent_name` (or `OPENCIV3_SEAT`), and `end_turn` may wait minutes for
+  the others, so tool calls get a 30-minute timeout.
+- **Your own agent:** any A2A agent that advertises `urn:agentenv:mcp-config/v1` can play; set it in
+  `deploy_agent`'s `a2a_agent_id`. Without agent-env, serve the env (the image `agent-env openciv3 setup` built, or
+  `agent-env openciv3 serve` with a local bridge) and connect Claude Code, or any MCP client, to it:
 
-A scripted settler bot is the meaningful bar. In round 1 a similar bot matched or beat Sonnet (see
-Results), so beating `engine_ai` says little; an agent is doing something only when it beats
-`settler_bot`.
+```bash
+docker run --rm -p 127.0.0.1:18765:18765 mcp-server-openciv3
+claude mcp add --transport http openciv3 http://127.0.0.1:18765/mcp
+claude "Play OpenCiv3 with the openciv3 tools until GAME OVER." --allowedTools "mcp__openciv3__*"
+```
 
-The env's `data/get` summary carries the score, its components, the baselines at the same turn,
-who made each production and research decision, the agent's valid and invalid calls, and what the
-harness did (`autoplay_turns`, `new_games`, `extension_calls`, `engine_restarts`). The bundle's
-verifier scores it by weighted average:
+## Grading
 
-| Criterion | Weight |
-|---|---|
-| Reached the turn limit | 1 |
-| Not defeated | 1 |
-| Founded at least one city | 1 |
-| Score as a fraction of `settler_bot`'s at the same turn | 2 |
-| Gate: the engine did not fail | failing makes the grade 0 |
-| Gate: in a game the agent played, the harness autoplayed none of its turns | failing makes the grade 0 |
+**A match** (`three-agents`, `frontier`) is graded by the victor verifier. A conquest or domination ends the game and
+wins it; otherwise the top score at the turn limit wins. The grade is 1 for a valid match with one victor and 0.5 for
+a tie, and 0 when the match didn't reach its end, the engine failed, or the env ended more than 10% of any agent's
+turns. Each agent's rank, score, cities, techs and share of the world are reported alongside.
 
-A run reports `passed` only at 1.0: every check passes and the agent matches or beats `settler_bot`.
-`full-game` has its own verifier, against `engine_ai`, the agent's rank and its share of the world. A match
-(`three-agents`) is graded by the victor verifier: a conquest or a domination ends the game early and wins it,
-otherwise the top score at the turn limit wins; it reports each agent's rank, score and share. See the
+**A single agent** (`play`) is graded against baselines the env plays in the background on the same seed: `null`
+(never founds a city), `settler_bot` (a no-LLM script that follows the env's own suggestions through the same tools,
+**the bar**) and `engine_ai` (OpenCiv3's AI in the agent's seat). The grade weighs reaching the turn limit, surviving,
+founding a city, and the score as a fraction of `settler_bot`'s, with gates for engine failures and autoplayed turns.
+`full-game` has its own verifier, against `engine_ai`, the agent's rank and its share of the world. Details: the
 [bundle's README](src/agentenv_openciv3/bundles/openciv3/README.md).
 
 ## Results
 
 ### Three agents in one game
 
-`agent-env run openciv3 --task three-agents`: Opus 5.5 as Rome, Sonnet 5.5 as Greece and Haiku 4.5 as Egypt, each
-the Claude player agent on its own model, in one game with no AI civilizations.
-- **Setup:** seed 1, a Small map, Regent, roaming barbarians, 300 turns. This run played each agent's game as four
-  75-turn `prompt_agent` steps; the task now gives each agent one step, and the agent starts its own fresh
-  sessions. [tasks/three-agents.json](src/agentenv_openciv3/bundles/openciv3/tasks/three-agents.json), with the
-  prompt shortened:
-
-```jsonc
-[
-  {"id": "deploy", "type": "deploy_env", "env_id": "openciv3", "ttl_seconds": 28800},
-  {"id": "agent-opus", "type": "deploy_agent", "agent_name": "opus", "env_ids": ["openciv3"], "ttl_seconds": 28800,
-   "depends_on": ["deploy"]},
-  // agent-sonnet and agent-haiku alike: one deploy_agent step per player
-  {"id": "match", "type": "openciv3_match", "env_id": "openciv3", "turns": 300,
-   "civs": {"opus": "Rome", "sonnet": "Greece", "haiku": "Egypt"},
-   "depends_on": ["agent-opus", "agent-sonnet", "agent-haiku"]},
-  {"id": "opus", "type": "prompt_agent", "agent_name": "opus", "model": "anthropic/claude-opus-5-5", "prompt_id": "opus",
-   "timeout_seconds": 21600, "fail_task_on_error": false, "depends_on": ["match"],
-   "prompt": "You lead a civilization in a game of OpenCiv3 ... against other AI agents. Play to win. ..."},
-  // sonnet (anthropic/claude-sonnet-5-5) and haiku (anthropic/claude-haiku-4-5) alike, each with its own prompt
-  {"id": "grade", "type": "env_outcome_verifier", "env_id": "openciv3", "file_artifact_id": "victor-verifier",
-   "verifier_id": "victor", "score_aggregator": "weighted_average", "depends_on": ["opus", "sonnet", "haiku"]},
-  {"id": "recording", "type": "save_env_recording", "env_id": "openciv3", "timeout_seconds": 3600,
-   "depends_on": ["opus", "sonnet", "haiku"]}
-]
-```
-- **Run:** passed with grade 1. The game reached T300 in 68 minutes, the engine never restarted, and every agent
-  played every one of its turns (the env ended none for them).
+`three-agents`: Opus 5.5 as Rome, Sonnet 5.5 as Greece and Haiku 4.5 as Egypt, on a Small map at Regent with roaming
+barbarians and no AI civilizations, 300 turns (seed 1). It passed with grade 1: the game reached T300 in 68 minutes,
+the engine never restarted, and every agent played every one of its turns.
 
 | At T300 | Opus (Rome) | Haiku (Egypt) | Sonnet (Greece) |
 |---|---|---|---|
@@ -253,19 +367,19 @@ the Claude player agent on its own model, in one game with no AI civilizations.
 - **Expansion decided it.** Opus reached 45 cities by T150, then stopped founding them; its score rose from 1,261
   to 1,546 over the last 150 turns. Haiku left most production picks to the engine but kept settling to the end,
   and passed Sonnet's score around T250.
-- **No war between the agents.** All three stayed at peace with each other all game. Their nine attacks were all
-  on barbarians.
+- **No war between the agents.** All three stayed at peace all game; their nine attacks were all on barbarians.
 - **The engine's upkeep rule bites.** When a civ's gold would go negative, the engine disbands random units to pay
-  their support: Egypt lost 12 at once on T277. The env reports these as lost units without the reason yet.
-- **Total cost** $32.16. The recording names each seat (`Rome (Opus) vs Greece (Sonnet) vs Egypt (Haiku)`).
+  their support: Egypt lost 12 at once on T277.
 
-### The full game as an agent-env task
+### Nine models in one game
 
-`agent-env run openciv3 --task full-game`, on the patched engine (patches 0005-0009: AI science, governments
-and peace).
-- **Setup:** seed 1, a Standard map, 7 AIs, Regent, roaming barbarians, 540 turns.
-- **Agent:** Sonnet 5.5 as the Claude player agent, in six 90-turn sessions.
-- **Grade:** 0.86 with the full-game verifier.
+`frontier`: nine models from five labs on a Standard map, 200 turns, each through its lab's own CLI where there is
+one. The 10-turn version passed (grade 1; GPT-5.6 Sol led with 49), and the first 200-turn game is under way.
+
+### One agent against seven AI civilizations
+
+`full-game`: Sonnet 5.5 as Rome against OpenCiv3's AI at Civilization III's own settings (Standard map, 7 AIs, Regent,
+roaming barbarians, 540 turns), in six 90-turn sessions. Grade 0.86; 46 minutes and about $13.
 
 | At T540 | Agent (Rome) | Zululand (2nd) | Arabia (3rd) | Built-in AI in Rome's seat | `settler_bot` in Rome's seat |
 |---|---|---|---|---|---|
@@ -273,150 +387,34 @@ and peace).
 | Cities | 33 | 19 | 23 | 22 | 5 |
 | Techs (of 83) | 45 | 49 | 42 | 41 | 26 |
 
-- **Rank:** first of 8, and every civ survived. With the engine fixes the AIs research, change government and
-  make peace, so the margin is narrow.
-- **World share:** 11.6% of the land and 17.6% of the population. Civ III's domination victory needs two
-  thirds of each.
-- **Government and combat:** the agent changed government three times (Monarchy, Republic, Democracy) and
-  attacked once.
-- **Play:** of its production, it chose 231 items and the engine 62. It made 1,353 tool calls, 3.8% of them
-  invalid.
-- **Cost:** about $13 and 46 minutes, including the recordings.
+First of 8, with every civ alive; the agent changed government three times (Monarchy, Republic, Democracy) and
+attacked once. [docs/results.md](docs/results.md) has the playtests that shaped the env.
 
-### A full game at Civilization III's own settings, before the engine fixes
-
-On 2026-10-01 Sonnet 5.5 played a whole game: Standard map (100×100), 7 AI civs, Regent, roaming
-barbarians, 540 turns (4000 BC to AD 2050), seed 1. The harness rotated sessions at a 100K context cap
-(`playtest/run.py --context-cap`), and `playtest/longgame.py` wrote the report.
-
-| At T540 | Agent (Rome) | Best AI civ (Arabia) | Built-in AI in Rome's seat | `settler_bot` in Rome's seat |
-|---|---|---|---|---|
-| Score | **4,106** | 1,149 | 667 | 453 |
-| Cities | 120 | 24 | 12 | 9 |
-| Population | 549 | 149 | 73 | 59 |
-| Tiles | 1,123 | 330 | 188 | 86 |
-| Techs (of 83) | 34 | 33 | 35 | 25 |
-
-- **It led the game.** Rome ranked first of the 8 civs on 483 of 541 turns. It ended with 58% of the
-  world's land and 62% of its population. Civ III's domination victory needs two-thirds of each; this
-  engine has no victory conditions, so the game ran to the turn limit.
-- **The AIs fought each other, and the agent filled the space.**
-  - Four AI civs were destroyed in AI wars: Spain at T225, the Mongols at T372, Zululand at T385 and the
-    Hittites at T490.
-  - The agent founded 110 cities, many on their ruins.
-  - Arabia declared war on Rome at T482 and razed 3 of its cities; the agent has no way to attack.
-- **Weak spots:**
-  - Techs are level with the AIs; no civ leaves the ancient era in this engine.
-  - Cities starved 100 times, and 21 fell into disorder.
-  - In a 120-city empire, the agent accepted the engine's pick for 58% of production items.
-- **Cost:**
-  - 37 minutes of play and $22.31 for 1,499 tool calls (2.8 a turn, 3.1% invalid), over 4 sessions.
-  - No turn was autoplayed.
-  - The real-client and map videos took another 17 minutes to render.
-
-[docs/full-game.md](docs/full-game.md) covers what a full game still lacks.
-
-### Round 2: graded against `settler_bot`
-
-Gate v2: beat `settler_bot` on the same seed in at least 2 of 3 runs, with fewer than 10% invalid calls
-and no autoplay. Score per seed (agent / `settler_bot` / `engine_ai`):
-
-| Batch | Seed 1 or 4 | Seed 2 or 5 | Seed 3 or 6 | Gate v2 | $ per game |
-|---|---|---|---|---|---|
-| Sonnet, Tiny, 3 rivals, 60 turns | 179 / 156 / 134 | 163 / 125 / 141 | 166 / 131 / 155 | pass, 3 of 3 | 0.29–0.35 |
-| Haiku, Tiny, 3 rivals, 60 turns | 195 / 156 / 134 | 137 / 125 / 141 | 179 / 131 / 155 | pass, 3 of 3 | 0.25–0.27 |
-| Sonnet, Small, 5 rivals, 100 turns | 295 / 275 / 240 | 318 / 271 / 201 | 371 / 291 / 294 | pass, 3 of 3 | 1.08–1.30 |
-
-### Round 1
-
-Claude Code through the playtest harness, one game per seed, same-seed baselines. Tiny map,
-3 rivals, 60 turns (seeds 1-3); Small map, 5 rivals, roaming barbarians, 100 turns (seeds 4-6).
-Score (cities):
-
-| Seed | Sonnet | Haiku | `null` | `found_capital` | scripted settler bot | `engine_ai` |
-|---|---|---|---|---|---|---|
-| 1 | 168 (5) | 71 (1) | 8 | 58 | 164 (5) | 134 (3) |
-| 2 | 161 (6) | 57 (1) | 8 | 54 | 171 (6) | 141 (4) |
-| 3 | 176 (5) | 64 (1) | 8 | 62 | 159 (5) | 155 (4) |
-| 4 | 341 (12) | – | 8 | 81 | 366 (12) | 240 (7) |
-| 5 | 344 (11) | – | 8 | 74 | 375 (12) | 201 (5) |
-| 6 | 255 (7) | – | 8 | 78 | 384 (13) | 294 (9) |
-
-What the audit of these games found:
-- **A scripted bot matched Sonnet.** The bot (from the audit, the forerunner of `settler_bot`) beat
-  Sonnet on 4 of 6 seeds and `engine_ai` on 6 of 6. Sonnet's wins over `engine_ai` came mostly from
-  the env's unescorted settling and the score formula, not from better play.
-- **The engine made many of the agent's decisions.** It chose 55% of the production items Sonnet's
-  cities completed, nearly all research after the first pick, and every worker and explorer move.
-- **Haiku's one-city games were an env trap.** Every Haiku capital rioted at size 3, because an
-  empty city riots at the size a Settler needs, and nothing told the agent how to stop it.
-- Sonnet cost $0.15-0.16 per 60-turn game and $0.39-0.50 per 100-turn game, with 2-7% failed calls;
-  10 of its 17 failures were harness artefacts (bare tool names copied from the prompt) or a
-  since-fixed name mismatch.
-
-Round 2 adds the levers, signals and baselines these findings called for (`set_rates`, `buy`, riot
-warnings and fixes, reported engine picks, `settler_bot`), and grades against `settler_bot`.
-
-## Recordings
-
-The bridge writes a snapshot of the whole world after every turn. The env renders the game so far
-on request through its `urn:openciv3:recording/v1` extension: an mp4 (a gif when `ffmpeg` is
-missing; the image has it) with the map, the scoreboard and the agent's actions for each turn, and a
-self-contained HTML replay with a turn slider. In a game with several agents, each civilization an agent plays is
-highlighted and named with its label, e.g. `Rome (Opus)`, and every action and event names its agent. See
-[docs/recording.md](docs/recording.md).
-
-- **In agent-env:** every task in the bundle ends with the `save_env_recording` step, in parallel
-  with grading. It stores each file as a `file` artifact named
-  `<task id>-recording-<instance id>.<suffix>`. `agent-env openciv3 recordings` lists them, and
-  `agent-env openciv3 recordings <instance id> --out <dir>` copies one run's files out (`agent-env
-  run` prints the instance id). The step works with any env that advertises an extension of that
-  shape, and a failed recording never stops grading.
-- **Live:** while a game plays, the env serves a live view at `/live`: the map frame of the newest turn, the scores
-  and score chart, each agent's actions and the turn's events, and the real client's view when the image has it.
-  `agent-env openciv3 watch` prints its URL for the envs running locally (`--open` opens it).
-- **In the playtest harness:** every run directory gets `recording.mp4` and `replay.html`, and
-  `playtest/replay.py` rebuilds them for older runs.
-- **The real game's view:** `agent-env openciv3 setup --client` builds the image with the OpenCiv3 client
-  (Godot, rendering on the CPU, no GPU or display). Recordings then also include `client.mp4`, one frame per
-  turn of the real client with its art. It adds about a minute per 60 turns and about 350 MB. The image holds
-  OpenCiv3's community art, which carries no licence, so don't push it to a public registry; see
-  [docs/recording.md](docs/recording.md#5-the-real-clients-view-client_mp4).
-- `OPENCIV_RECORD=0` turns recording off.
-
-## How it works
+## Repository layout
 
 ```
-LLM agents ─MCP (streamable HTTP, :18765/mcp)──▶ agentenv_openciv3.server   (Python, AgentEnv SDK)
-harness ───data plane /agentenv, extensions──────▶   │  JSON lines on stdin/stdout
-                                                      ▼
-                                                   CivBridge                 (.NET 8)
-                                                      │
-                                                      ▼
-                                                   C7Engine                  (OpenCiv3, patched copy)
+agents/                 the player agents: claude-player, codex-player, gemini-player, and common (their game loop)
+bridge/CivBridge/       C#: runs one OpenCiv3 game headless and answers JSON-lines commands (docs/protocol.md)
+src/agentenv_openciv3/  the env (server.py), its text renderers, the live view, recordings, the plugin's CLI and steps
+  bundles/openciv3/     the tasks and their verifiers
+patches/                the patches applied to OpenCiv3's engine
+playtest/               a harness that drives Claude Code against a local env, for batches of games
+client/                 the real OpenCiv3 client's renderer, for recordings (optional)
+scripts/                install.sh, build-bridge.sh
+tests/                  bridge, env, agents and packaging tests
+vendor/OpenCiv3         OpenCiv3, as a git submodule
+docs/                   tools, protocol, recording, results, full-game notes
 ```
 
-- **CivBridge** (`bridge/`) runs one OpenCiv3 game headlessly and answers JSON-lines commands
-  (`new_game`, `state`, `unit_order`, `end_turn`, `autoplay`, `world`, `load`, ...). It autosaves
-  every turn, so the env restarts a crashed bridge from the start of the current turn. A game can have several
-  seats, one per agent; the turn advances once every seat has ended it. Protocol: [docs/protocol.md](docs/protocol.md).
-- **The env** (`src/agentenv_openciv3/`) is an `AgentEnvEnvironment`. It renders the bridge's facts
-  into text for the agent, keeps the plan and the action log, plays the baselines, plays each MCP request as
-  the seat its `X-OpenCiv3-Seat` header names, renders
-  recordings, and exposes the data plane (`data/reset`, `data/add`, `data/get`) and three harness
-  extensions: `urn:openciv3:new-game/v1`, `urn:openciv3:autoplay/v1` and
-  `urn:openciv3:recording/v1`. It is configured through environment variables (`OPENCIV_SEED`,
-  `OPENCIV_TURN_LIMIT`, `OPENCIV_SIZE`, `OPENCIV_ACTION_LOG`, ...); see
-  [docs/tools.md](docs/tools.md).
-- **The plugin** adds `agent-env openciv3 setup`, `serve`, `recordings` and `watch`, the task steps
-  `openciv3_match` and `save_env_recording` (`src/agentenv_openciv3/steps.py`), and the bundle `openciv3`
-  (`src/agentenv_openciv3/bundles/openciv3/`) with the tasks `smoke`, `play`, `full-game`, `three-agents` and
-  `frontier` and their verifiers. `agents/` holds the A2A agents that play them, one per CLI over a shared game
-  loop.
-- **The image** holds the bridge published self-contained for `linux/amd64` or `linux/arm64`
-  (cross-compiled on the build host), the env, and a static `ffmpeg`.
+## Contributing
+
+Contributions are welcome: new tasks, tools, player agents, engine fixes and docs. Open an issue to discuss a
+larger change first, then send a pull request; CI must pass, and the maintainer reviews and approves every pull
+request before it merges. [CONTRIBUTING.md](CONTRIBUTING.md) covers the setup, the tests and the conventions.
 
 ## Development
+
+You need the [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) for the bridge, besides uv and Docker.
 
 ```bash
 git submodule update --init vendor/OpenCiv3   # pinned; not --recursive
@@ -424,56 +422,35 @@ uv venv && uv pip install -e '.[dev]'
 scripts/build-bridge.sh                       # build/engine (patched copy), then build/bridge/CivBridge
 export DOTNET_ROOT=<your .NET 8 dir>          # only when .NET isn't installed system-wide
 export CIVBRIDGE_CMD=$PWD/build/bridge/CivBridge
-.venv/bin/pytest                              # tests/ (bridge, env, packaging) and the playtest harness
+.venv/bin/pytest                              # bridge, env, agents and packaging tests, and the playtest harness
 .venv/bin/ruff check .
 docker build -t mcp-server-openciv3 .         # the env image, for this machine's platform
 ```
 
-- The local bridge is framework-dependent, so it needs a .NET 8 runtime; `agent-env openciv3 serve`
-  checks that it starts and says when `DOTNET_ROOT` is missing.
-- `tests/env` drives the env against a fake bridge, `tests/bridge` the real one, and
-  `tests/packaging` the CLI, the `save_env_recording` step (against a fake env and agent-env's
-  local stores) and the verifier.
-- CI (`.github/workflows/ci.yml`) lints, runs every test on Python 3.11 and 3.12 against a freshly
-  built bridge, then runs the quickstart: `agent-env openciv3 setup`, the `smoke` task, and a check
-  that the recording was saved (uploaded as a workflow artifact).
+CI (`.github/workflows/ci.yml`) lints, runs every test on Python 3.11 and 3.12 against a freshly built bridge, then
+builds the image and plays the `smoke` task, with and without the real client. [docs/protocol.md](docs/protocol.md)
+documents the bridge, [docs/tools.md](docs/tools.md) the env's tools and settings, and
+[docs/recording.md](docs/recording.md) the recordings.
 
 ## Licence and credits
 
 This repository is licensed under the Apache License 2.0 ([LICENSE](LICENSE), [NOTICE](NOTICE)).
 
-[OpenCiv3](https://github.com/C7-Game/OpenCiv3) is MIT-licensed, by the OpenCiv3 (C7) contributors.
-It is referenced as a git submodule and never modified there. The engine in the bridge and the image
-is built from a copy of it with these patches applied (`patches/`):
+- **[AgentEnv Framework](https://www.agentenvframework.com)** ([scaleapi/agentenv-framework](https://github.com/scaleapi/agentenv-framework))
+  runs the tasks, the agents and the registry this plugin plugs into.
+- **[OpenCiv3](https://github.com/C7-Game/OpenCiv3)** is MIT-licensed, by the OpenCiv3 (C7) contributors. It is
+  referenced as a git submodule and never modified there; the engine in the bridge and the image is built from a copy
+  with the patches in `patches/` applied: a defeated player no longer hangs the turn loop, war declarations use the
+  game's seeded RNG, budget and AI-turn errors are contained, buildings that need another building and small wonders
+  become buildable, the AI funds its science, supports its units, changes government and makes peace, and research
+  cost follows the difficulty.
+- The image also contains Blast (Apache-2.0), Serilog (Apache-2.0), MoonSharp (BSD-3-Clause), ini-parser (MIT), the
+  .NET runtime (MIT) and a static FFmpeg build (GPL-3.0-or-later); it carries their licences in
+  `/opt/civbridge/licenses/`. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+- The optional client image (`--client`) adds the OpenCiv3 client (MIT), Godot (MIT), Xvfb, Mesa and OpenCiv3's
+  community art from [C7-Game/Assets](https://github.com/C7-Game/Assets). That art carries no licence: it is fetched
+  when the image is built, never stored in this repository, and the image is not pushed to a public registry. Videos
+  made with it may be shared.
 
-1. `0001-defeated-controller-ends-turn-loop`: hand control back once the human player is defeated,
-   instead of looping forever.
-2. `0002-declare-war-uses-game-rng`: draw war declarations from the game's seeded RNG, so games stay
-   deterministic.
-3. `0003-budget-never-throws`: when the budget can't be balanced, keep gold at 0 instead of throwing
-   mid-turn.
-4. `0004-ai-turn-exceptions-are-contained`: an exception in one AI player's turn ends that player's
-   turn instead of aborting or stalling the game.
-5. `0005-building-prerequisites-check-the-city`: buildings that need another building (Bank,
-   University, Cathedral, ...) become buildable.
-6. `0006-small-wonders-are-buildable`: small wonders can be built, once per civ.
-7. `0007-ai-keeps-its-science-funded`: the AI keeps its science funded, stops building units it cannot
-   support, and changes government.
-8. `0008-research-cost-follows-the-difficulty`: harder difficulties make AI research cheaper, as they
-   make its production cheaper, instead of dearer.
-9. `0009-ai-makes-peace`: an AI asks a price for peace, makes peace with other AIs and offers it to the
-   player, and remembers broken treaties.
-
-The image also contains Blast (Apache-2.0), Serilog (Apache-2.0), MoonSharp (BSD-3-Clause),
-ini-parser (MIT), the .NET runtime (MIT) and a static FFmpeg build (GPL-3.0-or-later); the image
-carries their licences in `/opt/civbridge/licenses/`. See
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
-The optional client image (`--target client`) adds the OpenCiv3 client (MIT), Godot (MIT), the .NET
-runtime, Xvfb and Mesa, and OpenCiv3's community art from
-[C7-Game/Assets](https://github.com/C7-Game/Assets). That art carries no licence: it is fetched when the
-image is built and never stored in this repository, and the image is not pushed to a public registry.
-
-Civilization and Civilization III are trademarks of Take-Two Interactive Software. This project is
-not affiliated with or endorsed by Take-Two, Firaxis Games or the OpenCiv3 project, and it uses no
-Civilization III game files.
+Civilization and Civilization III are trademarks of Take-Two Interactive Software. This project is not affiliated with
+or endorsed by Take-Two, Firaxis Games or the OpenCiv3 project, and it uses no Civilization III game files.
