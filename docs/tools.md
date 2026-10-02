@@ -42,8 +42,14 @@ the valid alternatives and the exact call to make instead.
 
 A game started with `seats` (new-game extension) is played by several agents, one civ each; there are no baselines.
 
-- **Which seat a call plays:** the civ in the request's `X-OpenCiv3-Seat` header (the Claude player agent sends its
-  `OPENCIV3_SEAT`); with no header, the first civ. Each seat has its own ids, plan, notices and action log.
+- **Which seat a call plays:** the seat the request's `X-OpenCiv3-Seat` header names, by civ or by label (the
+  `openciv3_match` step labels each seat with its agent's name, and the Claude player agent sends its name, or
+  `OPENCIV3_SEAT` when set); with no header, the first civ. A game with one seat ignores the header. Each seat has
+  its own ids, plan, notices and action log.
+- **The rules:** the brief's `MATCH` line names the other agents and the AI civilizations and says how the match
+  ends: at the turn limit, or sooner by conquest (one agent's civilization is the last an agent still plays) or
+  domination (one holds two thirds of the world's land and population). A victory ends the game for everyone, and
+  GAME OVER names the winner; `data/get` reports it as `victory`.
 - **The turn:** all seats play it at the same time. `end_turn` holds until every seat has ended the turn, then
   returns this seat's turn report and the next brief; meanwhile the env serves the other seats. After 10 minutes it
   answers `WAITING …` instead, and the next `end_turn` keeps waiting (or reports the turn, if it has advanced since).
@@ -52,6 +58,20 @@ A game started with `seats` (new-game extension) is played by several agents, on
   `skip_idle`), and its next call starts with a `!!` line saying so. `data/get` counts these per seat.
 - **Diplomacy:** another agent's civ shows as `(another agent)`. Peace with it has no price: it is signed when both
   propose it, the second within a turn of the first; the brief marks a war whose enemy `offers peace`.
+
+## Watching a game live
+
+The env serves, over plain HTTP next to the MCP endpoint:
+
+| Route | What it returns |
+|---|---|
+| `GET /live` | A page that follows the game: the map, the scores and score chart, the last turn's agent actions and events, a banner at a victory or GAME OVER, and buttons for the spectator map, the agents' explored view and the real client's view (when the image has the client) |
+| `GET /live/state.json` | `{"turn", "turn_limit", "game_over", "victory", "players": [{"civ", "label", "is_agent", "defeated", "score"}], "events", "actions", "client", ...}`; `turn` is null before the first turn |
+| `GET /live/frame.png?turn=N&view=spectator\|agent` | The map frame of turn N (default: the newest), as the recording draws it; 404 before the first turn |
+| `GET /live/client.png?turn=N` | The real client's view of the newest turn it has drawn; it draws the newest save in the background, answers 503 with `Retry-After` until the first frame, and 404 without the client |
+
+`agent-env openciv3 watch` lists the live URL of every OpenCiv3 env running in local Docker; `--open` opens the
+first in a browser.
 
 ## Anti-stuck rules (server side)
 

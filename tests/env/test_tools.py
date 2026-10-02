@@ -300,7 +300,7 @@ async def test_game_over(tools, action_log):
         text = await tools("end_turn", skip_idle=True, until_attention=True, max_turns=20)
     assert "GAME OVER — turn 8/8 reached." in text
     assert re.search(r"FINAL score \d+ \(cities \d+, pop \d+, tiles \d+, techs \d+\) · units \d+ · gold \d+", text)
-    assert "no further actions are possible" in text
+    assert "no further actions are possible" in text and text.endswith("[GAME OVER T8/8]")
     for tool, args in (("end_turn", {}), ("unit_order", {"unit": "u2", "order": "hold"}),
                        ("set_production", {"city": "c1", "item": "Warrior"}), ("research", {"tech": "Writing"})):
         err = await tools.error(tool, **args)

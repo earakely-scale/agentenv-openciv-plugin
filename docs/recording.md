@@ -111,3 +111,12 @@ public registry.
 
 [client/README.md](../client/README.md) has the capture's details, measurements and how to run it on a
 Mac for debugging.
+
+## 6. Watching a game live
+
+The same per-turn snapshots (and, with the client, the per-turn saves) feed a live view while the game plays:
+`GET /live` on the env, which `agent-env openciv3 watch` finds for envs running locally. It draws each new turn's
+map frame as the mp4 does, keeps the score chart's history light (only the requested turn's snapshot is read
+whole), and asks the real client for the newest save only, so a slow client skips turns instead of falling behind.
+Routes and the state's shape: [docs/tools.md](tools.md#watching-a-game-live).
+

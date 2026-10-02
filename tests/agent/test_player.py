@@ -111,7 +111,7 @@ def test_a_session_ends_its_length_after_the_first_turn_it_sees():
 
 def test_a_later_session_is_told_the_game_is_under_way():
     first = player.session_message("Lead Rome.", player.Session(turns=75))
-    assert first.startswith("Lead Rome.\n\nYou play this game in sessions of 75 turns.")
+    assert first.startswith("Lead Rome.\n\nA game longer than 75 turns is played in sessions of 75 turns.")
     later = player.session_message("Lead Rome.", player.Session(turns=75, start=76))
     assert later.startswith("This game is under way: an earlier session played it up to turn 76. Start with the "
                             "get_turn_brief tool") and later.endswith(first)
@@ -167,7 +167,7 @@ def test_a_prompt_without_a_stop_turn_plays_the_game_in_sessions_to_game_over(fa
     assert game["mcp"]["mcpServers"]["openciv3"]["headers"] == {"X-OpenCiv3-Seat": "opus"}
     assert [len(messages) for messages in game["sessions"]] == [3, 3, 2]
     first, second, third = game["sessions"]
-    assert first[0].startswith("Lead Rome.\n\nYou play this game in sessions of 10 turns.")
+    assert first[0].startswith("Lead Rome.\n\nA game longer than 10 turns is played in sessions of 10 turns.")
     assert first[1:] == [f"The game is at turn {t}; this session ends at turn 10. Continue playing." for t in (4, 8)]
     assert second[0].startswith("This game is under way: an earlier session played it up to turn 12.")
     assert third[1] == "The game is at turn 28; this session ends at turn 30. Continue playing."

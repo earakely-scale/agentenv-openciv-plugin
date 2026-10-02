@@ -43,9 +43,9 @@ SYSTEM_PROMPT = (
 )
 NUDGE = "The game is at turn {turn}; this session ends at turn {stop}. Continue playing."
 SESSIONS = (
-    "You play this game in sessions of {turns} turns. Each session starts fresh and knows only the game and your plan "
-    "(the plan tool), so keep the plan current. When this session has played its {turns} turns, update your plan and "
-    "reply with one line on where the game stands."
+    "A game longer than {turns} turns is played in sessions of {turns} turns. Each session starts fresh and knows only "
+    "the game and your plan (the plan tool), so keep the plan current. When this session has played its {turns} turns, "
+    "update your plan and reply with one line on where the game stands."
 )
 RESUME = ("This game is under way: an earlier session played it up to turn {turn}. Start with the get_turn_brief tool "
           "and read your plan in it.")

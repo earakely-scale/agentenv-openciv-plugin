@@ -757,7 +757,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
             s = await self._state()
             report = render.turn_report(res, res["turn"] - extra["turns_advanced"])
             if seat.over:
-                return report + "\n" + render.game_over(s, self._vs(s["turn"]))
+                return f"{report}\n{render.game_over(s, self._vs(s['turn']))}\n{render.footer(s)}"
             return f"{report}\n---\n{await self._brief(events=False)}\n{render.footer(s)}"
         return await self._run("end_turn", {"skip_idle": skip_idle, "until_attention": until_attention,
                                             "max_turns": max_turns}, body, mutating=True, extra=extra)

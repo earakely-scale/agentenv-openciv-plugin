@@ -31,21 +31,38 @@ in parallel: the outcome verifier and `save_env_recording`.
     game from wherever it is. Grading and the recording follow the last session.
   - **Time:** allow an hour or two.
 
-- `three-agents` has three agents play one game against each other: Opus as Rome, Sonnet as Greece and Haiku as
-  Egypt, on a Small map at Regent with roaming barbarians, no AI civilizations, for 300 turns (seed 1).
-  - **Seats:** the game is started with `seats` and `labels` (see `docs/tools.md`). Each agent is its own
-    `deploy_agent` step (`agent_name` opus, sonnet, haiku) with `OPENCIV3_SEAT` naming its civ, and each plays four
-    75-turn `prompt_agent` sessions with its model. The turn advances when all three have ended it.
-  - **Grade:** `artifacts/seats-verifier/verify.py` grades the match, not the players: the turn limit was reached,
-    the engine kept running and every agent played (the env ended at most a tenth of any seat's turns). Each
-    agent's rank, score, metrics and world share are reported in a row of weight 0.
-  - **Models:** the task names LiteLLM model ids (`anthropic/claude-opus-5-5`, …); change them for another
-    endpoint.
+- `three-agents` is a match: Opus as Rome, Sonnet as Greece and Haiku as Egypt play one game against each other,
+  on a Small map at Regent with roaming barbarians and no AI civilizations, for 300 turns (seed 1).
+  `three-agents-quick` is the same match in 10 turns (a few minutes, well under a dollar), to check a setup first.
+  Both are written so you can change who plays and how:
+  - **Agents:** each `deploy_agent` step is a player. Add one or remove one to change how many agents play; the
+    step's `agent_name` is how the game knows the agent.
+  - **The game:** the `openciv3_match` step starts it once the agents are deployed, with one seat per deployed
+    agent. `turns` is the turn limit; `civs` says which civilization each agent plays (the others get the next free
+    one); `ai_opponents` adds AI civilizations; `seed`, `size`, `difficulty` and `barbarians` set the map.
+  - **Prompts:** each agent has one `prompt_agent` step with its own prompt and model. The tasks give all three the
+    same prompt; edit one to give that agent its own strategy. The brief states the match's rules, so a prompt
+    need not.
+  - **Victor:** `artifacts/victor-verifier/verify.py` names the winner. A conquest (one agent's civilization is
+    the last an agent still plays) or a domination (one holds two thirds of the world's land and population) ends
+    the game early and wins it; otherwise the top score at the turn limit wins, and a tie has no victor. The grade
+    is 1 for a valid match with one victor, 0.5 for a tie, and 0 when the match was not played to its end, the
+    engine failed, or the env ended more than a tenth of any agent's turns. Each agent's rank, score, metrics and
+    share are reported in rows of weight 0.
+  - **Watch it live:** while it plays, `agent-env openciv3 watch` prints the URL of the env's live view (`--open`
+    opens it): the map, the scores, each agent's actions and the turn's events, and the real client's view when the
+    image has it.
+  - **Models:** the ids are LiteLLM-style (`anthropic/claude-opus-5-5`, …); the player agent also takes them on
+    Anthropic's own API.
 
 **The Claude player agent.** The repository ships an agent for these tasks: `agents/claude-player`, an A2A
-agent that runs Claude Code against the env's MCP tools, one session per prompt.
-- It plays until the turn its prompt names ("until turn 180") or GAME OVER, nudging as the playtest harness
-  does.
+agent that runs Claude Code against the env's MCP tools.
+- A prompt that names a stop turn ("until turn 180", as in `full-game`) is one session that plays to that turn or
+  GAME OVER, nudging as the playtest harness does.
+- Any other prompt plays the whole game: the agent starts a fresh Claude Code session every 75 turns
+  (`OPENCIV3_SESSION_TURNS` in the deploy step's `env_vars`; 0 for one session), and each new session resumes from
+  the brief and the plan.
+- In a game with seats it names its seat by its `agent_name` (or `OPENCIV3_SEAT` from its `env_vars`).
 - `agent-env openciv3 setup --agent` builds and registers it as `openciv3-claude`.
 - Then set, in `.agentenv/config.toml`:
 

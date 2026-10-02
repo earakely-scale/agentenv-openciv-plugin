@@ -260,7 +260,14 @@ events, decisions and plan state are its own. An unknown seat fails with `unknow
 - **Peace between seats** has no price: `propose_peace` from one seat stands until the end of the next turn and
   reaches the other as a `peace_offered` event; a `propose_peace` from the other meanwhile signs it, each side paying
   the gold it offered. Talks are never refused between seats.
-- `autoplay` fails with `multi_seat`. The autosave (format 2) keeps every seat; `load` restores them all.
+- **Victory.** After every turn the bridge checks for a winner: conquest, when one seat's civilization is the
+  last an agent still plays (the others are defeated), or domination, when one seat holds two thirds of the
+  world's land tiles and two thirds of its population (Civ III's rule). The game is then over for every seat:
+  each gets a `victory` event, `game_over` turns true, and `state`, `score` and the world snapshot carry
+  `"victory": {"kind": "conquest"|"domination", "civ", "label", "turn"}` (null until then). At the turn limit no
+  one has won this way, and the verifier ranks the seats by score.
+- `autoplay` fails with `multi_seat`. The autosave (format 2) keeps every seat and the victory; `load` restores
+  them.
 
 ## Engine patches
 

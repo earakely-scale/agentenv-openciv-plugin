@@ -88,7 +88,8 @@ The run directory gets the transcript, the env's action log, the final summary a
 baselines, and the recording. See [playtest/README.md](playtest/README.md) for batches and gates.
 
 **Through agent-env, with the Claude player agent.** The repository ships an A2A agent for the bundle's
-tasks, `agents/claude-player`. It runs Claude Code against the env's tools, one session per prompt.
+tasks, `agents/claude-player`. It runs Claude Code against the env's tools; one prompt plays a whole game, in fresh
+Claude Code sessions of 75 turns.
 
 - **Setup:** `scripts/install.sh --agent` does all of it:
   - `agent-env openciv3 setup --agent` builds and registers the agent as `openciv3-claude`;
@@ -100,11 +101,15 @@ tasks, `agents/claude-player`. It runs Claude Code against the env's tools, one 
 ```bash
 agent-env run openciv3 --task play        # 50 turns on a Tiny map
 agent-env run openciv3 --task full-game   # 540 turns at Civilization III's own settings, as six 90-turn sessions
-agent-env run openciv3 --task three-agents  # Opus, Sonnet and Haiku play one 300-turn game against each other
+agent-env run openciv3 --task three-agents        # Opus, Sonnet and Haiku play one 300-turn game against each other
+agent-env run openciv3 --task three-agents-quick  # the same match in 10 turns, to check a setup
+agent-env openciv3 watch --open                   # meanwhile: watch the game live in the browser
 ```
 
-In `three-agents` each agent plays its own civilization (the `X-OpenCiv3-Seat` header names it), all three play each
-turn at the same time, and the turn advances once every agent has ended it.
+In a match each `deploy_agent` step is a player, the `openciv3_match` step sets the turns, the map and each agent's
+civilization, and each agent's `prompt_agent` step carries its own prompt. All agents play each turn at the same
+time, the turn advances once every agent has ended it, and the victor verifier names the winner. The
+[bundle's README](src/agentenv_openciv3/bundles/openciv3/README.md) has the details.
 
 The full game took 46 minutes and about $13 on Sonnet 5.5, and scored 0.86 with the full-game verifier. The
 three-agent game took 68 minutes and $32 for all three models, and passed with grade 1. Any
@@ -183,9 +188,9 @@ verifier scores it by weighted average:
 | Gate: in a game the agent played, the harness autoplayed none of its turns | failing makes the grade 0 |
 
 A run reports `passed` only at 1.0: every check passes and the agent matches or beats `settler_bot`.
-`full-game` has its own verifier, against `engine_ai`, the agent's rank and its share of the world. `three-agents`
-grades the match rather than the players (the turn limit was reached, the engine kept running, every agent played
-its own turns) and reports each agent's rank, score and share; see the
+`full-game` has its own verifier, against `engine_ai`, the agent's rank and its share of the world. A match
+(`three-agents`) is graded by the victor verifier: a conquest or a domination ends the game early and wins it,
+otherwise the top score at the turn limit wins; it reports each agent's rank, score and share. See the
 [bundle's README](src/agentenv_openciv3/bundles/openciv3/README.md).
 
 ## Results
@@ -194,32 +199,30 @@ its own turns) and reports each agent's rank, score and share; see the
 
 `agent-env run openciv3 --task three-agents`: Opus 5.5 as Rome, Sonnet 5.5 as Greece and Haiku 4.5 as Egypt, each
 the Claude player agent on its own model, in one game with no AI civilizations.
-- **Setup:** seed 1, a Small map, Regent, roaming barbarians, 300 turns, four 75-turn sessions per agent. The
-  task is [tasks/three-agents.json](src/agentenv_openciv3/bundles/openciv3/tasks/three-agents.json):
+- **Setup:** seed 1, a Small map, Regent, roaming barbarians, 300 turns. This run played each agent's game as four
+  75-turn `prompt_agent` steps; the task now gives each agent one step, and the agent starts its own fresh
+  sessions. [tasks/three-agents.json](src/agentenv_openciv3/bundles/openciv3/tasks/three-agents.json), with the
+  prompt shortened:
 
 ```jsonc
 [
   {"id": "deploy", "type": "deploy_env", "env_id": "openciv3", "ttl_seconds": 28800},
-  {"id": "new-game", "type": "apply_server_config", "env_id": "openciv3", "timeout_seconds": 120,
-   "directives": [{"service": "openciv3", "uri": "urn:openciv3:new-game/v1", "args": {
-     "seed": 1, "size": "Small", "civ": "Rome", "opponents": 2, "seats": ["Greece", "Egypt"],
-     "labels": {"Rome": "Opus", "Greece": "Sonnet", "Egypt": "Haiku"},
-     "difficulty": "Regent", "barbarians": "Roaming", "turn_limit": 300}}]},
-  {"id": "agent-opus", "type": "deploy_agent", "agent_name": "opus", "env_ids": ["openciv3"],
-   "env_vars": {"OPENCIV3_SEAT": "Rome"}, "ttl_seconds": 28800, "depends_on": ["new-game"]},
-  // agent-sonnet (Greece) and agent-haiku (Egypt) alike
-  {"id": "opus-1", "type": "prompt_agent", "agent_name": "opus", "model": "anthropic/claude-opus-5-5",
-   "prompt_id": "opus-1", "timeout_seconds": 5400, "fail_task_on_error": false, "depends_on": ["agent-opus"],
-   "prompt": "You lead Rome in a game of OpenCiv3, ... This session plays until turn 75; ..."},
-  // opus-2 to opus-4 play until turns 150, 225 and 300, each after the one before;
-  // sonnet-1 to sonnet-4 (anthropic/claude-sonnet-5-5) and haiku-1 to haiku-4 (anthropic/claude-haiku-4-5) alike
-  {"id": "grade", "type": "env_outcome_verifier", "env_id": "openciv3", "file_artifact_id": "seats-verifier",
-   "verifier_id": "seats", "score_aggregator": "weighted_average", "depends_on": ["opus-4", "sonnet-4", "haiku-4"]},
+  {"id": "agent-opus", "type": "deploy_agent", "agent_name": "opus", "env_ids": ["openciv3"], "ttl_seconds": 28800,
+   "depends_on": ["deploy"]},
+  // agent-sonnet and agent-haiku alike: one deploy_agent step per player
+  {"id": "match", "type": "openciv3_match", "env_id": "openciv3", "turns": 300,
+   "civs": {"opus": "Rome", "sonnet": "Greece", "haiku": "Egypt"},
+   "depends_on": ["agent-opus", "agent-sonnet", "agent-haiku"]},
+  {"id": "opus", "type": "prompt_agent", "agent_name": "opus", "model": "anthropic/claude-opus-5-5", "prompt_id": "opus",
+   "timeout_seconds": 21600, "fail_task_on_error": false, "depends_on": ["match"],
+   "prompt": "You lead a civilization in a game of OpenCiv3 ... against other AI agents. Play to win. ..."},
+  // sonnet (anthropic/claude-sonnet-5-5) and haiku (anthropic/claude-haiku-4-5) alike, each with its own prompt
+  {"id": "grade", "type": "env_outcome_verifier", "env_id": "openciv3", "file_artifact_id": "victor-verifier",
+   "verifier_id": "victor", "score_aggregator": "weighted_average", "depends_on": ["opus", "sonnet", "haiku"]},
   {"id": "recording", "type": "save_env_recording", "env_id": "openciv3", "timeout_seconds": 3600,
-   "depends_on": ["opus-4", "sonnet-4", "haiku-4"]}
+   "depends_on": ["opus", "sonnet", "haiku"]}
 ]
 ```
-
 - **Run:** passed with grade 1. The game reached T300 in 68 minutes, the engine never restarted, and every agent
   played every one of its turns (the env ended none for them).
 
@@ -356,6 +359,9 @@ highlighted and named with its label, e.g. `Rome (Opus)`, and every action and e
   `agent-env openciv3 recordings <instance id> --out <dir>` copies one run's files out (`agent-env
   run` prints the instance id). The step works with any env that advertises an extension of that
   shape, and a failed recording never stops grading.
+- **Live:** while a game plays, the env serves a live view at `/live`: the map frame of the newest turn, the scores
+  and score chart, each agent's actions and the turn's events, and the real client's view when the image has it.
+  `agent-env openciv3 watch` prints its URL for the envs running locally (`--open` opens it).
 - **In the playtest harness:** every run directory gets `recording.mp4` and `replay.html`, and
   `playtest/replay.py` rebuilds them for older runs.
 - **The real game's view:** `agent-env openciv3 setup --client` builds the image with the OpenCiv3 client
@@ -389,8 +395,8 @@ harness ───data plane /agentenv, extensions──────▶   │  JS
   `urn:openciv3:recording/v1`. It is configured through environment variables (`OPENCIV_SEED`,
   `OPENCIV_TURN_LIMIT`, `OPENCIV_SIZE`, `OPENCIV_ACTION_LOG`, ...); see
   [docs/tools.md](docs/tools.md).
-- **The plugin** adds `agent-env openciv3 setup`, `serve` and `recordings`, the task step
-  `save_env_recording` (`src/agentenv_openciv3/steps.py`), and the bundle `openciv3`
+- **The plugin** adds `agent-env openciv3 setup`, `serve`, `recordings` and `watch`, the task steps
+  `openciv3_match` and `save_env_recording` (`src/agentenv_openciv3/steps.py`), and the bundle `openciv3`
   (`src/agentenv_openciv3/bundles/openciv3/`) with the tasks `smoke`, `play`, `full-game` and `three-agents`
   and their verifiers. `agents/claude-player` is the A2A agent that plays them.
 - **The image** holds the bridge published self-contained for `linux/amd64` or `linux/arm64`
