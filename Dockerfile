@@ -26,7 +26,7 @@ RUN --mount=type=cache,target=/root/.nuget/packages \
 FROM python:3.12-slim AS env
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 # The server's dependencies from pyproject.toml, without agentenv-framework (the control plane, which
-# the CLI plugin, the bundle and the save_env_recording step use), and with the protocol pinned to the
+# the CLI plugin, the bundle and the task steps use), and with the protocol pinned to the
 # version the supported agentenv-framework pins. imageio-ffmpeg carries a static ffmpeg (about 50 MB;
 # Debian's adds about 400 MB), linked onto PATH for the recorder's mp4 output.
 RUN pip install "agentenv-framework-protocol==0.1.275" "mcp>=1.25,<2" "pydantic>=2,<3" "pillow>=10,<13" \
