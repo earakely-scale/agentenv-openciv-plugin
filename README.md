@@ -69,7 +69,7 @@ Then, from the checkout (`cd agentenv-openciv-plugin`), play any task in the bun
 | `full-game` | one agent against 7 AI civs, at Civilization III's own settings | Standard, 540 | 46 min, $13 on Sonnet |
 | `three-agents` | Opus, Sonnet and Haiku against each other | Small, 300 | 68 min, $32 |
 | `three-agents-quick` | the same match | Small, 10 | 3 min, $0.30 |
-| `frontier` | nine models from five labs: Claude, GPT, Gemini, Grok, Kimi | Standard, 200 | about 2 h, about $125 (estimated) |
+| `frontier` | nine models from five labs: Claude, GPT, Gemini, Grok, Kimi | Standard, 200 | 1 h 52 min, about $80 |
 | `frontier-quick` | the same match | Standard, 10 | 8 min, $1.70 |
 
 ```bash
@@ -373,8 +373,36 @@ the engine never restarted, and every agent played every one of its turns.
 
 ### Nine models in one game
 
-`frontier`: nine models from five labs on a Standard map, 200 turns, each through its lab's own CLI where there is
-one. The 10-turn version passed (grade 1; GPT-5.6 Sol led with 49), and the first 200-turn game is under way.
+`frontier`: nine models from five labs, each through its lab's own CLI where there is one, on a Standard map at
+Regent with roaming barbarians and no AI civilizations, 200 turns (seed 1). It passed with grade 1 in 1 hour 52
+minutes on an 8-core machine. Every agent played to T200; the env ended 10 of the 1,800 seat-turns for an agent that
+had gone quiet (9 of them Kimi's, under the 10% limit).
+
+[![The frontier match at turn 200: the map with nine civilizations, the final scores and the score chart](docs/media/frontier-final.jpg)](docs/media/frontier.mp4)
+
+*The last turn of the `frontier` match ([the whole game as a video](docs/media/frontier.mp4),
+[the task](src/agentenv_openciv3/bundles/openciv3/tasks/frontier.json)).*
+
+| Rank | Model (CLI) | Civ | Score | Cities | Population | Techs | Government | Tool calls (failed) | Cost |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | GPT-5.6 Sol (Codex) | America | **1,134** | **40** | **154** | 17 | Despotism | 686 (0.4%) | $8.50 |
+| 2 | Opus 5.5 (Claude Code) | Rome | 1,074 | 35 | 135 | **22** | Monarchy | 763 (3.0%) | $10.51 |
+| 3 | Sonnet 5.5 (Claude Code) | Greece | 974 | 33 | 115 | 21 | Monarchy | 668 (3.3%) | $8.94 |
+| 4 | Grok 4.7 (Claude Code) | Carthage | 932 | 35 | 83 | 18 | Republic | 1,297 (3.0%) | $6.18 |
+| 5 | Haiku 4.5 (Claude Code) | Egypt | 872 | 26 | 89 | 15 | Despotism | 598 (1.8%) | $2.93 |
+| 6 | Gemini 3.1 Pro (Gemini CLI) | England | 805 | 25 | 106 | 18 | Republic | 747 (1.9%) | $8.73 |
+| 7 | GPT-5.6 Terra (Codex) | Persia | 695 | 20 | 81 | 19 | Monarchy | 596 (0.7%) | $7.58 |
+| 8 | Kimi K3 (Claude Code) | China | 693 | 24 | 81 | 21 | Monarchy | 1,022 (9.4%) | $26.60 |
+| 9 | GPT-5.6 Luna (Codex) | Babylon | 406 | 9 | 43 | 19 | Despotism | 419 (1.2%) | $0.40 |
+
+- **Expansion won again.** Sol founded the most cities and grew the largest population, and won by 60 points while
+  staying in Despotism with 1,349 gold unspent. Opus, second, had the most techs.
+- **Kimi was the only aggressor.** China declared war on Greece three times (T135, T144, T152) and on Persia once
+  (T184); every war ended in peace. Kimi also failed the most calls and cost the most.
+- **Price and placing don't track.** Haiku placed fifth for $2.93 and Kimi eighth for $26.60. Grok explored 55% of
+  the map; no one else passed 38%.
+- **Cost:** about $80 in all. Opus, Sonnet and Haiku's costs are Claude Code's own; the others are their tokens at
+  list prices (LiteLLM's price table).
 
 ### One agent against seven AI civilizations
 
