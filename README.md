@@ -48,6 +48,15 @@ curl -fsSL https://raw.githubusercontent.com/earakely-scale/agentenv-openciv-plu
 model key, without echoing it. `--client` adds recordings of the real game's view. `--help` lists the
 options; [scripts/install.sh](scripts/install.sh) is short.
 
+One command also sets up the agents and plays a match, `--run` naming the bundle's task:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/earakely-scale/agentenv-openciv-plugin/main/scripts/install.sh \
+  | bash -s -- --run three-agents-quick      # Opus, Sonnet and Haiku, 10 turns; then --run three-agents for 300
+curl -fsSL https://raw.githubusercontent.com/earakely-scale/agentenv-openciv-plugin/main/scripts/install.sh \
+  | bash -s -- --base-url https://litellm.example.com --run frontier   # nine models; needs a LiteLLM proxy
+```
+
 By hand, the same steps, with no model needed:
 
 ```bash

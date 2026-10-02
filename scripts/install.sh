@@ -3,6 +3,7 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/earakely-scale/agentenv-openciv-plugin/main/scripts/install.sh | bash
 #   curl -fsSL .../install.sh | bash -s -- --agent        # pass options after `bash -s --`
+#   curl -fsSL .../install.sh | bash -s -- --run three-agents-quick   # set up the agents and play a match
 #   scripts/install.sh [options]                          # from a checkout
 #
 # Needs git, Docker (running) and uv. Options:
@@ -14,6 +15,9 @@
 #                    e.g. anthropic/claude-sonnet-5-5)
 #   --client         also install the real OpenCiv3 client, for recordings of the real game's view. Its art carries
 #                    no licence, so don't push that image to a public registry.
+#   --run TASK       set up the player agents (as --agent) and play the bundle's TASK instead of the smoke game:
+#                    three-agents-quick, three-agents, frontier-quick or frontier (the frontier tasks play OpenAI,
+#                    Google, xAI and Moonshot models too, so they need a LiteLLM --base-url that serves them)
 #   --no-smoke       skip the smoke game at the end
 #
 # With --agent the model key (an Anthropic API key, a `claude setup-token` token or a LiteLLM key) comes from
@@ -23,7 +27,7 @@ set -euo pipefail
 
 REPO=https://github.com/earakely-scale/agentenv-openciv-plugin
 SECRETS=$HOME/.config/agentenv/secrets.yaml
-dir=agentenv-openciv-plugin agent=0 client=0 smoke=1 base_url=https://api.anthropic.com model=
+dir=agentenv-openciv-plugin agent=0 client=0 smoke=1 base_url=https://api.anthropic.com model= run=
 
 while [ $# -gt 0 ]; do
 	case $1 in
@@ -32,8 +36,9 @@ while [ $# -gt 0 ]; do
 		--base-url) base_url=$2; shift ;;
 		--model) model=$2; shift ;;
 		--client) client=1 ;;
+		--run) run=$2; agent=1 smoke=0; shift ;;
 		--no-smoke) smoke=0 ;;
-		-h | --help) sed -n '2,21p' "${BASH_SOURCE[0]:-/dev/null}" 2>/dev/null || echo "see $REPO/blob/main/scripts/install.sh"; exit 0 ;;
+		-h | --help) awk 'NR > 1 { if (!/^#/) exit; print }' "${BASH_SOURCE[0]:-/dev/null}" 2>/dev/null | grep . || echo "see $REPO/blob/main/scripts/install.sh"; exit 0 ;;
 		*) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
 	esac
 	shift
@@ -68,6 +73,11 @@ else
 fi
 # Only the engine: its art submodule is not needed (and the client target fetches the art it uses).
 git -C "$root" submodule update --init vendor/OpenCiv3
+tasks=$root/src/agentenv_openciv3/bundles/openciv3/tasks
+if [ -n "$run" ] && [ ! -f "$tasks/$run.json" ]; then
+	echo "No task '$run' in the bundle; its tasks: $(cd "$tasks" && ls *.json | sed 's/\.json$//' | tr '\n' ' ')" >&2
+	exit 2
+fi
 
 say "Installing agent-env with the plugin (uv tool)"
 uv tool install --force agentenv-framework --with-editable "$root"
@@ -112,6 +122,13 @@ if [ "$agent" = 1 ]; then
 		} >"$config"
 		echo "Wrote $config"
 	fi
+	case $run in frontier*)
+		if grep -q 'api.anthropic.com' "$config"; then
+			echo "$run plays OpenAI, Google, xAI and Moonshot models; give the --base-url of a LiteLLM proxy that serves" >&2
+			echo "them (and edit [model] base_url in $config if it already exists)." >&2
+			exit 1
+		fi ;;
+	esac
 fi
 
 say "Building and registering the env (first build: a few minutes)"
@@ -125,12 +142,19 @@ if [ "$smoke" = 1 ]; then
 	(cd "$root" && "$agent_env" run openciv3 --task smoke)
 fi
 
+if [ -n "$run" ]; then
+	say "Playing $run; to watch it live, run in another terminal: cd $root && agent-env openciv3 watch --open"
+	(cd "$root" && "$agent_env" run openciv3 --task "$run")
+fi
+
 say "Done"
 echo "From $root:"
 echo "  agent-env run openciv3 --task smoke                 # the scripted check"
 if [ "$agent" = 1 ]; then
-	echo "  agent-env run openciv3 --task play                  # Claude plays 50 turns"
-	echo "  agent-env run openciv3 --task full-game             # the full 540-turn game (an hour or so)"
+	echo "  agent-env run openciv3 --task play                  # the default agent plays 50 turns"
+	echo "  agent-env run openciv3 --task three-agents          # Opus, Sonnet and Haiku play one 300-turn match"
+	echo "  agent-env run openciv3 --task frontier              # nine models from five labs play one 300-turn match"
+	echo "  agent-env openciv3 watch --open                     # watch a running game live"
 else
 	echo "  scripts/install.sh --agent                          # add the player agents, to have models play"
 fi
