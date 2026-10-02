@@ -1,0 +1,146 @@
+[
+  {
+    "id": "deploy",
+    "type": "deploy_env",
+    "env_id": "openciv3",
+    "ttl_seconds": 7200
+  },
+  {
+    "id": "new-game",
+    "type": "apply_server_config",
+    "env_id": "openciv3",
+    "timeout_seconds": 120,
+    "directives": [
+      {
+        "service": "openciv3",
+        "uri": "urn:openciv3:new-game/v1",
+        "args": {
+          "seed": 1,
+          "size": "Small",
+          "civ": "Rome",
+          "opponents": 2,
+          "seats": [
+            "Greece",
+            "Egypt"
+          ],
+          "labels": {
+            "Rome": "Opus",
+            "Greece": "Sonnet",
+            "Egypt": "Haiku"
+          },
+          "difficulty": "Regent",
+          "barbarians": "Roaming",
+          "turn_limit": 10
+        }
+      }
+    ]
+  },
+  {
+    "id": "agent-opus",
+    "type": "deploy_agent",
+    "agent_name": "opus",
+    "env_ids": [
+      "openciv3"
+    ],
+    "env_vars": {
+      "OPENCIV3_SEAT": "Rome"
+    },
+    "ttl_seconds": 7200,
+    "depends_on": [
+      "new-game"
+    ]
+  },
+  {
+    "id": "agent-sonnet",
+    "type": "deploy_agent",
+    "agent_name": "sonnet",
+    "env_ids": [
+      "openciv3"
+    ],
+    "env_vars": {
+      "OPENCIV3_SEAT": "Greece"
+    },
+    "ttl_seconds": 7200,
+    "depends_on": [
+      "new-game"
+    ]
+  },
+  {
+    "id": "agent-haiku",
+    "type": "deploy_agent",
+    "agent_name": "haiku",
+    "env_ids": [
+      "openciv3"
+    ],
+    "env_vars": {
+      "OPENCIV3_SEAT": "Egypt"
+    },
+    "ttl_seconds": 7200,
+    "depends_on": [
+      "new-game"
+    ]
+  },
+  {
+    "id": "opus-1",
+    "type": "prompt_agent",
+    "agent_name": "opus",
+    "model": "anthropic/claude-opus-5-5",
+    "prompt_id": "opus-1",
+    "timeout_seconds": 1800,
+    "fail_task_on_error": false,
+    "depends_on": [
+      "agent-opus"
+    ],
+    "prompt": "You lead Rome in a game of OpenCiv3, a Civilization III remake, against two other AI agents: Greece and Egypt are each led by a different AI agent, and there are no other civilizations. A small map, Regent difficulty, roaming barbarians; the game lasts 10 turns. You act only through the openciv3 tools; nobody will answer questions, so never ask or wait for confirmation.\n\nGoal: finish with the highest score of the three, where score = 10 per city + 3 per citizen + 1 per owned tile + 4 per known tech.\n\nAll three agents play each turn at the same time. When you end your turn, the end_turn tool waits until the other two have ended theirs, then reports the new turn; if it answers WAITING, call it again. A civilization whose agent makes no call for five minutes has its turn ended for it, so keep playing.\n\nStart with the get_turn_brief tool: it shows the turn, what needs orders, every city and the last turn's events, and it is the way back whenever you lose track. Give orders with the unit_order (including attack and bombard), set_production, research, set_rates, buy, revolution (change government) and diplomacy (war and peace) tools, and end the turn with the end_turn tool. The find_city_sites tool ranks places to found cities; the plan tool keeps notes that every brief shows back. Coordinates are opaque (x, y) pairs: copy them from tool output. When a call fails, the error gives the reason and what would work instead; never repeat a failing call unchanged. You may declare war on another agent's civilization and attack it; cities that fall are razed. Peace with another agent's civilization is signed when both of you propose it with the diplomacy tool, the second within a turn of the first.\n\nThis short game ends at turn 10, when the end_turn tool reports GAME OVER; then reply with your final score."
+  },
+  {
+    "id": "sonnet-1",
+    "type": "prompt_agent",
+    "agent_name": "sonnet",
+    "model": "anthropic/claude-sonnet-5-5",
+    "prompt_id": "sonnet-1",
+    "timeout_seconds": 1800,
+    "fail_task_on_error": false,
+    "depends_on": [
+      "agent-sonnet"
+    ],
+    "prompt": "You lead Greece in a game of OpenCiv3, a Civilization III remake, against two other AI agents: Rome and Egypt are each led by a different AI agent, and there are no other civilizations. A small map, Regent difficulty, roaming barbarians; the game lasts 10 turns. You act only through the openciv3 tools; nobody will answer questions, so never ask or wait for confirmation.\n\nGoal: finish with the highest score of the three, where score = 10 per city + 3 per citizen + 1 per owned tile + 4 per known tech.\n\nAll three agents play each turn at the same time. When you end your turn, the end_turn tool waits until the other two have ended theirs, then reports the new turn; if it answers WAITING, call it again. A civilization whose agent makes no call for five minutes has its turn ended for it, so keep playing.\n\nStart with the get_turn_brief tool: it shows the turn, what needs orders, every city and the last turn's events, and it is the way back whenever you lose track. Give orders with the unit_order (including attack and bombard), set_production, research, set_rates, buy, revolution (change government) and diplomacy (war and peace) tools, and end the turn with the end_turn tool. The find_city_sites tool ranks places to found cities; the plan tool keeps notes that every brief shows back. Coordinates are opaque (x, y) pairs: copy them from tool output. When a call fails, the error gives the reason and what would work instead; never repeat a failing call unchanged. You may declare war on another agent's civilization and attack it; cities that fall are razed. Peace with another agent's civilization is signed when both of you propose it with the diplomacy tool, the second within a turn of the first.\n\nThis short game ends at turn 10, when the end_turn tool reports GAME OVER; then reply with your final score."
+  },
+  {
+    "id": "haiku-1",
+    "type": "prompt_agent",
+    "agent_name": "haiku",
+    "model": "anthropic/claude-haiku-4-5",
+    "prompt_id": "haiku-1",
+    "timeout_seconds": 1800,
+    "fail_task_on_error": false,
+    "depends_on": [
+      "agent-haiku"
+    ],
+    "prompt": "You lead Egypt in a game of OpenCiv3, a Civilization III remake, against two other AI agents: Rome and Greece are each led by a different AI agent, and there are no other civilizations. A small map, Regent difficulty, roaming barbarians; the game lasts 10 turns. You act only through the openciv3 tools; nobody will answer questions, so never ask or wait for confirmation.\n\nGoal: finish with the highest score of the three, where score = 10 per city + 3 per citizen + 1 per owned tile + 4 per known tech.\n\nAll three agents play each turn at the same time. When you end your turn, the end_turn tool waits until the other two have ended theirs, then reports the new turn; if it answers WAITING, call it again. A civilization whose agent makes no call for five minutes has its turn ended for it, so keep playing.\n\nStart with the get_turn_brief tool: it shows the turn, what needs orders, every city and the last turn's events, and it is the way back whenever you lose track. Give orders with the unit_order (including attack and bombard), set_production, research, set_rates, buy, revolution (change government) and diplomacy (war and peace) tools, and end the turn with the end_turn tool. The find_city_sites tool ranks places to found cities; the plan tool keeps notes that every brief shows back. Coordinates are opaque (x, y) pairs: copy them from tool output. When a call fails, the error gives the reason and what would work instead; never repeat a failing call unchanged. You may declare war on another agent's civilization and attack it; cities that fall are razed. Peace with another agent's civilization is signed when both of you propose it with the diplomacy tool, the second within a turn of the first.\n\nThis short game ends at turn 10, when the end_turn tool reports GAME OVER; then reply with your final score."
+  },
+  {
+    "id": "grade",
+    "type": "env_outcome_verifier",
+    "env_id": "openciv3",
+    "file_artifact_id": "seats-verifier",
+    "verifier_id": "seats",
+    "score_aggregator": "weighted_average",
+    "depends_on": [
+      "opus-1",
+      "sonnet-1",
+      "haiku-1"
+    ]
+  },
+  {
+    "id": "recording",
+    "type": "save_env_recording",
+    "env_id": "openciv3",
+    "timeout_seconds": 1200,
+    "depends_on": [
+      "opus-1",
+      "sonnet-1",
+      "haiku-1"
+    ]
+  }
+]

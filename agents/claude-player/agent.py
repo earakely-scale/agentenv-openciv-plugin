@@ -53,6 +53,13 @@ class PlayerConfig(AgentConfig):
     effort: str | None = None
 
 
+def model_id(environ: dict[str, str], model: str) -> str:
+    """The model as the endpoint names it: a LiteLLM proxy may route `anthropic/claude-opus-5-5`, Anthropic's own API
+    takes `claude-opus-5-5`, so a task can name its models one way for both."""
+    base = environ.get("LITELLM_BASE_URL", "")
+    return model.removeprefix("anthropic/") if not base or "api.anthropic.com" in base else model
+
+
 def model_env(environ: dict[str, str], model: str) -> dict[str, str]:
     """Claude Code's settings for the endpoint agent-env passes (LITELLM_BASE_URL, LITELLM_API_KEY). Behind a proxy,
     Claude Code's background calls use the configured model too, since the proxy may not serve its default names."""
@@ -123,7 +130,7 @@ def next_message(turn: int | None, limit: int | None, over: bool, stop: int | No
 )
 class ClaudePlayer(AgentEnvAgent):
     async def run(self, request: TaskRequest[PlayerConfig]) -> TaskResult:
-        config = request.config
+        config = request.config.model_copy(update={"model": model_id(dict(os.environ), request.config.model)})
         prompt = "\n".join(p.text for p in request.parts if isinstance(p, TextPart))
         if not request.mcp_servers:
             return TaskResult.failure("no_mcp_server", "No MCP server was configured for this agent.")

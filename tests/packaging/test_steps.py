@@ -126,14 +126,15 @@ def test_registered_under_its_type_and_round_trips(local_stores):
                                                                                             False)
 
 
-@pytest.mark.parametrize("task", ["smoke", "play", "full-game", "three-agents"])
+@pytest.mark.parametrize("task", ["smoke", "play", "full-game", "three-agents", "three-agents-quick"])
 def test_every_bundle_task_records_after_the_game_alongside_grading(local_stores, task):
     steps = json.loads(files("agentenv_openciv3.bundles").joinpath(f"openciv3/tasks/{task}.json").read_text())
     by_type = {s["type"]: s for s in steps}
     record = get_task_step_registry()["save_env_recording"].from_dict(by_type["save_env_recording"])
     assert record.fail_task_on_error is False
     assert by_type["save_env_recording"]["depends_on"] == by_type["env_outcome_verifier"]["depends_on"]
-    last = ["opus-4", "sonnet-4", "haiku-4"] if task == "three-agents" else [steps[-3]["id"]]
+    last = {"three-agents": ["opus-4", "sonnet-4", "haiku-4"],
+            "three-agents-quick": ["opus-1", "sonnet-1", "haiku-1"]}.get(task, [steps[-3]["id"]])
     assert by_type["save_env_recording"]["depends_on"] == last
 
 
@@ -151,3 +152,20 @@ def test_three_agents_each_play_their_seat_in_their_own_sessions(local_stores):
         assert [s["depends_on"] for s in sessions] == [[f"agent-{name}"]] + [[s["id"]] for s in sessions[:-1]]
         assert all(s["prompt"].startswith(f"You lead {civ} ") and name in s["model"] for s in sessions)
         assert [s["prompt"].rsplit("until turn ", 1)[1][:3] for s in sessions] == ["75;", "150", "225", "300"]
+
+
+def test_three_agents_quick_is_the_same_match_in_ten_turns(local_stores):
+    tasks = files("agentenv_openciv3.bundles").joinpath("openciv3/tasks")
+    full = json.loads(tasks.joinpath("three-agents.json").read_text())
+    quick = json.loads(tasks.joinpath("three-agents-quick.json").read_text())
+    registry = get_task_step_registry()
+    for s in quick:
+        assert registry[s["type"]].from_dict(s).to_dict()["id"] == s["id"]
+    game = quick[1]["directives"][0]["args"]
+    assert game == {**full[1]["directives"][0]["args"], "turn_limit": 10}
+    sessions = [s for s in quick if s["type"] == "prompt_agent"]
+    assert [(s["agent_name"], s["model"], s["depends_on"]) for s in sessions] == [
+        (s["agent_name"], s["model"], s["depends_on"]) for s in full if s["id"].endswith("-1")]
+    assert all("the game lasts 10 turns" in s["prompt"] and s["prompt"].endswith("reply with your final score.")
+               for s in sessions)
+

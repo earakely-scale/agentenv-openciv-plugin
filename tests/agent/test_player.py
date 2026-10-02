@@ -24,6 +24,15 @@ def test_each_kind_of_key_becomes_the_claude_code_setting_for_it():
     assert player.model_env({}, "sonnet") == {}
 
 
+def test_a_proxy_model_name_works_on_anthropics_own_api():
+    proxy = {"LITELLM_BASE_URL": "https://llm.example.com"}
+    assert player.model_id(proxy, "anthropic/claude-opus-5-5") == "anthropic/claude-opus-5-5"
+    direct = {"LITELLM_BASE_URL": "https://api.anthropic.com"}
+    assert player.model_id(direct, "anthropic/claude-opus-5-5") == "claude-opus-5-5"
+    assert player.model_id({}, "anthropic/claude-haiku-4-5") == "claude-haiku-4-5"
+    assert player.model_id({}, "sonnet") == "sonnet"
+
+
 def test_mcp_servers_become_a_claude_code_mcp_config():
     servers = {"openciv3": {"url": "http://env:18765/mcp", "headers": None},
                "other": {"url": "http://x/mcp", "headers": {"Authorization": "Bearer t"}}}
