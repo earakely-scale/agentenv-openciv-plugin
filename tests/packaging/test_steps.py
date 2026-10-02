@@ -164,11 +164,12 @@ async def test_a_match_seats_every_deployed_agent_under_its_name(local_stores, c
 
 async def test_a_match_seats_only_the_agents_it_names(local_stores):
     env = FakeGame()
-    step = OpenCiv3MatchTaskStep(id="match", version=None, env_id="openciv3", turns=5, agents=["opus"], ocean=70)
+    step = OpenCiv3MatchTaskStep(id="match", version=None, env_id="openciv3", turns=5, agents=["opus"],
+                                 ai_opponents=1, ocean=70)
     async with deployed(env) as record:
         await step.execute(run_context(record, "opus", "judge"))
     assert [(g["civ"], g["opponents"], g["seats"], g["labels"], g["ocean"]) for g in env.games] == [
-        ("Rome", 0, [], {"Rome": "opus"}, 70)]
+        ("Rome", 1, [], {"Rome": "opus"}, 70)]
 
 
 async def test_a_match_fails_for_an_agent_that_is_not_deployed(local_stores):
