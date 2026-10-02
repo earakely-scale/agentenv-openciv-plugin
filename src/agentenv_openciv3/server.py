@@ -415,7 +415,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
             seat = self.seat
             try:
                 await self._ensure_game()
-                seat = self._seat_named(requested_seat())
+                seat = self._seat_named(requested_seat()) if self.multi else self.seats[0]
                 SEAT.set(seat)
                 seat.last_call = started
                 turn = self.turn

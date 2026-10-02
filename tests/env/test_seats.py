@@ -1,5 +1,6 @@
 """A game with several seats, one per agent, on the real bridge: each request plays the seat its X-OpenCiv3-Seat
-header names, end_turn waits for every seat, and a silent seat's turn is ended for it."""
+header names, end_turn waits for every seat, and a silent seat's turn is ended for it. A game with one seat ignores
+the header, which every agent deploy_agent names sends."""
 
 import asyncio
 import os
@@ -151,3 +152,7 @@ async def test_a_long_wait_returns_and_the_turn_is_not_lost(seats, monkeypatch):
     # Rome's next end_turn reports the turn it waited for instead of ending T1 unplayed.
     assert (await tools["Rome"]("end_turn")).startswith("TURN T0 → T1")
     assert (await tools["Rome"]("get_turn_brief")).startswith("T1/10 · Rome")
+
+
+async def test_a_game_with_one_seat_ignores_the_seat_header(env):
+    assert (await SeatTools(env, "default-agent")("get_turn_brief")).startswith("T1/8 · Rome · Despotism")
