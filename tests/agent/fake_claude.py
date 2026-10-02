@@ -35,4 +35,5 @@ for n, line in enumerate(iter(sys.stdin.readline, ""), 1):
     game.write_text(json.dumps(state))
     emit({"type": "assistant", "message": {"content": [{"type": "text", "text": f"Ended turn {state['turn']}."}]}})
     emit({"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": 0.25 * n,
-          "usage": {"input_tokens": 100 * n, "output_tokens": 10 * n}})
+          "usage": {"input_tokens": 100, "output_tokens": 10},
+          "modelUsage": {"claude-fake": {"inputTokens": 100 * n, "outputTokens": 10 * n}}})

@@ -66,7 +66,7 @@ The env serves, over plain HTTP next to the MCP endpoint:
 | Route | What it returns |
 |---|---|
 | `GET /live` | A page that follows the game: the map, the scores and score chart, the last turn's agent actions and events, a banner at a victory or GAME OVER, and buttons for the spectator map, the agents' explored view and the real client's view (when the image has the client) |
-| `GET /live/state.json` | `{"turn", "turn_limit", "game_over", "victory", "players": [{"civ", "label", "is_agent", "defeated", "score"}], "events", "actions", "client", ...}`; `turn` is null before the first turn |
+| `GET /live/state.json` | `{"turn", "turn_limit", "game_over", "victory", "players": [{"civ", "label", "is_agent", "defeated", "score"}], "events", "actions", "client", "recording", ...}`; `turn` is null before the first turn, and stays null with `OPENCIV_RECORD=0` (`recording` false), since the view draws from the per-turn snapshots |
 | `GET /live/frame.png?turn=N&view=spectator\|agent` | The map frame of turn N (default: the newest), as the recording draws it; 404 before the first turn |
 | `GET /live/client.png?turn=N` | The real client's view of the newest turn it has drawn; it draws the newest save in the background, answers 503 with `Retry-After` until the first frame, and 404 without the client |
 

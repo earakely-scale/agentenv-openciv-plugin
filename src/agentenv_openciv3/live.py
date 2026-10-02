@@ -160,6 +160,8 @@ let mapUrl = null, clientAt = null, clientBusy = false;
 function show() {
   const started = s.turn !== null;
   $("waiting").hidden = started;
+  $("waiting").textContent = s.recording === false
+    ? "Recording is off (OPENCIV_RECORD=0), so there is nothing to show." : "Waiting for the game to start…";
   $("v-client").hidden = !s.client;
   $("turn").textContent = started ? `Turn ${s.turn} / ${s.turn_limit}` : "OpenCiv3";
   document.title = started ? `T${s.turn} · OpenCiv3 live` : "OpenCiv3 live";

@@ -266,7 +266,11 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 		uiMessages.Clear();
 		var thefts = Thefts(raised, before.Values.FirstOrDefault().Snap?.Barbarians ?? []);
 		await EachSeat(async s => {
-			if (!before.TryGetValue(s, out var b)) return;
+			if (!before.TryGetValue(s, out var b)) {
+				// Defeated before the turn: nothing happened to it, so its last turn's events must not show again.
+				(s.TurnEvents, s.Incoming) = ([], []);
+				return;
+			}
 			var events = new List<JsonObject>();
 			foreach (var (u, job, at) in b.Jobs)
 				if (Alive(u) && u.WorkerJob == null) events.Add(Event("job_done", $"{Label(u)} finished {job.Name} at {At(at)}.", at));

@@ -203,15 +203,29 @@ def rotate(sessions: list[Session]) -> bool:
     return len(sessions) < 2 or last.turn != sessions[-2].start
 
 
-def played(sessions: list[Session]) -> TaskResult:
-    """The task's result: the last reply and what the sessions played, their usage summed and their events in order."""
+def tokens(result: dict) -> tuple[int, int]:
+    """A session's input and output tokens. In stream-json input mode a result's `usage` covers only its last message;
+    `modelUsage` adds up the whole session over every model."""
+    models = (result.get("modelUsage") or {}).values()
+    return sum(m.get("inputTokens") or 0 for m in models), sum(m.get("outputTokens") or 0 for m in models)
+
+
+def played(sessions: list[Session], failure: tuple[str, str] | None = None) -> TaskResult:
+    """The task's result: the last reply and what the sessions played, their usage summed and their events in order.
+    `failure` (a code and a message, e.g. a timeout) fails the task but keeps what was played."""
+    if not sessions:
+        return TaskResult.failure(*failure)
     first, last = sessions[0], sessions[-1]
-    if not first.result and len(sessions) == 1:
+    if not first.result and len(sessions) == 1 and failure is None:
         return TaskResult.failure("claude_failed", f"Claude Code exited ({first.returncode}) without a result.")
     if first.result.get("is_error") and first.calls == 0:
         message = first.result.get("result") or first.reply or "Claude Code failed."
         return TaskResult.failure("claude_error", message.strip())
-    usage = [s.result.get("usage") or {} for s in sessions]
+    if failure is None and len(sessions) > 1 and not last.over and not last.calls:
+        detail = last.result.get("result") or last.reply or f"Claude Code exited ({last.returncode}) without a result"
+        failure = ("claude_error", f"Session {len(sessions)} failed at turn {last.start} before playing: "
+                                   f"{detail.strip()}")
+    usage = [tokens(s.result) for s in sessions]
     calls, nudges = sum(s.calls for s in sessions), sum(s.nudges for s in sessions)
     cost = sum(s.result.get("total_cost_usd") or 0 for s in sessions)
     reply = next((s.reply for s in reversed(sessions) if s.reply), "")
@@ -226,9 +240,11 @@ def played(sessions: list[Session]) -> TaskResult:
         summary = f"Played {span} in {count} after {calls:,} tool calls and {nudges:,} nudges (${cost:,.2f})."
         events = [e for k, s in enumerate(sessions, 1)
                   for e in ({"type": "session", "index": k, "start_turn": s.start}, *s.events)]
-    return (TaskResult.builder().succeeded().add_text(f"{reply.strip()}\n\n{summary}".strip())
-            .usage(Usage(tool_call_count=calls, input_tokens=sum(u.get("input_tokens") or 0 for u in usage),
-                         output_tokens=sum(u.get("output_tokens") or 0 for u in usage), cost_usd=cost))
+    builder = TaskResult.builder()
+    builder = builder.failed(*failure, error_type="infra_error") if failure else builder.succeeded()
+    return (builder.add_text(f"{reply.strip()}\n\n{summary}".strip())
+            .usage(Usage(tool_call_count=calls, input_tokens=sum(i for i, _ in usage),
+                         output_tokens=sum(o for _, o in usage), cost_usd=cost))
             .native_trajectory(format="claude-code-stream-json/v1", payload=events)
             .build())
 
@@ -257,19 +273,23 @@ class ClaudePlayer(AgentEnvAgent):
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
                 env={**environ, **model_env(environ, config.model), "MCP_TOOL_TIMEOUT": TOOL_TIMEOUT_MS},
                 limit=64 * 1024 * 1024)
+            sessions: list[Session] = []
             try:
-                sessions = await asyncio.wait_for(
-                    self._play(spawn, prompt, session_plan(prompt, environ), config.max_nudges),
+                await asyncio.wait_for(
+                    self._play(spawn, prompt, session_plan(prompt, environ), config.max_nudges, sessions),
                     config.timeout_seconds)
             except TimeoutError:
-                return TaskResult.failure("timeout", f"The session ran past its {config.timeout_seconds} s limit.")
+                return played(sessions, ("timeout", f"The game ran past its {config.timeout_seconds} s limit."))
         return played(sessions)
 
-    async def _play(self, spawn, prompt: str, session: Session, max_nudges: int) -> list[Session]:
-        sessions = [await self._session(spawn, prompt, session, max_nudges)]
-        while rotate(sessions):
-            sessions.append(await self._session(spawn, prompt, sessions[-1].following(), max_nudges))
-        return sessions
+    async def _play(self, spawn, prompt: str, session: Session, max_nudges: int, sessions: list[Session]) -> None:
+        """Play sessions into `sessions` as they start, so a timeout still has what was played."""
+        while True:
+            sessions.append(session)
+            await self._session(spawn, prompt, session, max_nudges)
+            if not rotate(sessions):
+                return
+            session = session.following()
 
     async def _session(self, spawn, prompt: str, session: Session, max_nudges: int) -> Session:
         proc = await spawn()

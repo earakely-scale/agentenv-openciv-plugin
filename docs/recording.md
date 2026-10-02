@@ -116,7 +116,8 @@ Mac for debugging.
 
 The same per-turn snapshots (and, with the client, the per-turn saves) feed a live view while the game plays:
 `GET /live` on the env, which `agent-env openciv3 watch` finds for envs running locally. It draws each new turn's
-map frame as the mp4 does, keeps the score chart's history light (only the requested turn's snapshot is read
-whole), and asks the real client for the newest save only, so a slow client skips turns instead of falling behind.
+map frame as the mp4 does, keeps only the players of earlier turns in memory for the score chart (it still reads
+each earlier snapshot), and asks the real client for the newest save only, so a slow client skips turns instead of
+falling behind. With `OPENCIV_RECORD=0` there are no snapshots, and the page says so.
 Routes and the state's shape: [docs/tools.md](tools.md#watching-a-game-live).
 

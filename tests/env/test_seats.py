@@ -141,6 +141,46 @@ async def test_a_silent_seat_has_its_turn_ended(seats, monkeypatch):
     assert [s["auto_ended_turns"] for s in part.data["seats"]] == [0, 0, 1]
 
 
+async def test_seats_that_waited_are_not_taken_for_silent_on_the_next_turn(seats, monkeypatch):
+    env, tools = seats
+    monkeypatch.setattr(server, "SEAT_STALL_SECONDS", 0.5)
+    monkeypatch.setattr(server, "STALL_CHECK_SECONDS", 0.05)
+    await settle(tools)
+    waiting = asyncio.gather(tools["Greece"]("end_turn", skip_idle=True), tools["Egypt"]("end_turn", skip_idle=True))
+    for _ in range(5):  # Rome plays on past the stall time of the seats that wait, then falls silent
+        await tools["Rome"]("get_turn_brief")
+        await asyncio.sleep(0.2)
+    assert all(text.startswith("TURN T0 → T1") for text in await waiting)
+    [part] = await env.data_get()
+    assert [s["auto_ended_turns"] for s in part.data["seats"]] == [1, 0, 0] and part.data["turn"] == 1
+
+
+async def test_the_turn_ends_when_the_seat_still_playing_it_is_defeated(env_vars, monkeypatch):
+    monkeypatch.setenv("CIVBRIDGE_CMD", REAL_CMD)
+    monkeypatch.setattr(server, "STALL_CHECK_SECONDS", 60)
+    env = OpenCiv3Env()
+    env.create_app()
+    try:
+        await env.new_game(seed=1, opponents=1, seats=["Greece"], labels={"Rome": "greece", "Greece": "rome"},
+                           turn_limit=10)
+        rome, greece = SeatTools(env, "greece"), SeatTools(env, "rome")
+        assert (await rome("get_turn_brief")).startswith("T0/10 · Rome")
+        waiting = asyncio.create_task(rome("end_turn", skip_idle=True))
+        await asyncio.sleep(0.3)
+        await greece("unit_order", unit="u2", order="disband")
+        await greece("unit_order", unit="u1", order="disband")
+        assert "GAME OVER — you won by conquest on T1." in await asyncio.wait_for(waiting, 10)
+    finally:
+        await env.close()
+
+
+async def test_a_header_that_names_no_seat_touches_no_seat(seats):
+    env, tools = seats
+    env.seats[0].notices.append({"turn": 0, "kind": "turn_ended", "text": "a notice for Rome"})
+    assert "'Babylon' is not a seat" in await SeatTools(env, "Babylon").error("unit_order", unit="u1", order="hold")
+    assert env.seats[0].notices_shown == 0 and env.seats[0].actions.summary()["invalid"] == 0
+
+
 async def test_a_long_wait_returns_and_the_turn_is_not_lost(seats, monkeypatch):
     env, tools = seats
     monkeypatch.setattr(server, "SEAT_WAIT_SECONDS", 0.2)

@@ -134,11 +134,27 @@ def test_a_session_that_exited_without_a_result_fails_the_task_only_when_none_pl
     crashed = player.Session(turns=10, start=0, turn=12, limit=30, calls=6, returncode=-9)
     assert player.played([crashed]).error.code == "claude_failed"
     over = player.Session(turns=10, start=12, turn=30, limit=30, over=True, calls=10, reply="Won.",
-                          result={"total_cost_usd": 1.5, "usage": {"input_tokens": 100, "output_tokens": 10}})
+                          result={"total_cost_usd": 1.5, "modelUsage": {"m": {"inputTokens": 100, "outputTokens": 10}}})
     result = player.played([crashed, over])
     assert result.parts[0].text == ("Won.\n\nPlayed T0 to T30 (GAME OVER) in 2 sessions after 16 tool calls and 0 "
                                     "nudges ($1.50).")
     assert (result.usage.tool_call_count, result.usage.input_tokens, result.usage.cost_usd) == (16, 100, 1.5)
+
+
+def test_a_session_that_fails_before_playing_fails_the_task_and_keeps_what_was_played():
+    usage = {"m": {"inputTokens": 900, "outputTokens": 90}, "n": {"inputTokens": 100, "outputTokens": 10}}
+    first = player.Session(turns=10, start=0, turn=12, limit=30, calls=6, reply="Expanding.",
+                           result={"total_cost_usd": 1.0, "usage": {"input_tokens": 5}, "modelUsage": usage})
+    broke = player.Session(turns=10, start=12, turn=12, limit=30, calls=0,
+                           result={"is_error": True, "result": "API Error: 400 budget exceeded"})
+    result = player.played([first, broke])
+    assert (result.error.code, result.error.message) == (
+        "claude_error", "Session 2 failed at turn 12 before playing: API Error: 400 budget exceeded")
+    assert (result.usage.input_tokens, result.usage.output_tokens, result.usage.cost_usd) == (1000, 100, 1.0)
+    timed_out = player.played([first], ("timeout", "The game ran past its 60 s limit."))
+    assert timed_out.error.code == "timeout" and timed_out.usage.tool_call_count == 6
+    assert timed_out.native_trajectory.payload[0] == {"type": "session", "index": 1, "start_turn": 0}
+    assert player.played([], ("timeout", "The game ran past its 60 s limit.")).error.code == "timeout"
 
 
 @pytest.fixture

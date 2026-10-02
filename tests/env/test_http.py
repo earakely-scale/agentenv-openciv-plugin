@@ -165,7 +165,7 @@ async def test_the_live_view_follows_the_game(env_vars):
             assert page.headers["content-type"].startswith("text/html") and 'fetch("live/state.json"' in page.text
             assert (await http.get("/live/state.json")).json() == {
                 "game": None, "turn": None, "turn_limit": None, "game_over": False, "victory": None, "players": [],
-                "events": [], "actions": [], "client": False}
+                "events": [], "actions": [], "client": False, "recording": True}
             assert (await http.get("/live/frame.png")).status_code == 404
 
             await client.invoke_extension(base, await client.get_card(base), "urn:openciv3:new-game/v1", {

@@ -200,12 +200,12 @@ class OpenCiv3Env(AgentEnvEnvironment):
         return len(self.seats) > 1
 
     def _seat_named(self, name: str | None) -> Seat:
-        """The seat a header names: by its civ, or by its label (the agent's name in a match)."""
+        """The seat a header names: by its label (the agent's name in a match), else by its civ."""
         if not name:
             return self.seats[0]
         wanted = name.strip().lower()
-        seat = next((s for s in self.seats if s.civ.lower() == wanted), None) or next(
-            (s for s in self.seats if (s.label or "").lower() == wanted), None)
+        seat = next((s for s in self.seats if (s.label or "").lower() == wanted), None) or next(
+            (s for s in self.seats if s.civ.lower() == wanted), None)
         if seat is None:
             raise BridgeError("unknown_seat", f"{name!r} is not a seat in this game; the seats are "
                               f"{', '.join(s.civ for s in self.seats)}.", [s.civ for s in self.seats])
@@ -319,10 +319,13 @@ class OpenCiv3Env(AgentEnvEnvironment):
     # ---- the turn of a game with several seats ----
 
     def _advanced(self, results: dict) -> None:
-        """The turn advanced: every seat sees the new turn, and seats waiting on it get their result."""
+        """The turn advanced: every seat sees the new turn, and seats waiting on it get their result. An agent that was
+        waiting has made no call meanwhile, so its stall clock starts with the new turn."""
+        now = time.monotonic()
         for seat in self.seats:
             seat.cache, seat.ready = None, False
             if seat.turn_result and not seat.turn_result.done():
+                seat.last_call = now
                 seat.turn_result.set_result(results[seat.civ])
         self.turn = next(iter(results.values()))["turn"]
 
@@ -361,6 +364,26 @@ class OpenCiv3Env(AgentEnvEnvironment):
                     if not (seat.ready or seat.over or time.monotonic() - seat.last_call < SEAT_STALL_SECONDS
                             or self.failed):
                         await self._end_turn_for(seat)
+                if not self.failed:
+                    await self._advance_if_ended()
+
+    async def _advance_if_ended(self) -> None:
+        """Advance a turn every live seat has ended: the last seat still playing it may have been defeated meanwhile
+        (its last city lost, its last settler disbanded), and nothing else would end the turn."""
+        if not any(s.ready for s in self.seats):
+            return
+        for seat in self.seats:
+            if not seat.ready and not seat.over:
+                await self._state(seat)
+                if not seat.over:
+                    return
+        try:
+            res = await self._call("end_turn", seat=next(s for s in self.seats if s.ready), skip_idle=True)
+        except BridgeError as e:
+            log.warning("advancing the turn every seat ended failed: %s", e.message)
+            return
+        if "seats" in res:
+            self._advanced(res["seats"])
 
     async def _end_turn_for(self, seat: Seat) -> None:
         turn = self.turn
@@ -415,7 +438,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
         extra = {} if extra is None else extra
         started, turn, calls = time.monotonic(), self.turn, 0
         async with self.lock:
-            seat = self.seat
+            seat = None
             try:
                 await self._ensure_game()
                 seat = self._seat_named(requested_seat()) if self.multi else self.seats[0]
@@ -431,9 +454,13 @@ class OpenCiv3Env(AgentEnvEnvironment):
                     for s in self.seats:
                         s.cache = None
                 text = await body()
+                if mutating and self.multi:
+                    await self._advance_if_ended()
             except Exception as e:
                 err = await self._failure(e, tool_name)
                 msg = render.error(err)
+                if seat is None:
+                    raise ToolError(clean(msg)) from None
                 repeats = seat.actions.failed(f"{tool_name} {json.dumps(args, sort_keys=True)}")
                 if repeats >= REPEATS_BEFORE_HINT:
                     options = [o for o in (err.suggest, "get_turn_brief()", "end_turn(skip_idle=true)") if o]
@@ -962,7 +989,8 @@ class OpenCiv3Env(AgentEnvEnvironment):
         async with self.lock:
             game_dir, timeline = self.game_dir, self._timeline()
         snap = await asyncio.to_thread(live.latest, game_dir / "record") if game_dir else None
-        return JSONResponse(live.state(snap, timeline, game=game_dir and game_dir.name, has_client=self.client))
+        return JSONResponse({**live.state(snap, timeline, game=game_dir and game_dir.name, has_client=self.client),
+                             "recording": self.record})
 
     async def _live_frame(self, request: Request) -> Response:
         turn, view = request.query_params.get("turn", ""), request.query_params.get("view", "spectator")
