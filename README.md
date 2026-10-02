@@ -44,7 +44,7 @@ docker-buildx`), [uv](https://docs.astral.sh/uv/) and git. One command clones th
 curl -fsSL https://raw.githubusercontent.com/earakely-scale/agentenv-openciv-plugin/main/scripts/install.sh | bash
 ```
 
-`bash -s -- --agent` (after the pipe) also sets up the Claude player agent, so Claude can play: it asks for a
+`bash -s -- --agent` (after the pipe) also sets up the player agents, so models can play: it asks for a
 model key, without echoing it. `--client` adds recordings of the real game's view. `--help` lists the
 options; [scripts/install.sh](scripts/install.sh) is short.
 
@@ -87,15 +87,17 @@ CIVBRIDGE_CMD=$PWD/build/bridge/CivBridge .venv/bin/python playtest/run.py --see
 The run directory gets the transcript, the env's action log, the final summary against the
 baselines, and the recording. See [playtest/README.md](playtest/README.md) for batches and gates.
 
-**Through agent-env, with the Claude player agent.** The repository ships an A2A agent for the bundle's
-tasks, `agents/claude-player`. It runs Claude Code against the env's tools; one prompt plays a whole game, in fresh
-Claude Code sessions of 75 turns.
+**Through agent-env, with the player agents.** The repository ships three A2A agents for the bundle's tasks, one
+per coding-agent CLI: `openciv3-claude` runs Claude Code (`agents/claude-player`), `openciv3-codex` runs Codex
+(`agents/codex-player`) and `openciv3-gemini` runs Gemini CLI (`agents/gemini-player`). They share one game loop
+(`agents/common`) and play through the env's tools only; one prompt plays a whole game, in fresh sessions of 75 turns.
 
 - **Setup:** `scripts/install.sh --agent` does all of it:
-  - `agent-env openciv3 setup --agent` builds and registers the agent as `openciv3-claude`;
-  - `.agentenv/config.toml` makes it the default agent and names the model endpoint;
+  - `agent-env openciv3 setup --agent` builds and registers the three agents;
+  - `.agentenv/config.toml` makes `openciv3-claude` the default agent and names the model endpoint;
   - the key lives in `~/.config/agentenv/secrets.yaml`, behind a `secret:` reference.
-- **Credentials:** the key may be an Anthropic API key, a `claude setup-token` token or a LiteLLM key.
+- **Credentials:** a LiteLLM key serves all three agents, through the proxy's Anthropic, OpenAI and Gemini
+  routes; the Claude player also takes an Anthropic API key or a `claude setup-token` token.
 - **Running:** run agent-env from inside the checkout, so it finds that config:
 
 ```bash
@@ -103,6 +105,8 @@ agent-env run openciv3 --task play        # 50 turns on a Tiny map
 agent-env run openciv3 --task full-game   # 540 turns at Civilization III's own settings, as six 90-turn sessions
 agent-env run openciv3 --task three-agents        # Opus, Sonnet and Haiku play one 300-turn game against each other
 agent-env run openciv3 --task three-agents-quick  # the same match in 10 turns, to check a setup
+agent-env run openciv3 --task frontier            # nine models, from three labs and more, on one 300-turn map
+agent-env run openciv3 --task frontier-quick      # the same match in 10 turns
 agent-env openciv3 watch --open                   # meanwhile: watch the game live in the browser
 ```
 
@@ -397,8 +401,9 @@ harness ───data plane /agentenv, extensions──────▶   │  JS
   [docs/tools.md](docs/tools.md).
 - **The plugin** adds `agent-env openciv3 setup`, `serve`, `recordings` and `watch`, the task steps
   `openciv3_match` and `save_env_recording` (`src/agentenv_openciv3/steps.py`), and the bundle `openciv3`
-  (`src/agentenv_openciv3/bundles/openciv3/`) with the tasks `smoke`, `play`, `full-game` and `three-agents`
-  and their verifiers. `agents/claude-player` is the A2A agent that plays them.
+  (`src/agentenv_openciv3/bundles/openciv3/`) with the tasks `smoke`, `play`, `full-game`, `three-agents` and
+  `frontier` and their verifiers. `agents/` holds the A2A agents that play them, one per CLI over a shared game
+  loop.
 - **The image** holds the bridge published self-contained for `linux/amd64` or `linux/arm64`
   (cross-compiled on the build host), the env, and a static `ffmpeg`.
 

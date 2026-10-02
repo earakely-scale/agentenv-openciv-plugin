@@ -43,7 +43,7 @@ the valid alternatives and the exact call to make instead.
 A game started with `seats` (new-game extension) is played by several agents, one civ each; there are no baselines.
 
 - **Which seat a call plays:** the seat the request's `X-OpenCiv3-Seat` header names, by civ or by label (the
-  `openciv3_match` step labels each seat with its agent's name, and the Claude player agent sends its name, or
+  `openciv3_match` step labels each seat with its agent's name, and the player agents send their name, or
   `OPENCIV3_SEAT` when set); with no header, the first civ. A game with one seat ignores the header. Each seat has
   its own ids, plan, notices and action log.
 - **The rules:** the brief's `MATCH` line names the other agents and the AI civilizations and says how the match

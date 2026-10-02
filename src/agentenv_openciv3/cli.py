@@ -16,6 +16,11 @@ from agent_env.env import MCPServerEnv
 
 ENVIRONMENT_NAME = "openciv3"
 PLAYER_ID = "openciv3-claude"
+PLAYERS = {  # A2A agent id: its directory under agents/, the CLI it plays with, its model when a task names none
+    PLAYER_ID: ("claude-player", "Claude Code", "sonnet"),
+    "openciv3-codex": ("codex-player", "Codex", "gpt-5.6-sol"),
+    "openciv3-gemini": ("gemini-player", "Gemini CLI", "gemini-3.1-pro-preview"),
+}
 REPO = "https://github.com/earakely-scale/agentenv-openciv-plugin"
 ENV_PORT = re.compile(r":(\d+)->18765/tcp")
 
@@ -67,8 +72,8 @@ def _docker_platform() -> str:
                    "350 MB and fetches OpenCiv3's community art, which carries no license: don't push the image to a "
                    "public registry.")
 @click.option("--agent", is_flag=True,
-              help=f"Also build and register the Claude player agent ({PLAYER_ID}, agents/claude-player), which plays "
-                   "the bundle's tasks with Claude Code.")
+              help="Also build and register the player agents, which play the bundle's tasks: "
+                   + ", ".join(f"{id} ({cli}, agents/{path})" for id, (path, cli, _) in PLAYERS.items()) + ".")
 def setup(env_id: str, source: Path | None, build_platform: str | None, image: str | None, client: bool, agent: bool):
     """Build the env image and register it as an MCP server env on the `server` provider."""
     if image is None:
@@ -95,22 +100,27 @@ def setup(env_id: str, source: Path | None, build_platform: str | None, image: s
     else:
         click.echo(f"The openciv3 bundle's tasks deploy the env 'openciv3'; your own tasks can deploy {env_id!r}.")
     if agent:
-        _register_player(_checkout(source), build_platform or _docker_platform())
+        root, build_platform = _checkout(source), build_platform or _docker_platform()
+        for player_id in PLAYERS:
+            _register_player(root, build_platform, player_id)
+        click.echo(f"The bundle's agent tasks deploy the default agent: set [agents] default_a2a_agent_id = "
+                   f'"{PLAYER_ID}" in .agentenv/config.toml, and the model endpoint in [model] (base_url, api_key). '
+                   "The frontier tasks name each player's agent.")
 
 
-def _register_player(root: Path, build_platform: str) -> None:
-    """Build agents/claude-player and register it as the A2A agent PLAYER_ID."""
-    context = root / "agents" / "claude-player"
-    image = f"a2a-agent-{PLAYER_ID}"
-    click.echo(f"Building {image} for {build_platform} from {context}")
-    if subprocess.run(["docker", "build", "--platform", build_platform, "-t", image, str(context)]).returncode:
-        raise click.ClickException("docker build of the player agent failed")
-    artifact = DockerImageArtifact.put(id=image, image_name=image, description="OpenCiv3 Claude player agent",
-                                       build_context_path=str(context), dockerfile_path=str(context / "Dockerfile"))
-    player = A2AAgent.put(id=PLAYER_ID, docker_image_artifact=artifact, metadata={"default_model": "sonnet"})
-    click.echo(f"Registered A2A agent {player.id!r} version {player.version}. The bundle's agent tasks deploy the "
-               f'default agent: set [agents] default_a2a_agent_id = "{PLAYER_ID}" in .agentenv/config.toml, and the '
-               "model endpoint in [model] (base_url, api_key).")
+def _register_player(root: Path, build_platform: str, player_id: str) -> None:
+    """Build agents/<player> (with agents/common, the game loop the players share) and register it as `player_id`."""
+    path, cli, model = PLAYERS[player_id]
+    context, dockerfile = root / "agents", root / "agents" / path / "Dockerfile"
+    image = f"a2a-agent-{player_id}"
+    click.echo(f"Building {image} for {build_platform} from {dockerfile.parent}")
+    build = ["docker", "build", "--platform", build_platform, "-t", image, "-f", str(dockerfile), str(context)]
+    if subprocess.run(build).returncode:
+        raise click.ClickException(f"docker build of the {cli} player agent failed")
+    artifact = DockerImageArtifact.put(id=image, image_name=image, description=f"OpenCiv3 {cli} player agent",
+                                       build_context_path=str(context), dockerfile_path=str(dockerfile))
+    player = A2AAgent.put(id=player_id, docker_image_artifact=artifact, metadata={"default_model": model})
+    click.echo(f"Registered A2A agent {player.id!r} version {player.version} ({cli})")
 
 
 def _check_bridge(bridge: str) -> None:

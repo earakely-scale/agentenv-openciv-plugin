@@ -196,14 +196,16 @@ def test_the_match_is_registered_under_its_type_and_round_trips(local_stores):
         10, {"opus": "Rome"}, None, 1, "Small", 0, None, 70, 120, True)
 
 
-@pytest.mark.parametrize("task", ["smoke", "play", "full-game", "three-agents", "three-agents-quick"])
+@pytest.mark.parametrize("task", ["smoke", "play", "full-game", "three-agents", "three-agents-quick", "frontier",
+                                  "frontier-quick"])
 def test_every_bundle_task_records_after_the_game_alongside_grading(local_stores, task):
     steps = json.loads(files("agentenv_openciv3.bundles").joinpath(f"openciv3/tasks/{task}.json").read_text())
     by_type = {s["type"]: s for s in steps}
     record = get_task_step_registry()["save_env_recording"].from_dict(by_type["save_env_recording"])
     assert record.fail_task_on_error is False
     assert by_type["save_env_recording"]["depends_on"] == by_type["env_outcome_verifier"]["depends_on"]
-    last = ["opus", "sonnet", "haiku"] if task.startswith("three-agents") else [steps[-3]["id"]]
+    players = [s["id"] for s in steps if s["type"] == "prompt_agent"]
+    last = players if "match" in {s["id"] for s in steps} else [steps[-3]["id"]]
     assert by_type["save_env_recording"]["depends_on"] == last
 
 
@@ -228,10 +230,31 @@ def test_three_agents_each_play_their_seat_for_the_whole_game(local_stores):
     assert (by_id["grade"]["file_artifact_id"], by_id["grade"]["verifier_id"]) == ("victor-verifier", "victor")
 
 
-def test_three_agents_quick_is_the_same_match_in_ten_turns(local_stores):
+def test_frontier_seats_nine_models_on_a_standard_map(local_stores):
+    steps = json.loads(files("agentenv_openciv3.bundles").joinpath("openciv3/tasks/frontier.json").read_text())
+    registry = get_task_step_registry()
+    for s in steps:
+        assert registry[s["type"]].from_dict(s).to_dict()["id"] == s["id"]
+    match = next(s for s in steps if s["type"] == "openciv3_match")
+    players = [s for s in steps if s["type"] == "prompt_agent"]
+    agents = [s for s in steps if s["type"] == "deploy_agent"]
+    assert (match["turns"], match["size"], len(players)) == (300, "Standard", 9)
+    assert set(match["civs"]) == {s["agent_name"] for s in players} == {s["agent_name"] for s in agents}
+    assert len(set(match["civs"].values())) == 9 and len({s["model"] for s in players}) == 9
+    assert all(s["env_vars"] == {"OPENCIV3_SESSION_TURNS": "40"} for s in agents)
+    harness = {s["agent_name"]: s["a2a_agent_id"] for s in agents}
+    assert {s["agent_name"]: harness[s["agent_name"]] for s in players if s["model"].startswith("openai/")} == {
+        "sol": "openciv3-codex", "luna": "openciv3-codex", "terra": "openciv3-codex"}
+    assert harness["gemini"] == "openciv3-gemini" and {harness[n] for n in ("opus", "grok", "kimi")} == {
+        "openciv3-claude"}
+    assert all(s["prompt"] == players[0]["prompt"] and s["depends_on"] == ["match"] for s in players)
+
+
+@pytest.mark.parametrize("full_name", ["three-agents", "frontier"])
+def test_a_quick_task_is_the_same_match_in_ten_turns(local_stores, full_name):
     tasks = files("agentenv_openciv3.bundles").joinpath("openciv3/tasks")
-    full = json.loads(tasks.joinpath("three-agents.json").read_text())
-    quick = json.loads(tasks.joinpath("three-agents-quick.json").read_text())
+    full = json.loads(tasks.joinpath(f"{full_name}.json").read_text())
+    quick = json.loads(tasks.joinpath(f"{full_name}-quick.json").read_text())
     registry = get_task_step_registry()
     for s in quick:
         assert registry[s["type"]].from_dict(s).to_dict()["id"] == s["id"]

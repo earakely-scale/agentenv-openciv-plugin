@@ -1,0 +1,334 @@
+[
+  {
+    "id": "deploy",
+    "type": "deploy_env",
+    "env_id": "openciv3",
+    "ttl_seconds": 7200
+  },
+  {
+    "id": "agent-opus",
+    "type": "deploy_agent",
+    "agent_name": "opus",
+    "a2a_agent_id": "openciv3-claude",
+    "env_ids": [
+      "openciv3"
+    ],
+    "env_vars": {
+      "OPENCIV3_SESSION_TURNS": "40"
+    },
+    "ttl_seconds": 7200,
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "agent-sonnet",
+    "type": "deploy_agent",
+    "agent_name": "sonnet",
+    "a2a_agent_id": "openciv3-claude",
+    "env_ids": [
+      "openciv3"
+    ],
+    "env_vars": {
+      "OPENCIV3_SESSION_TURNS": "40"
+    },
+    "ttl_seconds": 7200,
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "agent-haiku",
+    "type": "deploy_agent",
+    "agent_name": "haiku",
+    "a2a_agent_id": "openciv3-claude",
+    "env_ids": [
+      "openciv3"
+    ],
+    "env_vars": {
+      "OPENCIV3_SESSION_TURNS": "40"
+    },
+    "ttl_seconds": 7200,
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "agent-sol",
+    "type": "deploy_agent",
+    "agent_name": "sol",
+    "a2a_agent_id": "openciv3-codex",
+    "env_ids": [
+      "openciv3"
+    ],
+    "env_vars": {
+      "OPENCIV3_SESSION_TURNS": "40"
+    },
+    "ttl_seconds": 7200,
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "agent-luna",
+    "type": "deploy_agent",
+    "agent_name": "luna",
+    "a2a_agent_id": "openciv3-codex",
+    "env_ids": [
+      "openciv3"
+    ],
+    "env_vars": {
+      "OPENCIV3_SESSION_TURNS": "40"
+    },
+    "ttl_seconds": 7200,
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "agent-terra",
+    "type": "deploy_agent",
+    "agent_name": "terra",
+    "a2a_agent_id": "openciv3-codex",
+    "env_ids": [
+      "openciv3"
+    ],
+    "env_vars": {
+      "OPENCIV3_SESSION_TURNS": "40"
+    },
+    "ttl_seconds": 7200,
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "agent-gemini",
+    "type": "deploy_agent",
+    "agent_name": "gemini",
+    "a2a_agent_id": "openciv3-gemini",
+    "env_ids": [
+      "openciv3"
+    ],
+    "env_vars": {
+      "OPENCIV3_SESSION_TURNS": "40"
+    },
+    "ttl_seconds": 7200,
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "agent-grok",
+    "type": "deploy_agent",
+    "agent_name": "grok",
+    "a2a_agent_id": "openciv3-claude",
+    "env_ids": [
+      "openciv3"
+    ],
+    "env_vars": {
+      "OPENCIV3_SESSION_TURNS": "40"
+    },
+    "ttl_seconds": 7200,
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "agent-kimi",
+    "type": "deploy_agent",
+    "agent_name": "kimi",
+    "a2a_agent_id": "openciv3-claude",
+    "env_ids": [
+      "openciv3"
+    ],
+    "env_vars": {
+      "OPENCIV3_SESSION_TURNS": "40"
+    },
+    "ttl_seconds": 7200,
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "match",
+    "type": "openciv3_match",
+    "env_id": "openciv3",
+    "turns": 10,
+    "size": "Standard",
+    "civs": {
+      "opus": "Rome",
+      "sonnet": "Greece",
+      "haiku": "Egypt",
+      "sol": "America",
+      "luna": "Babylon",
+      "terra": "Persia",
+      "gemini": "England",
+      "grok": "Carthage",
+      "kimi": "China"
+    },
+    "depends_on": [
+      "agent-opus",
+      "agent-sonnet",
+      "agent-haiku",
+      "agent-sol",
+      "agent-luna",
+      "agent-terra",
+      "agent-gemini",
+      "agent-grok",
+      "agent-kimi"
+    ]
+  },
+  {
+    "id": "opus",
+    "type": "prompt_agent",
+    "agent_name": "opus",
+    "model": "anthropic/claude-opus-5-5",
+    "prompt_id": "opus",
+    "timeout_seconds": 2400,
+    "fail_task_on_error": false,
+    "depends_on": [
+      "match"
+    ],
+    "prompt": "You lead a civilization in a game of OpenCiv3, an open-source Civilization III remake, against other AI agents. Play to win. The get_turn_brief tool shows your civilization, your rivals, the match's rules and what needs orders; you act only through the openciv3 tools. Nobody will answer questions, so never ask or wait for confirmation. Keep playing until the end_turn tool reports GAME OVER, then reply with your final result."
+  },
+  {
+    "id": "sonnet",
+    "type": "prompt_agent",
+    "agent_name": "sonnet",
+    "model": "anthropic/claude-sonnet-5-5",
+    "prompt_id": "sonnet",
+    "timeout_seconds": 2400,
+    "fail_task_on_error": false,
+    "depends_on": [
+      "match"
+    ],
+    "prompt": "You lead a civilization in a game of OpenCiv3, an open-source Civilization III remake, against other AI agents. Play to win. The get_turn_brief tool shows your civilization, your rivals, the match's rules and what needs orders; you act only through the openciv3 tools. Nobody will answer questions, so never ask or wait for confirmation. Keep playing until the end_turn tool reports GAME OVER, then reply with your final result."
+  },
+  {
+    "id": "haiku",
+    "type": "prompt_agent",
+    "agent_name": "haiku",
+    "model": "anthropic/claude-haiku-4-5",
+    "prompt_id": "haiku",
+    "timeout_seconds": 2400,
+    "fail_task_on_error": false,
+    "depends_on": [
+      "match"
+    ],
+    "prompt": "You lead a civilization in a game of OpenCiv3, an open-source Civilization III remake, against other AI agents. Play to win. The get_turn_brief tool shows your civilization, your rivals, the match's rules and what needs orders; you act only through the openciv3 tools. Nobody will answer questions, so never ask or wait for confirmation. Keep playing until the end_turn tool reports GAME OVER, then reply with your final result."
+  },
+  {
+    "id": "sol",
+    "type": "prompt_agent",
+    "agent_name": "sol",
+    "model": "openai/gpt-5.6-sol",
+    "prompt_id": "sol",
+    "timeout_seconds": 2400,
+    "fail_task_on_error": false,
+    "depends_on": [
+      "match"
+    ],
+    "prompt": "You lead a civilization in a game of OpenCiv3, an open-source Civilization III remake, against other AI agents. Play to win. The get_turn_brief tool shows your civilization, your rivals, the match's rules and what needs orders; you act only through the openciv3 tools. Nobody will answer questions, so never ask or wait for confirmation. Keep playing until the end_turn tool reports GAME OVER, then reply with your final result."
+  },
+  {
+    "id": "luna",
+    "type": "prompt_agent",
+    "agent_name": "luna",
+    "model": "openai/gpt-5.6-luna",
+    "prompt_id": "luna",
+    "timeout_seconds": 2400,
+    "fail_task_on_error": false,
+    "depends_on": [
+      "match"
+    ],
+    "prompt": "You lead a civilization in a game of OpenCiv3, an open-source Civilization III remake, against other AI agents. Play to win. The get_turn_brief tool shows your civilization, your rivals, the match's rules and what needs orders; you act only through the openciv3 tools. Nobody will answer questions, so never ask or wait for confirmation. Keep playing until the end_turn tool reports GAME OVER, then reply with your final result."
+  },
+  {
+    "id": "terra",
+    "type": "prompt_agent",
+    "agent_name": "terra",
+    "model": "openai/gpt-5.6-terra",
+    "prompt_id": "terra",
+    "timeout_seconds": 2400,
+    "fail_task_on_error": false,
+    "depends_on": [
+      "match"
+    ],
+    "prompt": "You lead a civilization in a game of OpenCiv3, an open-source Civilization III remake, against other AI agents. Play to win. The get_turn_brief tool shows your civilization, your rivals, the match's rules and what needs orders; you act only through the openciv3 tools. Nobody will answer questions, so never ask or wait for confirmation. Keep playing until the end_turn tool reports GAME OVER, then reply with your final result."
+  },
+  {
+    "id": "gemini",
+    "type": "prompt_agent",
+    "agent_name": "gemini",
+    "model": "gemini/gemini-3.1-pro-preview",
+    "prompt_id": "gemini",
+    "timeout_seconds": 2400,
+    "fail_task_on_error": false,
+    "depends_on": [
+      "match"
+    ],
+    "prompt": "You lead a civilization in a game of OpenCiv3, an open-source Civilization III remake, against other AI agents. Play to win. The get_turn_brief tool shows your civilization, your rivals, the match's rules and what needs orders; you act only through the openciv3 tools. Nobody will answer questions, so never ask or wait for confirmation. Keep playing until the end_turn tool reports GAME OVER, then reply with your final result."
+  },
+  {
+    "id": "grok",
+    "type": "prompt_agent",
+    "agent_name": "grok",
+    "model": "xai/grok-4.7",
+    "prompt_id": "grok",
+    "timeout_seconds": 2400,
+    "fail_task_on_error": false,
+    "depends_on": [
+      "match"
+    ],
+    "prompt": "You lead a civilization in a game of OpenCiv3, an open-source Civilization III remake, against other AI agents. Play to win. The get_turn_brief tool shows your civilization, your rivals, the match's rules and what needs orders; you act only through the openciv3 tools. Nobody will answer questions, so never ask or wait for confirmation. Keep playing until the end_turn tool reports GAME OVER, then reply with your final result."
+  },
+  {
+    "id": "kimi",
+    "type": "prompt_agent",
+    "agent_name": "kimi",
+    "model": "bedrock/global.moonshotai.kimi-k3",
+    "prompt_id": "kimi",
+    "timeout_seconds": 2400,
+    "fail_task_on_error": false,
+    "depends_on": [
+      "match"
+    ],
+    "prompt": "You lead a civilization in a game of OpenCiv3, an open-source Civilization III remake, against other AI agents. Play to win. The get_turn_brief tool shows your civilization, your rivals, the match's rules and what needs orders; you act only through the openciv3 tools. Nobody will answer questions, so never ask or wait for confirmation. Keep playing until the end_turn tool reports GAME OVER, then reply with your final result."
+  },
+  {
+    "id": "grade",
+    "type": "env_outcome_verifier",
+    "env_id": "openciv3",
+    "file_artifact_id": "victor-verifier",
+    "verifier_id": "victor",
+    "score_aggregator": "weighted_average",
+    "depends_on": [
+      "opus",
+      "sonnet",
+      "haiku",
+      "sol",
+      "luna",
+      "terra",
+      "gemini",
+      "grok",
+      "kimi"
+    ]
+  },
+  {
+    "id": "recording",
+    "type": "save_env_recording",
+    "env_id": "openciv3",
+    "timeout_seconds": 1200,
+    "depends_on": [
+      "opus",
+      "sonnet",
+      "haiku",
+      "sol",
+      "luna",
+      "terra",
+      "gemini",
+      "grok",
+      "kimi"
+    ]
+  }
+]

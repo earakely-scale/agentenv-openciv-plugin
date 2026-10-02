@@ -7,7 +7,8 @@
 #
 # Needs git, Docker (running) and uv. Options:
 #   --dir DIR        where to clone (default ./agentenv-openciv-plugin; ignored when run from a checkout)
-#   --agent          also build and register the Claude player agent (openciv3-claude) and configure a model for it
+#   --agent          also build and register the player agents (openciv3-claude, openciv3-codex, openciv3-gemini)
+#                    and configure a model for them; openciv3-claude is the default agent
 #   --base-url URL   the agent's model endpoint (default https://api.anthropic.com; a LiteLLM URL works too)
 #   --model NAME     the model the agent runs on (default: the agent's own, sonnet; a LiteLLM proxy may need its name,
 #                    e.g. anthropic/claude-sonnet-5-5)
@@ -32,7 +33,7 @@ while [ $# -gt 0 ]; do
 		--model) model=$2; shift ;;
 		--client) client=1 ;;
 		--no-smoke) smoke=0 ;;
-		-h | --help) sed -n '2,23p' "${BASH_SOURCE[0]:-/dev/null}" 2>/dev/null || echo "see $REPO/blob/main/scripts/install.sh"; exit 0 ;;
+		-h | --help) sed -n '2,21p' "${BASH_SOURCE[0]:-/dev/null}" 2>/dev/null || echo "see $REPO/blob/main/scripts/install.sh"; exit 0 ;;
 		*) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
 	esac
 	shift
@@ -94,7 +95,7 @@ if [ "$agent" = 1 ]; then
 		echo "Keeping the existing $config"
 	else
 		{
-			echo '# Local and git-ignored: the default agent is the Claude player, the model key a secret reference.'
+			echo '# Local and git-ignored: the default agent is the Claude Code player, the model key a secret reference.'
 			echo '[agents]'
 			echo 'default_a2a_agent_id = "openciv3-claude"'
 			echo
@@ -131,6 +132,6 @@ if [ "$agent" = 1 ]; then
 	echo "  agent-env run openciv3 --task play                  # Claude plays 50 turns"
 	echo "  agent-env run openciv3 --task full-game             # the full 540-turn game (an hour or so)"
 else
-	echo "  scripts/install.sh --agent                          # add the Claude player, to have Claude play"
+	echo "  scripts/install.sh --agent                          # add the player agents, to have models play"
 fi
 echo "  agent-env openciv3 recordings --out recordings      # copy the games' videos and replays here"

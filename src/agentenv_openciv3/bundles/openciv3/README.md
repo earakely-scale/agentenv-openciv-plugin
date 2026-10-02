@@ -52,19 +52,34 @@ in parallel: the outcome verifier and `save_env_recording`.
   - **Watch it live:** while it plays, `agent-env openciv3 watch` prints the URL of the env's live view (`--open`
     opens it): the map, the scores, each agent's actions and the turn's events, and the real client's view when the
     image has it.
-  - **Models:** the ids are LiteLLM-style (`anthropic/claude-opus-5-5`, …); the player agent also takes them on
-    Anthropic's own API.
+  - **Models:** the ids are LiteLLM-style (`anthropic/claude-opus-5-5`, …); the player agents also take them on
+    their providers' own APIs.
+- `frontier` is the same kind of match with nine models, each its own agent and civilization, on a Standard map for
+  300 turns: Opus 5.5 (Rome), Sonnet 5.5 (Greece), Haiku 4.5 (Egypt), GPT-5.6 Sol (America), Luna (Babylon) and
+  Terra (Persia), Gemini 3.1 Pro (England), Grok 4.7 (Carthage) and Kimi K3 (China). Each `deploy_agent` step
+  names the player agent for its model with `a2a_agent_id`: Codex plays the GPT models, Gemini CLI plays Gemini,
+  and Claude Code plays the rest (Grok and Kimi through a LiteLLM proxy). Each agent starts a fresh session every
+  40 turns. `frontier-quick` is the same match in 10 turns.
 
-**The Claude player agent.** The repository ships an agent for these tasks: `agents/claude-player`, an A2A
-agent that runs Claude Code against the env's MCP tools.
+**The player agents.** The repository ships three A2A agents for these tasks, one per coding-agent CLI, over one
+game loop (`agents/common`):
+
+| Agent | Directory | CLI | Models |
+|---|---|---|---|
+| `openciv3-claude` | `agents/claude-player` | Claude Code | Anthropic's, and others' behind a LiteLLM proxy |
+| `openciv3-codex` | `agents/codex-player` | Codex | OpenAI's, through LiteLLM's OpenAI route or OpenAI's API |
+| `openciv3-gemini` | `agents/gemini-player` | Gemini CLI | Google's, through LiteLLM's Gemini route or Google's API |
+
+- Each plays through the env's MCP tools only: the CLI's own tools (shell, files, web, subagents) are off.
 - A prompt that names a stop turn ("until turn 180", as in `full-game`) is one session that plays to that turn or
   GAME OVER, nudging as the playtest harness does.
-- Any other prompt plays the whole game: the agent starts a fresh Claude Code session every 75 turns
+- Any other prompt plays the whole game: the agent starts a fresh session every 75 turns
   (`OPENCIV3_SESSION_TURNS` in the deploy step's `env_vars`; 0 for one session), and each new session resumes from
   the brief and the plan.
 - In a game with seats it names its seat by its `agent_name` (or `OPENCIV3_SEAT` from its `env_vars`).
-- `agent-env openciv3 setup --agent` builds and registers it as `openciv3-claude`.
-- Then set, in `.agentenv/config.toml`:
+- `agent-env openciv3 setup --agent` builds and registers all three. A `deploy_agent` step picks one with
+  `a2a_agent_id`; a step without one deploys the default agent.
+- Then set, in `.agentenv/config.toml` (a LiteLLM key serves all three agents; Anthropic's own key only the first):
 
   ```toml
   [agents]
