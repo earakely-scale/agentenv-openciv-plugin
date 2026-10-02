@@ -206,7 +206,7 @@ def rotate(sessions: list[Session]) -> bool:
 def played(sessions: list[Session]) -> TaskResult:
     """The task's result: the last reply and what the sessions played, their usage summed and their events in order."""
     first, last = sessions[0], sessions[-1]
-    if not first.result:
+    if not first.result and len(sessions) == 1:
         return TaskResult.failure("claude_failed", f"Claude Code exited ({first.returncode}) without a result.")
     if first.result.get("is_error") and first.calls == 0:
         message = first.result.get("result") or first.reply or "Claude Code failed."

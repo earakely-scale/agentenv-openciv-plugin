@@ -130,6 +130,17 @@ def test_sessions_follow_one_another_while_the_game_goes_on_and_moves():
     assert not player.rotate([session(0, 12), session(12, 12), session(12, 12)])
 
 
+def test_a_session_that_exited_without_a_result_fails_the_task_only_when_none_played_on():
+    crashed = player.Session(turns=10, start=0, turn=12, limit=30, calls=6, returncode=-9)
+    assert player.played([crashed]).error.code == "claude_failed"
+    over = player.Session(turns=10, start=12, turn=30, limit=30, over=True, calls=10, reply="Won.",
+                          result={"total_cost_usd": 1.5, "usage": {"input_tokens": 100, "output_tokens": 10}})
+    result = player.played([crashed, over])
+    assert result.parts[0].text == ("Won.\n\nPlayed T0 to T30 (GAME OVER) in 2 sessions after 16 tool calls and 0 "
+                                    "nudges ($1.50).")
+    assert (result.usage.tool_call_count, result.usage.input_tokens, result.usage.cost_usd) == (16, 100, 1.5)
+
+
 @pytest.fixture
 def fake_claude(monkeypatch, tmp_path):
     """fake_claude.py as `claude` on PATH, sessions of 10 turns; returns the file it keeps the game in."""
