@@ -66,7 +66,11 @@ The human player's full situation. Result:
   "civ": "Rome", "era": 0, "government": "Despotism", "anarchy_until": null, "tile_penalty": true,
   "governments": [{"name": "Monarchy", "corruption": "problematic", "hurry": "gold", "tile_penalty": false,
                    "trade_bonus": false, "unit_cost": 1, "free_units_per_city": 3}],
-  "revolution_target": null, "gold": 34, "gold_per_turn": 3, "rates": {"tax": 4, "science": 6, "luxury": 0},
+  "revolution_target": null, "gold": 34, "gold_per_turn": 3,
+  "finance": {"income": {"cities": 12, "taxmen": 0, "other_civs": 0, "interest": 0, "total": 12},
+              "expenses": {"science": 7, "entertainment": 0, "corruption": 1, "maintenance": 1, "unit_costs": 0,
+                           "other_civs": 0, "total": 9}},
+  "rates": {"tax": 4, "science": 6, "luxury": 0},
   "research": {"current": "Bronze Working", "turns_left": 3, "beakers": 8, "cost": 20, "queue": ["Bronze Working"]},
   "known_techs": ["Alphabet", "Pottery"],
   "score": {"total": 61, "cities": 2, "pop": 5, "tiles": 21, "techs": 3},
@@ -75,7 +79,9 @@ The human player's full situation. Result:
     "id": "c1", "name": "Rome", "x": 12, "y": 10, "size": 3, "capital": true,
     "food_stored": 4, "food_needed": 20, "food_per_turn": 2, "turns_to_grow": 8,
     "shields_per_turn": 3, "producing": "Settler", "production_stored": 12, "production_cost": 30,
-    "turns_to_complete": 6, "disorder": false, "buildings": ["Palace"]
+    "turns_to_complete": 6, "disorder": false, "buildings": ["Palace"],
+    "food_eaten": 6, "commerce": {"total": 5, "taxes": 2, "science": 3, "luxury": 0, "corrupt": 0, "wealth": 0},
+    "shields": {"total": 3, "useful": 3, "corrupt": 0}, "maintenance": 0
   }],
   "units": [{
     "id": "u3", "type": "Settler", "x": 14, "y": 10, "moves_left": 1.0, "moves_max": 1,
@@ -105,6 +111,25 @@ The human player's full situation. Result:
 - `blockers` lists what stops `end_turn`: `no_research` (has a city, nothing being researched),
   `no_production` (a city producing nothing), `idle_unit` (one per unit with `needs_orders`).
 - `last_events` are the events produced by the most recent `end_turn` (empty before the first).
+- `finance` is the domestic advisor's income and expenses, `Player.AggregateFlows()` as the client's
+  `DomesticAdvisor.ShowAdvisor` shows them. Income: `cities` "From cities" (`CityInflows()`: the cities'
+  commerce, corrupt and science and luxury included, less the tax collectors' share, plus Wealth's), `taxmen` "From
+  taxmen", `other_civs` "From other civs" (gold-per-turn deals), `interest` "From interest"; `total` "Income"
+  (`Inflows()`). Expenses: `science`, `entertainment` (the luxury spending), `corruption`, `maintenance` (buildings),
+  `unit_costs` (support beyond the free units), `other_civs` "To other civs"; `total` "Expenses" (`Outflows()`).
+  Science, entertainment and corruption are on both sides, as the engine counts them, so `income.total -
+  expenses.total` is `gold_per_turn` (`CalculateGoldPerTurn()` is `AggregateFlows().Netflows()`). All zero
+  without cities.
+- Each city also has the domestic advisor's row and the city screen's lines: `food_eaten`
+  (`City.FoodConsumedPerTurn()`, two per citizen; `food_per_turn` is what is left); `commerce`, from
+  `City.CurrentCommerceYield()`, its `taxes`, `science` (beakers), `luxury`, `corrupt` and `wealth` (what
+  building Wealth adds), with `total` their sum: the city's tiles' commerce, corrupt part included, plus what its
+  specialists add (taxes counts the tax collectors'). The cities' `total`s add up to `finance.income.cities +
+  taxmen`, their science, luxury and corrupt to the expenses' science, entertainment and corruption. `shields`
+  is `City.CurrentProductionYield()`: `useful` (= `shields_per_turn`), `corrupt` (waste; everything in disorder
+  or anarchy) and `total`, the city screen's "PRODUCTION: n per turn". `maintenance` is
+  `City.MaintenanceCosts()`, its buildings' upkeep in gold (the client's column reads 0, a TODO there); they add
+  up to `finance.expenses.maintenance`.
 
 ### `map`
 Args: `x`, `y` (center, required), `radius` (default 3, max 8). Only tiles the player has
@@ -267,6 +292,31 @@ screen's map (the client's `C7/Map/TileAssignmentLayer.cs`):
 - `"workable": [[x, y], ...]`: the tiles in the city's radius it could work, `City.GetWorkableTiles` (inside the
   civ's borders, no city on them), around which the client draws its border; this includes tiles another of the
   civ's cities works, and not the centre.
+
+And the rest of the client's city screen (`C7/UIElements/CityScreen/CityScreen.cs`):
+
+- `"culture": {"per_turn": 1, "total": 7, "next_border": 10}` (`RenderCulture`): `City.GetCulturePerTurn()`
+  (the buildings' culture, the Palace's included), `GetCulture()` (gathered so far) and `10^GetBorderExpansionLevel()`,
+  the culture at which the borders next grow; the client shows "1/turn" and "Total: 7/10".
+- `"strategic"` and `"luxuries"`: `[{"name": "Horses", "icon": 0, "count": 1}]`, `City.GetStrategicResources` and
+  `GetLuxuries` in the engine's order: the resources on the civ's own tiles that the city's road network (the
+  engine's `TradeNetwork`, the city tile included) reaches, known to the civ, with how many such tiles. `icon` is
+  `Resource.Icon`, the resource's index in `resources.png` (the client draws the strategic ones large with the
+  count under them, the luxuries small after "(count)").
+- `"citizens"`: one per resident, `size` in all, in the order the client draws the heads (`RenderPopHeads`): the
+  laborers happy, then content, then unhappy, then the specialists. A laborer is `{"mood": "happy" | "content" |
+  "unhappy", "works": "tile", "tile": [x, y]}` (its tile, one of `tiles_worked`); a specialist is `{"mood": null,
+  "works": "specialist", "specialist": "Entertainer"}`. Moods are the engine's `City.RecalculateCitizenMoods`,
+  as the client runs it before drawing; the engine leaves a specialist's mood as it was, which the
+  `happy`/`content`/`unhappy` counts still include, so they can exceed the laborers'.
+- `"specialists"`: `[{"type": "Entertainer", "index": 1, "count": 1, "taxes": 0, "research": 0, "luxuries": 1,
+  "corruption": 0, "construction": 0}]`, the residents that are specialists (`CitizenType`, not `IsDefaultCitizen`)
+  by type, in the order they first appear, with what each one adds (`CitizenType.Taxes`, `Research`, `Luxuries`,
+  and the `Corruption` and `Construction` the client draws as icons and the engine does not use yet). `index` is
+  `CitizenType.SpecialistIndex`, which picks the head: row `16 + index - 1` of `popHeads.png`, column the era
+  (the client's `textures/popheads.lua`). The engine makes a new citizen a specialist when the city has no tile
+  left for it, and an entertainer when working a tile would put the city into disorder
+  (`CityTileAssignmentAI`).
 
 ### `set_production`
 Args: `city`, `item`. Result: `{"message", "city": {...}}`. Errors: `unknown_city`, `unknown_item`

@@ -66,7 +66,13 @@ async def test_documented_result_keys(bridge):
     assert order["battle"] is None
     order = await bridge.call("unit_order", unit="u1", order="found_city")
     city = await bridge.call("city", city="c1")
-    assert set(city) == set(order["city"]) | {"options", "tiles_worked", "worked", "workable"}
+    assert set(city) == set(order["city"]) | {"options", "tiles_worked", "worked", "workable", "culture", "strategic",
+                                              "luxuries", "specialists", "citizens"}
+    assert set(city["culture"]) == {"per_turn", "total", "next_border"} and len(city["citizens"]) == city["size"]
+    assert set(city["commerce"]) == {"total", "taxes", "science", "luxury", "corrupt", "wealth"}
+    assert set(city["shields"]) == {"total", "useful", "corrupt"}
+    finance = (await bridge.call("state"))["finance"]
+    assert finance["income"]["total"] - finance["expenses"]["total"] == (await bridge.call("state"))["gold_per_turn"]
     assert city["worked"][0][:2] == [city["x"], city["y"]] and len(city["worked"]) == city["size"] + 1
     assert all(len(t) == 5 for t in city["worked"]) and all(len(t) == 2 for t in city["workable"])
     assert set(city["options"][0]) == {"name", "kind", "cost", "turns"}

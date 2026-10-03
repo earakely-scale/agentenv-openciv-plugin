@@ -198,7 +198,7 @@ sealed partial class Session {
 		o["citizens"] = citizens;
 		o["specialists"] = Json.Array(specialists.GroupBy(r => r.citizenType).Select(g => (Type: g.Key, Count: g.Count())),
 			s => new JsonObject {
-				["type"] = s.Type.SingularName, ["count"] = s.Count,
+				["type"] = s.Type.SingularName, ["index"] = s.Type.SpecialistIndex, ["count"] = s.Count,
 				["taxes"] = s.Type.Taxes, ["research"] = s.Type.Research, ["luxuries"] = s.Type.Luxuries,
 				["corruption"] = s.Type.Corruption, ["construction"] = s.Type.Construction,
 			});

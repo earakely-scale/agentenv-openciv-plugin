@@ -108,6 +108,22 @@ The city screen and the advisors read two more commands' fields:
   `[[x, y], ...]`, the tiles in the city's radius it could work, around which the client draws the border.
 - `state` has `era`, the seat's era 0-3, by which the client picks the advisors' heads and the science advisor's
   background.
+- `state` has `finance`, the domestic advisor's income and expenses as it computes them (`Player.AggregateFlows()`):
+  `income` `{cities, taxmen, other_civs, interest, total}` ("From cities: +n", ..., "Income: n") and `expenses`
+  `{science, entertainment, corruption, maintenance, unit_costs, other_civs, total}` ("-n: Science", ...,
+  "Expenses: n"); `income.total - expenses.total` is `gold_per_turn`, the "Net gain/Net loss/Neutral" line.
+- Each of `state`'s cities (and `city`) has the domestic advisor's row: `food_eaten` (the food column's
+  `eaten.surplus` with `food_per_turn`), `shields` `{total, useful, corrupt}` (`corrupt.useful`), `commerce`
+  `{total, taxes, science, luxury, corrupt, wealth}` (the commerce column is `corrupt.(taxes + science + luxury)`,
+  the science and tax columns its `science` and `taxes`; the city screen's three commerce lines are its `taxes`,
+  `science` with `corrupt`, and `luxury`), and `maintenance` (its buildings' upkeep, which the client leaves at 0).
+- `city` has the rest of the city screen: `culture` `{per_turn, total, next_border}` ("n/turn", "Total:
+  total/next_border"); `strategic` and `luxuries`, `[{name, icon, count}]` with `icon` the resource's index in
+  `resources.png`; `citizens`, one per resident in the order the client draws the heads (laborers happy, content,
+  unhappy, then specialists), `{"mood", "works": "tile", "tile": [x, y]}` or `{"mood": null, "works": "specialist",
+  "specialist": "Entertainer"}`; and `specialists`, `[{type, index, count, taxes, research, luxuries, corruption,
+  construction}]`, `index` picking the head's row in `popHeads.png` (`16 + index - 1`). Details in
+  [protocol.md](protocol.md#state) and [`city`](protocol.md#city).
 
 ## 4. The play API (the env, next to `/mcp`)
 

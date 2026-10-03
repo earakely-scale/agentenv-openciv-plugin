@@ -271,6 +271,76 @@ def check_city_screen(info: dict) -> None:
     # only take shields away.
     assert sum(t[2] for t in worked) - 2 * info["size"] == info["food_per_turn"]
     assert sum(t[3] for t in worked) >= info["shields_per_turn"]
+    check_city_figures(info)
+    # The rest of the city screen. Shields: its tiles' production, split into useful and corrupt (specialists add none).
+    assert info["shields"]["total"] == sum(t[3] for t in worked)
+    # Commerce: its tiles' commerce, plus what each specialist adds, plus Wealth's.
+    specialists = info["specialists"]
+    assert info["commerce"]["total"] == sum(t[4] for t in worked) + info["commerce"]["wealth"] + sum(
+        s["count"] * (s["taxes"] + s["research"] + s["luxuries"]) for s in specialists)
+    # Culture: City.GetCulturePerTurn, GetCulture and the next border level's 10^n, as "Total: x/y".
+    culture = info["culture"]
+    assert set(culture) == {"per_turn", "total", "next_border"} and culture["per_turn"] >= 0 and culture["total"] >= 0
+    assert culture["next_border"] == 10 ** len(str(max(1, culture["total"]))) > culture["total"]
+    if "Palace" in info["buildings"]:
+        assert culture["per_turn"] > 0
+    # Resources: name, icon (resources.png index) and count, strategic and luxury apart.
+    for kind in ("strategic", "luxuries"):
+        assert all(set(r) == {"name", "icon", "count"} and r["icon"] >= 0 and r["count"] >= 1 for r in info[kind])
+    assert not {r["name"] for r in info["strategic"]} & {r["name"] for r in info["luxuries"]}
+    # Citizens, one per resident in the client's order: laborers happy, content, unhappy, then the specialists.
+    citizens = info["citizens"]
+    assert len(citizens) == info["size"]
+    order = {"happy": 0, "content": 1, "unhappy": 2, None: 3}
+    assert [order[c["mood"]] for c in citizens] == sorted(order[c["mood"]] for c in citizens)
+    laborers = [c for c in citizens if c["works"] == "tile"]
+    assert all(c["mood"] is not None and "specialist" not in c for c in laborers)
+    assert sorted(tuple(c["tile"]) for c in laborers) == sorted((t["x"], t["y"]) for t in info["tiles_worked"])
+    workers = [c for c in citizens if c["works"] == "specialist"]
+    assert all(c["mood"] is None and c["specialist"] for c in workers)
+    assert [s["type"] for s in specialists] == list(dict.fromkeys(c["specialist"] for c in workers))
+    assert all(s["index"] >= 1 and s["count"] >= 1 for s in specialists)
+    assert sum(s["count"] for s in specialists) == len(workers) == len(citizens) - len(laborers)
+    # The happy/content/unhappy counts are the engine's over every resident (a specialist keeps a mood it no longer
+    # updates); the laborers' moods are within them.
+    for mood in ("happy", "content", "unhappy"):
+        assert sum(c["mood"] == mood for c in laborers) <= info[mood]
+    assert info["happy"] + info["content"] + info["unhappy"] == info["size"]
+
+
+def check_city_figures(c: dict) -> None:
+    """The domestic advisor's per-city figures, in state's cities and the city command alike."""
+    commerce, shields = c["commerce"], c["shields"]
+    assert set(commerce) == {"total", "taxes", "science", "luxury", "corrupt", "wealth"}
+    assert commerce["total"] == sum(v for k, v in commerce.items() if k != "total")
+    assert all(v >= 0 for v in commerce.values())
+    assert set(shields) == {"total", "useful", "corrupt"} and shields["total"] == shields["useful"] + shields["corrupt"]
+    assert shields["useful"] == c["shields_per_turn"] and shields["corrupt"] >= 0
+    if c["disorder"]:
+        assert shields["useful"] == 0
+    assert c["food_eaten"] == 2 * c["size"] and c["maintenance"] >= 0
+
+
+def check_finance(s: dict) -> None:
+    """state.finance is Player.AggregateFlows as the domestic advisor shows it: the parts add up, the net is
+    gold_per_turn, and the cities' figures add up to its city lines."""
+    f = s["finance"]
+    income, expenses = f["income"], f["expenses"]
+    assert set(income) == {"cities", "taxmen", "other_civs", "interest", "total"}
+    assert set(expenses) == {"science", "entertainment", "corruption", "maintenance", "unit_costs", "other_civs",
+                             "total"}
+    assert income["total"] == sum(v for k, v in income.items() if k != "total")
+    assert expenses["total"] == sum(v for k, v in expenses.items() if k != "total")
+    assert income["total"] - expenses["total"] == s["gold_per_turn"]
+    cities = s["cities"]
+    for c in cities:
+        check_city_figures(c)
+    total = {k: sum(c["commerce"][k] for c in cities) for k in ("total", "science", "luxury", "corrupt")}
+    # The cities' commerce is the advisor's "From cities" plus "From taxmen" (it moves the tax collectors' share).
+    assert total["total"] == income["cities"] + income["taxmen"]
+    assert (total["science"], total["luxury"], total["corrupt"]) == (
+        expenses["science"], expenses["entertainment"], expenses["corruption"])
+    assert sum(c["maintenance"] for c in cities) == expenses["maintenance"]
 
 
 def test_techs_and_research(game):
@@ -918,6 +988,51 @@ def test_known_map_draws_what_the_seat_knows(launch):
         [tile] = b.call("map", x=x, y=y, radius=0)["tiles"]
         assert "barbarian_camp" in tile["improvements"]
         assert tile["city_site"] == {"ok": False, "reason": "a barbarian camp is here"}
+
+
+def test_domestic_advisor_and_city_screen(launch):
+    b = launch()
+    b.call("new_game", seed=SEED, turn_limit=400)
+    s = b.call("state")
+    assert s["finance"] == {
+        "income": {"cities": 0, "taxmen": 0, "other_civs": 0, "interest": 0, "total": 0},
+        "expenses": {"science": 0, "entertainment": 0, "corruption": 0, "maintenance": 0, "unit_costs": 0,
+                     "other_civs": 0, "total": 0}}
+    found_capital(b)
+    check_finance(b.call("state"))
+    info = b.call("city", city="c1")
+    check_city_screen(info)
+    # A new capital: the Palace's culture, none gathered yet, the first border at 10.
+    assert info["culture"]["total"] == 0 and info["culture"]["per_turn"] > 0 and info["culture"]["next_border"] == 10
+    per_turn = info["culture"]["per_turn"]
+    b.call("end_turn", skip_idle=True)
+    assert b.call("city", city="c1")["culture"]["total"] == per_turn
+
+    s = until(b, lambda s: len(s["cities"]) >= 4 and s["finance"]["expenses"]["maintenance"] > 0, 300)
+    me = next(p["index"] for p in b.call("known_map")["players"] if p["me"])
+    for rates in ({"science": 4, "luxury": 2}, {"science": s["rates"]["science"], "luxury": s["rates"]["luxury"]}):
+        b.call("set_rates", **rates)
+        s = b.call("state")
+        check_finance(s)
+        if rates["luxury"] == 2:  # 40% tax, 40% science, 20% luxury: every part of the cities' commerce shows
+            assert all(s["finance"]["expenses"][k] > 0 for k in ("science", "entertainment", "maintenance"))
+            assert sum(c["commerce"]["taxes"] for c in s["cities"]) > 0
+        km = b.call("known_map")
+        owned: dict[str, int] = {}
+        for t in km["tiles"]:
+            if t[5] == me and t[7]:
+                owned[t[7]] = owned.get(t[7], 0) + 1
+        for c in s["cities"]:
+            info = b.call("city", city=c["id"])
+            check_city_screen(info)
+            for key in ("commerce", "shields", "food_eaten", "maintenance"):
+                assert info[key] == c[key]
+            # A city has the resources on the civ's tiles its road network reaches (TradeNetwork), the city's own
+            # tile among them: never more than the civ's tiles with that resource.
+            for r in info["strategic"] + info["luxuries"]:
+                assert r["count"] <= owned.get(r["name"], 0), (c["name"], r)
+    # Rome has gathered culture from its Palace since its founding.
+    assert b.call("city", city="c1")["culture"]["total"] > 0
 
 
 def test_watchdog_answers_timeout_and_exits(launch):
