@@ -5,10 +5,12 @@ Build first with scripts/build-bridge.sh. CIVBRIDGE_CMD overrides the binary (de
 
 from __future__ import annotations
 
+import functools
 import gzip
 import json
 import os
 import queue
+import re
 import shlex
 import subprocess
 import threading
@@ -608,6 +610,57 @@ def test_world_snapshot_schema_2(launch, tmp_path):
     assert (trail[-1]["x"], trail[-1]["y"]) == (unit(state, "u2")["x"], unit(state, "u2")["y"])
 
 
+# Opposite river edges: NE=1/SW=4, SE=2/NW=8, N=16/S=64, E=32/W=128, with the (dx, dy) of the neighbour across each.
+RIVER_EDGES = ((1, 4, 1, -1), (2, 8, 1, 1), (16, 64, 0, -2), (32, 128, 2, 0))
+
+
+def check_rivers(world: dict) -> None:
+    """The snapshot's river masks over the whole map: an edge is flagged on both banks, with the opposite bit."""
+    width, wrap = world["map"]["width"], world["map"]["wrap_x"]
+    rivers = {(r[0], r[1]): r[5] for r in world["tiles"]}
+    assert all(isinstance(m, int) and 0 <= m < 256 for m in rivers.values())
+    assert sum(1 for m in rivers.values() if m & 15) > 20, "the map should have rivers"
+    edges = 0
+    for (x, y), m in rivers.items():
+        for bit, opposite, dx, dy in RIVER_EDGES:
+            nx = (x + dx) % width if wrap else x + dx
+            if (nx, y + dy) in rivers:
+                assert bool(m & bit) == bool(rivers[nx, y + dy] & opposite), f"river edge at ({x},{y}) bit {bit}"
+                edges += bool(m & bit)
+    assert edges > 20
+
+
+@functools.cache
+def client_color_table() -> tuple[dict, list[str]]:
+    """The OpenCiv3 client's civ colour indexes (ruleset.json) and its standalone hex colours (textures.lua)."""
+    lua = ROOT / "vendor" / "OpenCiv3" / "C7" / "Lua"
+    ruleset = json.loads((lua / "civ3" / "ruleset.json").read_text(encoding="utf-8"))
+    civs = {("Barbarians" if c.get("isBarbarian") else c["name"]): (c["primaryColorIndex"], c["secondaryColorIndex"])
+            for c in ruleset["civilizations"]}
+    table = (lua / "standalone" / "textures.lua").read_text(encoding="utf-8").split("local civ_colors = {")[1].split("}")[0]
+    return civs, ["#" + h.lower() for h in re.findall(r'"([0-9A-Fa-f]{6})"', table)]
+
+
+def client_colors(world: dict) -> list[str]:
+    """Each player's colour as the client picks it (C7/Textures/PlayerTextureUtil.cs): the primary colour, the secondary
+    when the primary is taken, then in order a player whose colour is shared drops it and picks again."""
+    civs, hexes = client_color_table()
+    pairs = [civs[p["civ"]] for p in world["players"]]
+    used: dict[int, int] = {}
+
+    def load(i: int) -> None:
+        if i not in used:
+            used[i] = pairs[i][1] if pairs[i][0] in used.values() else pairs[i][0]
+
+    for i in range(len(pairs)):
+        load(i)
+    for i in range(len(pairs)):
+        if list(used.values()).count(used[i]) > 1:
+            del used[i]
+            load(i)
+    return [hexes[used[i]] for i in range(len(pairs))]
+
+
 def check_known_map(km: dict, world: dict, state: dict, k: int = 0) -> None:
     """known_map for seats[k] against the world snapshot (which sees through the fog) and the seat's own state."""
     me = world["seats"][k]["index"]
@@ -615,17 +668,20 @@ def check_known_map(km: dict, world: dict, state: dict, k: int = 0) -> None:
     assert (km["turn"], km["width"], km["height"], km["wrap_x"]) == (
         world["turn"], world["map"]["width"], world["map"]["height"], world["map"]["wrap_x"])
     assert km["players"] == [{"index": p["index"], "civ": p["civ"], "barbarian": p["civ"] == "Barbarians",
-                              "me": p["index"] == me} for p in world["players"]]
+                              "me": p["index"] == me, "color": client_colors(world)[p["index"]]}
+                             for p in world["players"]]
+    check_rivers(world)
 
     # Every tile the seat knows and nothing else; terrain, overlay, river and owner as in the snapshot.
     rows = {(r[0], r[1]): r for r in world["tiles"]}
     known = {xy for xy, r in rows.items() if r[6] >> k & 1}
     assert {(t[0], t[1]) for t in km["tiles"]} == known and len(km["tiles"]) == len(known)
-    for x, y, terrain, overlay, river, owner, visible, resource, improvements in km["tiles"]:
+    for x, y, terrain, overlay, river, owner, visible, resource, improvements, bonus in km["tiles"]:
         w = rows[x, y]
         assert (terrain, overlay, owner, river) == (w[2], w[3], w[4], w[5])
         assert visible in (0, 1) and (resource is None or isinstance(resource, str))
         assert all(isinstance(i, str) and i != "barbarianCamp" for i in improvements)
+        assert bonus in (0, 1) and not (bonus and (terrain, overlay) != ("grassland", None))
     visible = {(t[0], t[1]) for t in km["tiles"] if t[6]}
     assert visible and visible < known, "after exploring, some known tiles should be out of sight"
 
@@ -635,14 +691,20 @@ def check_known_map(km: dict, world: dict, state: dict, k: int = 0) -> None:
                 for c in world["cities"] if (c["x"], c["y"]) in known]
     base = [{k_: c[k_] for k_ in ("x", "y", "name", "owner", "size", "capital")} for c in km["cities"]]
     assert sorted(base, key=lambda c: (c["x"], c["y"])) == sorted(expected, key=lambda c: (c["x"], c["y"]))
+    eras = {}
     for c in km["cities"]:
+        # The city art's inputs, for every city: the owner's era (one per owner), walls and disorder.
+        assert c["era"] in (0, 1, 2, 3) and eras.setdefault(c["owner"], c["era"]) == c["era"]
+        assert isinstance(c["walls"], bool) and isinstance(c["disorder"], bool)
         if c["owner"] != me:
-            assert set(c) == {"x", "y", "name", "owner", "size", "capital"}
+            assert set(c) == {"x", "y", "name", "owner", "size", "capital", "era", "walls", "disorder"}
             continue
         mine = own_cities.pop(c["id"])
         assert (c["name"], c["x"], c["y"], c["size"]) == (mine["name"], mine["x"], mine["y"], mine["size"])
         assert (c["producing"], c["turns_to_complete"], c["turns_to_grow"]) == (
             mine["producing"], mine["turns_to_complete"], mine["turns_to_grow"])
+        assert (c["disorder"], c["walls"], c["starving"]) == (
+            mine["disorder"], "Walls" in mine["buildings"], mine["food_per_turn"] < 0)
     assert own_cities == {}
 
     # Units on visible tiles only: the seat's own one by one with ids, everyone else's counted by owner and type.
@@ -677,7 +739,20 @@ def test_known_map_draws_what_the_seat_knows(launch):
     check_known_map(km, b.call("world"), b.call("state"))
     [city] = km["cities"]
     assert city["id"] == "c1" and city["producing"] == "Warrior" and city["capital"]
+    assert (city["era"], city["walls"], city["disorder"], city["starving"]) == (0, False, False, False)
     assert any(t[5] == city["owner"] for t in km["tiles"]), "the capital's borders are known"
+    # Rome red, then the opponents; no two players share a colour in this game.
+    colors = [p["color"] for p in km["players"]]
+    assert colors[:2] == ["#f0f8ff", "#e6194b"] and len(set(colors)) == len(colors)
+
+    # Rivers, bonus grassland and camps against what `map` reports from the engine around the capital: river tiles
+    # border a river, plain grassland yields its bonus shield, and a camp is why a city cannot be founded.
+    rows = {(t[0], t[1]): t for t in km["tiles"]}
+    near = b.call("map", x=city["x"], y=city["y"], radius=8)["tiles"]
+    assert all(bool(rows[t["x"], t["y"]][4]) == t["river"] for t in near)
+    plain = [t for t in near if (t["terrain"], t["overlay"], t["resource"], t["city"]) == ("Grassland", None, None, None)]
+    assert all(rows[t["x"], t["y"]][9] == t["yield"]["shields"] for t in plain)
+    assert {rows[t["x"], t["y"]][9] for t in plain} == {0, 1}, "both kinds of grassland near the capital"
 
     # Later, with neighbours met: foreign cities and units show (theirs without ids), still only what is known.
     me = next(p["index"] for p in km["players"] if p["me"])
@@ -691,6 +766,16 @@ def test_known_map_draws_what_the_seat_knows(launch):
         pytest.fail("no foreign city and unit in sight by T83")
     assert len(km["tiles"]) < km["width"] * km["height"] // 2
     assert b.call("known_map") == km
+    # Still in the Ancient era while an Ancient tech is left to learn.
+    if any(t["era"] == "Ancient Times" for t in b.call("techs")["available"]):
+        assert all(c["era"] == 0 for c in km["cities"] if c["owner"] == me)
+
+    camps = [(t[0], t[1]) for t in km["tiles"] if "barbarian_camp" in t[8]]
+    assert camps, "a barbarian camp should be known by now"
+    for x, y in camps:
+        [tile] = b.call("map", x=x, y=y, radius=0)["tiles"]
+        assert "barbarian_camp" in tile["improvements"]
+        assert tile["city_site"] == {"ok": False, "reason": "a barbarian camp is here"}
 
 
 def test_watchdog_answers_timeout_and_exits(launch):
@@ -806,6 +891,9 @@ def test_known_map_per_seat(launch):
         assert [c["id"] for c in km["cities"] if "id" in c] == ["c1"]
     tiles = [frozenset((t[0], t[1]) for t in maps[civ]["tiles"]) for civ in SEATS]
     assert len(set(tiles)) == len(SEATS)
+    # Every seat sees the same colours: the barbarians' white, then Rome, Greece and Egypt with their primaries.
+    assert all(maps[civ]["players"] == [dict(p, me=p["civ"] == civ) for p in maps["Rome"]["players"]] for civ in SEATS)
+    assert [p["color"] for p in maps["Rome"]["players"]] == ["#f0f8ff", "#e6194b", "#aaffc3", "#ffe119"]
 
 
 def test_new_game_seats_must_fit_the_opponents(launch):

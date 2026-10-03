@@ -43,9 +43,9 @@ from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.lowlevel.server import request_ctx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 
-from . import client, live, matchdata, recording, render, viewer
+from . import client, live, matchdata, recording, render, viewer, webart
 from .actionlog import ActionLog
 from .baselines import POLICIES, Baselines
 from .bridge import DEAD, Bridge, BridgeError
@@ -1166,6 +1166,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
                               ("/play/api/sites", self._play_sites)):
             app.custom_route(path, methods=["GET"])(handler)
         app.custom_route("/play/api/act", methods=["POST"])(self._play_act)
+        app.custom_route("/play/art/{path:path}", methods=["GET"])(self._play_art)
         return app
 
     async def _live_page(self, request: Request) -> Response:
@@ -1247,6 +1248,18 @@ class OpenCiv3Env(AgentEnvEnvironment):
 
     async def _play_page(self, request: Request) -> Response:
         return HTMLResponse(viewer.play_page(), headers={"Cache-Control": "no-cache"})
+
+    async def _play_art(self, request: Request) -> Response:
+        """The client's art for the play page, when the image has it (webart.py); 404 otherwise. The manifest is
+        revalidated, the sheets are cached: their URLs carry the art's id."""
+        root, rel = webart.find(), request.path_params["path"]
+        if root is None:
+            return PlainTextResponse("this env has no art: build the image with the client (--target client)", 404)
+        path = (root / rel).resolve()
+        if not path.is_relative_to(root.resolve()) or not path.is_file():
+            return PlainTextResponse("no such art", 404)
+        cache = "no-cache" if rel == "manifest.json" else "public, max-age=31536000, immutable"
+        return FileResponse(path, headers={"Cache-Control": cache})
 
     @staticmethod
     def _play_token(request: Request) -> str | None:
@@ -1349,7 +1362,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
                     "me": {"civ": seat.civ, "label": seat.label, "index": me, "color": colors.get(me)},
                     "ended": seat.ready or seat.over, "waiting_for": self._waiting_for(seat),
                     "seats": self._play_seats(), "human_turn_seconds": self._stall_seconds(seat),
-                    "seconds_left": self._seconds_left(seat)}
+                    "seconds_left": self._seconds_left(seat), "art": webart.find() is not None}
             # The notices of this turn and the last: a turn the env ended for the seat is noted with that turn.
             notices = [n for n in seat.notices if self.turn is not None and n["turn"] >= self.turn - 1]
             return JSONResponse({"game": game, "colors": {str(i): c for i, c in colors.items()}, "state": state,

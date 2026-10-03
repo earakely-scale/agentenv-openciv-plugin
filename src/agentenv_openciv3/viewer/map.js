@@ -40,12 +40,13 @@ class World {
   constructor(map, colors) { this.update(map, colors); }
   update(map, colors) {
     this.W = map.width; this.H = map.height; this.wrap = !!map.wrap_x; this.turn = map.turn;
+    this.version = (this.version || 0) + 1;   // a new picture to draw
     this.players = Object.fromEntries(map.players.map(p => [p.index, p]));
     this.me = map.players.find(p => p.me)?.index;
     this.colors = Object.fromEntries(Object.entries(colors || {}).map(([k, v]) => [k, hexRgb(v)]));
     this.tiles = new Map();
-    for (const [x, y, terrain, overlay, river, owner, visible, resource, improvements] of map.tiles)
-      this.tiles.set(x * 4096 + y, {x, y, terrain, overlay, river, owner, visible, resource, improvements: improvements || []});
+    for (const [x, y, terrain, overlay, river, owner, visible, resource, improvements, bonus] of map.tiles)
+      this.tiles.set(x * 4096 + y, {x, y, terrain, overlay, river, owner, visible, resource, improvements: improvements || [], bonus: !!bonus});
     this.cities = new Map(map.cities.map(c => [c.x * 4096 + c.y, c]));
     this.units = new Map();
     for (const u of map.units) {
@@ -169,14 +170,20 @@ class PlayPainter {
         if (!n || n.owner !== t.owner) { ctx.beginPath(); ctx.moveTo(...pts[a]); ctx.lineTo(...pts[b]); ctx.stroke(); }
       }
     }
-    // overlays under the units: good city sites, the city's radius, the path, attack targets
+    this.overlays(ctx, world, cam, w, h, o, tiles);
+    this.unitsOnly(ctx, world, cam, w, h, o, tiles);
+  }
+  // What a seat's orders need on the map, under the units: good city sites, the city's radius, the path, attack
+  // targets, the tile under the mouse. ArtPainter draws these too.
+  overlays(ctx, world, cam, w, h, o, tiles = null) {
+    const hw = cam.hw, W = world.wrap ? world.W : 0;
     for (const s of o.sites || []) {
       const [sx, sy] = cam.screen(s.x, s.y, w, h, W);
       ctx.beginPath(); this.diamond(ctx, sx, sy, hw, 0.8); ctx.strokeStyle = "rgba(255,226,140,.85)"; ctx.lineWidth = 2;
       ctx.setLineDash([4, 3]); ctx.stroke(); ctx.setLineDash([]);
       if (hw >= 16) this._tag(ctx, sx, sy + hw * 0.18, String(s.score), "#ffe28c");
     }
-    if (o.cityRadius) {
+    if (o.cityRadius && tiles) {   // ArtPainter draws the client's outline instead
       const c = o.cityRadius;
       // the 21 tiles a city works: the 5x5 square around it in the game's own grid, without its corners
       for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
@@ -202,12 +209,15 @@ class PlayPainter {
       const [sx, sy] = cam.screen(o.hover[0], o.hover[1], w, h, W);
       ctx.beginPath(); this.diamond(ctx, sx, sy, hw, 0.98); ctx.strokeStyle = "rgba(255,255,255,.7)"; ctx.lineWidth = 1.5; ctx.stroke();
     }
-    // cities, then units, then labels on top
-    const labels = [];
-    for (const [t, sx, sy] of tiles) {
+  }
+  // Cities (when `tiles` are given: the plain map), units, the active unit's ring, then city labels on top.
+  unitsOnly(ctx, world, cam, w, h, o, tiles = null) {
+    const hw = cam.hw, W = world.wrap ? world.W : 0, labels = [];
+    if (tiles) for (const [t, sx, sy] of tiles) {
       const c = world.city(t.x, t.y);
       if (c) labels.push(this._city(ctx, world, c, sx, sy, hw));
     }
+    tiles = tiles || this._onScreen(world, cam, w, h);
     const sel = o.selected;
     for (const [t, sx, sy] of tiles) {
       if (!t.visible) continue;
@@ -221,6 +231,15 @@ class PlayPainter {
       ctx.lineWidth = 2.5; ctx.stroke();
     }
     for (const l of labels) l();
+  }
+  _onScreen(world, cam, w, h) {
+    const hw = cam.hw, W = world.wrap ? world.W : 0, out = [];
+    for (const t of world.tiles.values()) {
+      const [sx, sy] = cam.screen(t.x, t.y, w, h, W);
+      if (sx < -hw * 1.2 || sy < -hw || sx > w + hw * 1.2 || sy > h + hw) continue;
+      out.push([t, sx, sy]);
+    }
+    return out;
   }
   _detail(ctx, t, sx, sy, hw) {   // improvements and resources, once tiles are big enough to read
     const imp = t.improvements;

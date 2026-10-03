@@ -7,7 +7,28 @@ const S = {
   view: null, world: null, cam: new Camera(), painter: new PlayPainter(), sel: null, mode: null, hover: null,
   waited: new Set(), sites: null, sitesFor: null, busy: false, turn: null, gameId: null, dialog: null,
   tileInfo: new Map(), drag: null, confirmEnd: false, lastEventsTurn: null,
+  art: null, artState: null,   // the client's art (art.js): null until loaded; artState "loading", "on", "off", "none"
 };
+// The client's art when the env has it: the game's own terrain, cities and units. The plain map otherwise, or when
+// the player turns the art off (key T, remembered in this browser).
+function loadArt() {
+  if (S.artState) return;
+  S.artState = "loading";
+  Art.load("play/art/").then(art => {
+    S.art = art;
+    S.artState = localStorage.getItem("openciv3-art") === "off" ? "off" : "on";
+    if (S.artState === "on") useArt(true);
+    renderBar();
+  }).catch(() => { S.artState = "none"; renderBar(); });
+}
+function useArt(on) {
+  if (!S.art) return;
+  S.artState = on ? "on" : "off";
+  localStorage.setItem("openciv3-art", S.artState);
+  S.painter = on ? new ArtPainter(S.art) : new PlayPainter();
+  if (on && S.cam.hw === 44) S.cam.hw = 56;   // the art reads best near the game's own zoom
+  renderBar(); draw();
+}
 
 // The unit orders, as the game's command bar shows them: [order, label, key shown, key code]
 const ORDERS = [
@@ -77,7 +98,8 @@ function centerMessage(html) { $("#play").innerHTML = `<div class="center">${htm
 
 // The env's messages are written for agents: drop the hints that name tool calls, e.g. "(change it with
 // set_production(city="c1", item=...))", which a person does with the UI instead.
-const plain = text => String(text).replace(/\s*\([^()]*\b[a-z_]+\([^()]*\)[^()]*\)/g, "").replace(/\s*—?\s*consider [a-z_]+\([^)]*\)/g, "");
+const plain = text => String(text).replace(/\s*\([^()]*\b[a-z_]+\([^()]*\)[^()]*\)/g, "")
+  .replace(/\s*—?\s*consider [a-z_]+\([^)]*\)/g, "").replace(/\s+(?:with|using|via|call) [a-z_]+\([^)]*\)/g, "");
 function toast(text, err = false) {
   const el = document.createElement("div");
   el.className = "toast" + (err ? " err" : ""); el.textContent = plain(text);
@@ -102,6 +124,7 @@ async function loadView() {
   if (newTurn && !newGame) turnReport();
   else if (newGame && v.state.turn > 0 && (v.state.last_events || []).length) turnReport();
   if (v.game.game_over) gameOver();
+  if (v.game.art) loadArt();
   return v;
 }
 const state = () => S.view.state;
@@ -166,8 +189,9 @@ function renderBar() {
       <button data-a="domestic" title="Domestic advisor: taxes and government (F1)">Domestic <kbd>F1</kbd></button>
       <button data-a="foreign" title="Foreign advisor: war and peace (F4)">Foreign <kbd>F4</kbd></button>
       <button data-a="science" title="Science advisor: research (F6)">Science <kbd>F6</kbd></button>
+      ${S.art ? `<button data-a="art" title="The game's art, or the plain map (T)">${S.artState === "on" ? "Plain map" : "Game art"} <kbd>T</kbd></button>` : ""}
     </div>`;
-  for (const b of $$("#bar .adv button")) b.onclick = () => advisor(b.dataset.a);
+  for (const b of $$("#bar .adv button")) b.onclick = () => b.dataset.a === "art" ? useArt(S.artState !== "on") : advisor(b.dataset.a);
 }
 
 function renderStatus() {
@@ -312,7 +336,8 @@ function paint() {
     const mm = sizeCanvas(m); S.painter.minimap(mm.ctx, S.world, S.cam, mm.w, mm.h, w, h);
   }
   // the active unit blinks: keep painting while one is selected
-  if (u && !document.hidden) { animating = true; raf = requestAnimationFrame(paint); } else animating = false;
+  // the active unit blinks, and the art's units animate: keep painting while either is on screen
+  if ((u || S.artState === "on") && !document.hidden) { animating = true; raf = requestAnimationFrame(paint); } else animating = false;
 }
 
 function mapEvents() {
@@ -428,6 +453,7 @@ function keys() {
     if (k === "c" || (k === "C" && !e.shiftKey)) { const u = unit(S.sel); if (u) centerOn(u.x, u.y); return; }
     if (k === "w") { e.preventDefault(); return waitUnit(); }
     if (k === "Tab") { e.preventDefault(); return selectNext(); }
+    if (k === "t" && S.art) return useArt(S.artState !== "on");
     const dir = MOVE_KEYS[e.code] || MOVE_KEYS[k];
     if (dir && S.sel) { e.preventDefault(); return step(dir); }
     const order = KEYS[k];
