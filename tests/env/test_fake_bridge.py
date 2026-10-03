@@ -62,10 +62,13 @@ async def test_documented_result_keys(bridge):
     assert set(sites["sites"][0]) == {"x", "y", "score", "dist", "dir", "turns", "terrain", "river", "coastal",
                                       "yield"}
     order = await bridge.call("unit_order", unit="u3", order="settle", x=16, y=12)
-    assert set(order) == {"message", "unit", "city", "path"} and set(order["path"]) == {"length", "turns"}
+    assert set(order) == {"message", "unit", "city", "path", "battle"} and set(order["path"]) == {"length", "turns"}
+    assert order["battle"] is None
     order = await bridge.call("unit_order", unit="u1", order="found_city")
     city = await bridge.call("city", city="c1")
-    assert set(city) == set(order["city"]) | {"options", "tiles_worked"}
+    assert set(city) == set(order["city"]) | {"options", "tiles_worked", "worked", "workable"}
+    assert city["worked"][0][:2] == [city["x"], city["y"]] and len(city["worked"]) == city["size"] + 1
+    assert all(len(t) == 5 for t in city["worked"]) and all(len(t) == 2 for t in city["workable"])
     assert set(city["options"][0]) == {"name", "kind", "cost", "turns"}
     assert set(await bridge.call("set_production", city="c1", item="Warrior")) == {"message", "city"}
     techs = await bridge.call("techs")

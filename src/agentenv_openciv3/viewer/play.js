@@ -43,6 +43,19 @@ function useArt(on) {
   renderBar(); renderStatus(); renderCommands(); draw();
 }
 const artOn = () => S.artState === "on" && !!S.art;
+// Battles the seat saw (known_map battles, or its own attack's result) play once on the art map, in order, the camera
+// following them; the ones already shown are remembered for the game, so a reload doesn't replay them.
+function playBattles(list) {
+  if (!artOn() || !list || !list.length || !S.painter.queueBattles) return;
+  const key = `openciv3-battles-${S.gameId}`, seen = new Set(JSON.parse(sessionStorage.getItem(key) || "[]"));
+  const fresh = list.filter(b => !seen.has(b.id)).sort((a, b) => a.id - b.id);
+  if (!fresh.length) return;
+  for (const b of fresh) seen.add(b.id);
+  sessionStorage.setItem(key, JSON.stringify([...seen].slice(-200)));
+  S.painter.onBattle = b => centerOn(b.defender.x, b.defender.y, true);
+  S.painter.queueBattles(fresh);
+  draw();
+}
 
 // The unit orders, as the game's command bar shows them: [order, label, key shown, key code]
 const ORDERS = [
@@ -83,6 +96,7 @@ async function act(tool, args = {}, {quiet = false} = {}) {
   S.busy = true; renderCommands();
   try {
     const res = await api("play/api/act", {tool, args});
+    if (res.result && res.result.battle) playBattles([res.result.battle]);
     if (!quiet && res.message) toast(res.message);
     await loadView();
     return res;
@@ -144,6 +158,7 @@ async function loadView() {
   else if (newGame && v.state.turn > 0 && (v.state.last_events || []).length) turnReport();
   if (v.game.game_over) gameOver();
   if (v.game.art) loadArt();
+  playBattles(v.map.battles);
   return v;
 }
 // The civs' colours: with the game's art, the client's own (known_map players[].color), so the map looks as it does

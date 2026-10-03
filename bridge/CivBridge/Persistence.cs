@@ -72,6 +72,7 @@ sealed partial class Session {
 				["kind"] = victory.Kind, ["civ"] = Owner(victory.Seat.Player), ["turn"] = victory.Turn,
 			},
 			["rng"] = RngState.Get(GameData.rng),
+			["battles"] = BattlesState(),
 		};
 	}
 
@@ -159,6 +160,7 @@ sealed partial class Session {
 			SeeRelations();
 		}
 		seat = seats[0];
+		RestoreBattles(state["battles"] as JsonObject);
 		if (state["victory"] is JsonObject v)
 			victory = new Victory((string)v["kind"], seats.First(s => Owner(s.Player) == (string)v["civ"]), (int)v["turn"]);
 		if (state["rng"] is JsonObject rng && !RngState.Set(GameData.rng, rng))

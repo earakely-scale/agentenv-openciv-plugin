@@ -63,7 +63,7 @@ The human player's full situation. Result:
 ```json
 {
   "turn": 12, "turn_limit": 60, "game_over": false, "defeated": false,
-  "civ": "Rome", "government": "Despotism", "anarchy_until": null, "tile_penalty": true,
+  "civ": "Rome", "era": 0, "government": "Despotism", "anarchy_until": null, "tile_penalty": true,
   "governments": [{"name": "Monarchy", "corruption": "problematic", "hurry": "gold", "tile_penalty": false,
                    "trade_bonus": false, "unit_cost": 1, "free_units_per_city": 3}],
   "revolution_target": null, "gold": 34, "gold_per_turn": 3, "rates": {"tax": 4, "science": 6, "luxury": 0},
@@ -95,6 +95,8 @@ The human player's full situation. Result:
 - `target` is `{"x", "y", "dist", "dir"}` for `goto`/`settle`, else null.
 - `orders` lists the orders `unit_order` would accept for this unit right now. A unit with moves next to an
   enemy also has `attack_targets` (see `unit_order`).
+- `era` is the civ's era (`Player.EraIndex()`): 0 Ancient Times, 1 Middle Ages, 2 Industrial Age, 3 Modern Era.
+  The client picks its advisors' heads and the science advisor's background by it.
 - `governments` lists the governments a revolution can change to now, as in `revolution`'s result;
   `tile_penalty` is true when the current government takes 1 from any tile yield above 2 (Despotism);
   `revolution_target` is the one a revolution under way ends in. `rivals[].peace_price` is the gold that civ asks for peace while at war (null at peace, or
@@ -139,7 +141,14 @@ it is one cheap pass over the map: no yields or city-site checks). Result:
  "units": [{"x": 12, "y": 10, "owner": 1, "type": "Warrior", "count": 1, "id": "u2",
             "hp": 3, "hp_max": 3, "fortified": true, "combat": true},
            {"x": 14, "y": 10, "owner": 0, "type": "Horseman", "count": 2,
-            "hp": 2, "hp_max": 3, "fortified": false, "combat": true}]}
+            "hp": 2, "hp_max": 3, "fortified": false, "combat": true}],
+ "battles": [{"id": 7, "turn": 12, "kind": "attack",
+              "attacker": {"owner": 0, "type": "Horseman", "x": 14, "y": 10, "id": null,
+                           "hp_before": 2, "hp_after": 0, "hp_max": 2},
+              "defender": {"owner": 1, "type": "Warrior", "x": 12, "y": 10, "id": "u2",
+                           "hp_before": 3, "hp_after": 2, "hp_max": 3},
+              "rounds": ["a", "d", "d"], "winner": "defender",
+              "city": {"x": 12, "y": 10, "name": "Rome"}, "razed": false}]}
 ```
 
 - `tiles` has one row per tile the seat knows, and none for the rest: `[x, y, terrain, overlay, river, owner,
@@ -175,6 +184,32 @@ it is one cheap pass over the map: no yields or city-site checks). Result:
   0; the client draws no bar for a unit that cannot fight). A group's values are those of the unit the client
   would draw of it, its best defender (`selectUnitToDisplay`): the healthiest not aboard a transport, fortified
   first.
+- `battles` are the battles of this turn and the last that the seat saw, oldest first, so the play page can play
+  them the way the client does (each round both units play ATTACK1 facing each other, then the loser DEATH). A
+  battle shows if either unit is the seat's, or if the seat had the attacker's or the defender's tile in sight
+  when it began; that includes battles fought in other players' turns (an AI's attack on the seat's units, AI
+  against AI in sight) and the seat's own. A battle keeps its record and `id` (a count of the game's battles,
+  from 1, never reused) while it shows; it goes once its turn is two turns old. Each:
+  - `turn`: the game turn it was fought in (an AI's attacks after the turn advanced carry the new turn);
+  - `kind`: `attack` (`MapUnit.Fight`: a unit moving into an enemy's tile) or `bombard` (`MapUnit.Bombard` on a
+    unit; a bombardment of a city, walls or an improvement fights no unit and is not listed);
+  - `attacker`, `defender`: `owner` (player index), `type`, `x`, `y` (where it stood when the rounds began), `id`
+    (the seat's id of the unit when it is the seat's, else null; also null for a unit of the seat's killed before
+    the seat ever had it in a `state`), `hp_before` and `hp_after` (hit points when the rounds began and ended)
+    and `hp_max`. A defensive bombard before the rounds is already in `hp_before`, and a promotion after them
+    (one more hit point) is not in `hp_after`;
+  - `rounds`: who won each round, in the order the engine drew them: `"a"` the attacker (the defender loses a
+    hit point), `"d"` the defender (the attacker loses one). For `bombard` each round is a shot: `"a"` a hit,
+    `"d"` a miss (the bombarder never loses hit points);
+  - `winner`: `attacker` (the defender died), `defender` (the attacker died; for `bombard`, the target lived) or
+    `retreat` (the last round's loser withdrew instead of losing its last hit point: the defender, to the tile
+    behind it, when that round is `"a"`; the attacker when it is `"d"`). So for an attack each side's
+    `hp_before - hp_after` is the number of rounds the other side won, less the retreat round;
+  - `city`: `{"x", "y", "name"}` of the city on the defender's tile, or null; `razed`: the winning attacker
+    moved in and the engine destroyed the city (barbarians take gold instead).
+
+  The engine fights with animations off, so it sends no animation messages; patch 0010 has `MapUnit.Fight` and
+  `MapUnit.BombardUnits` tell the bridge each round as they draw it. Recording a battle changes nothing in it.
 
 ### `city_sites`
 Args: `unit` (a Settler id; default: the first settler, else the capital), `top` (default 5).
@@ -207,7 +242,9 @@ with a/(a+d) and the loser loses a hit point; retreats and defensive bombard are
 chance, who died, the attacker's remaining hit points, and any city that fell.
 
 Result: `{"message": "<one line>", "unit": {<unit object as in state, or null if gone>},
-"city": {<city object as in state>}|null, "path": {"length", "turns"}|null}`.
+"city": {<city object as in state>}|null, "path": {"length", "turns"}|null, "battle": {...}|null}`. `battle` is
+the battle an `attack` or `bombard` fought, as `known_map` lists it (null for any other order, an undefended
+city entered, or a bombardment of no unit).
 
 Error codes: `unknown_unit`, `invalid_order` (alternatives = the unit's valid orders),
 `cannot_found` (alternatives = top city sites; suggest = a `settle` call), `bad_target` (off map,
@@ -220,7 +257,16 @@ auto_work, worker jobs). When one cannot make progress, `end_turn` reports an ev
 
 ### `city`
 Args: `city` (id). Result: the city object from `state` plus `"options": [{"name", "kind":
-"unit"|"building"|"wealth", "cost", "turns"}]` (what it can produce now) and `"tiles_worked"`.
+"unit"|"building"|"wealth", "cost", "turns"}]` (what it can produce now), `"tiles_worked"`, and for the city
+screen's map (the client's `C7/Map/TileAssignmentLayer.cs`):
+
+- `"worked": [[x, y, food, shields, commerce], ...]`: the city centre first, then each tile a citizen works, with
+  the yields the client draws on it, the engine's `Tile.FoodYield/ProductionYield/CommerceYield(city)`. They
+  sum to the city's totals before corruption: food minus two per citizen is `food_per_turn`, and shields are
+  `shields_per_turn` plus what corruption (or disorder, or anarchy) takes.
+- `"workable": [[x, y], ...]`: the tiles in the city's radius it could work, `City.GetWorkableTiles` (inside the
+  civ's borders, no city on them), around which the client draws its border; this includes tiles another of the
+  civ's cities works, and not the centre.
 
 ### `set_production`
 Args: `city`, `item`. Result: `{"message", "city": {...}}`. Errors: `unknown_city`, `unknown_item`
@@ -318,8 +364,8 @@ events, decisions and plan state are its own. An unknown seat fails with `unknow
   each gets a `victory` event, `game_over` turns true, and `state`, `score` and the world snapshot carry
   `"victory": {"kind": "conquest"|"domination", "civ", "label", "turn"}` (null until then). At the turn limit no
   one has won this way, and the verifier ranks the seats by score.
-- `autoplay` fails with `multi_seat`. The autosave (format 2) keeps every seat and the victory; `load` restores
-  them.
+- `autoplay` fails with `multi_seat`. The autosave (format 2) keeps every seat, the victory and the battles
+  `known_map` lists; `load` restores them.
 
 ## Engine patches
 
@@ -354,6 +400,10 @@ submodule itself stays untouched):
    other (the loser paying the winner's price) and offer a human peace every 5 turns when they want
    nothing; a war declared within 50 turns of a treaty counts as breaking it, which makes the victim refuse
    peace for longer. The new war records are saved with the game.
+10. `0010-combat-is-observable.patch`: `MapUnit.combatObserver` (an `ICombatObserver`) is told when a
+   battle's rounds begin (in `MapUnit.Fight`, after any defensive bombard, and in `MapUnit.BombardUnits`), who
+   won each round or shot as the engine draws it, and when the rounds end. The bridge records `known_map`'s
+   `battles` with it; the observer draws nothing from `GameData.rng` and changes nothing, so games replay as before.
 
 Measured over full 540-turn Standard games with 7 AIs at Regent (seeds 1-3), patches 0005-0009 take:
 - mean AI techs at T540 from 32 to 43-45, and civs with an Industrial-era tech from 0 to 3-7;

@@ -424,7 +424,9 @@ class ArtPainter {
     this._track(world, mine, now);
     ctx.save();
     ctx.imageSmoothingEnabled = z < 0.999;
+    const fight = this._battleNow(now), busy = fight ? new Set([fight.a, fight.d].map(s => world.key(s.x, s.y))) : null;
     const tiles = this.plain._onScreen(world, cam, w, h).filter(([t]) => t.visible && world.unitsAt(t.x, t.y).length)
+      .filter(([t]) => !busy || !busy.has(world.key(t.x, t.y)))
       .sort((a, b) => a[0].y - b[0].y || a[2] - b[2]);
     for (const [t, sx, sy] of tiles) {
       const us = world.unitsAt(t.x, t.y), own = us.filter(u => u.owner === world.me);
@@ -476,7 +478,75 @@ class ArtPainter {
         ctx.drawImage(cell, cx - ax * z, cy - ay * z, cell.width * z, cell.height * z);
       } else this.plain.unitMarker(ctx, world, top, count, cx, cy - 10 * z, cam.hw, false);
     }
+    if (fight) this._drawBattle(ctx, world, cam, w, h, fight, z, hz);
     ctx.restore();
+  }
+
+  // ---- battles: as the client plays them (MapUnit_Actions.cs): both sides play their attack each round, facing each
+  // other, the round's loser losing a hit point; then the loser plays its death. One at a time, in order. ----
+  queueBattles(list) {
+    if (!this.battles) { this.battles = []; this.played = new Set(); }
+    for (const b of list || []) if (!this.played.has(b.id)) { this.played.add(b.id); this.battles.push(b); }
+  }
+  get battling() { return !!(this.battles && this.battles.length); }
+  _battleNow(now) {
+    if (!this.battles || !this.battles.length) return null;
+    let f = this.fight;
+    if (!f || f.b !== this.battles[0]) {
+      const b = this.battles[0];
+      const ua = this.art.unit(b.attacker.type, () => draw()), ud = this.art.unit(b.defender.type, () => draw());
+      if ((!ua && this.art.m.units[b.attacker.type]) || (!ud && this.art.m.units[b.defender.type])) return null;   // loading
+      const roundMs = Math.max(...[ua, ud].map(u => u ? u.spec.actions.attack1.frames * u.spec.actions.attack1.ms : 600), 400);
+      const rounds = (b.rounds || []).slice(-8);   // a long fight shows its last eight rounds
+      const loser = b.winner === "attacker" ? "d" : b.winner === "defender" ? "a" : null;
+      const deathMs = loser ? (() => { const u = loser === "a" ? ua : ud; return u ? u.spec.actions.death.frames * u.spec.actions.death.ms : 700; })() : 0;
+      f = this.fight = {b, t0: now, a: b.attacker, d: b.defender, ua, ud, rounds, roundMs, loser, deathMs,
+        total: rounds.length * roundMs + deathMs + 350};
+      this.onBattle && this.onBattle(b);
+    }
+    if (now - f.t0 > f.total) { this.battles.shift(); this.fight = null; return this._battleNow(now); }
+    return f;
+  }
+  _drawBattle(ctx, world, cam, w, h, f, z, hz) {
+    const now = performance.now(), t = now - f.t0, W = world.wrap ? world.W : 0;
+    const round = Math.min(f.rounds.length, Math.floor(t / f.roundMs)), dying = t >= f.rounds.length * f.roundMs;
+    // hit points so far: each round's loser loses one, from hp_before toward hp_after
+    const hp = side => {
+      const u = side === "a" ? f.a : f.d, lost = f.rounds.slice(0, round).filter(r => r !== side).length;
+      return Math.max(u.hp_after ?? 0, (u.hp_before ?? u.hp_max ?? 3) - lost);
+    };
+    let dx = f.d.x - f.a.x;
+    if (W) dx = ((dx % W) + W + W / 2) % W - W / 2;
+    const dy = f.d.y - f.a.y;
+    const toward = (ddx, ddy) => !ddy ? (ddx > 0 ? "E" : "W") : !ddx ? (ddy > 0 ? "S" : "N") : (ddy < 0 ? "N" : "S") + (ddx > 0 ? "E" : "W");
+    for (const side of ["a", "d"]) {
+      const u = side === "a" ? f.a : f.d, art = side === "a" ? f.ua : f.ud;
+      const [sx, sy] = cam.screen(u.x, u.y, w, h, W);
+      const facing = side === "a" ? toward(dx, dy) : toward(-dx, -dy);
+      let action = "attack1", frame = 0, alpha = 1;
+      if (dying) {
+        if (f.loser === side) {
+          const p = (t - f.rounds.length * f.roundMs) / f.deathMs;
+          action = "death"; frame = Math.floor(Math.min(0.999, p) * (art?.spec.actions.death.frames || 1));
+          if (p > 1) alpha = Math.max(0, 1 - (p - 1) * 3);
+          if (!art || !art.spec.actions.death || art.spec.actions.death === art.spec.actions.default) alpha = Math.max(0, 1 - p);
+        } else action = "default";
+      } else if (art) frame = Math.floor(((t % f.roundMs) / f.roundMs) * art.spec.actions.attack1.frames);
+      // the HP bar, as on the map
+      const max = u.hp_max || 3, cur = hp(side), s = hz * z, seg = (max <= 6 ? 4 : max <= 12 ? 2 : 1) * s;
+      const total = seg * max + (max - 1) * s, bx = sx - 26 * z, by = sy - 8 * z - total;
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = "#000"; ctx.fillRect(bx, by, 2 * s, total);
+      const fr = cur / max;
+      ctx.fillStyle = fr >= 0.67 ? "#0f0" : fr >= 0.34 && max > 2 ? "#ff0" : "#f00";
+      for (let i = 0; i < cur; i++) ctx.fillRect(bx, by + total - seg - (seg + s) * i, 2 * s, seg);
+      if (art) {
+        const cell = this.art.unitCell(art, action, facing, frame, rgb(world.color(u.owner)));
+        const [ax, ay] = art.spec.anchor;
+        ctx.drawImage(cell, sx - ax * z, sy - ay * z, cell.width * z, cell.height * z);
+      } else this.plain.unitMarker(ctx, world, {owner: u.owner, type: u.type}, 1, sx, sy - 10 * z, cam.hw, false);
+      ctx.globalAlpha = 1;
+    }
   }
   // Notice the seat's units that moved since the last view: they face the way they went and slide there.
   _track(world, mine, now) {

@@ -64,7 +64,13 @@ Args: none (plays the request's seat, like every command). Everything the seat k
              "id": "c1", "producing": "Settler", "turns_to_complete": 6, "turns_to_grow": 4,
              "starving": false}],                              // the last five: own cities only
  "units": [{"x", "y", "owner", "type", "count", "id": "u3",   // on visible tiles; id on the seat's own units only
-            "hp": 3, "hp_max": 3, "fortified": false, "combat": true}]}
+            "hp": 3, "hp_max": 3, "fortified": false, "combat": true}],
+ "battles": [{"id": 7, "turn": 12, "kind": "attack" | "bombard",   // this turn's and the last's, that the seat saw
+              "attacker": {"owner", "type", "x", "y", "id": "u3" | null, "hp_before", "hp_after", "hp_max"},
+              "defender": {...},                                    // the same
+              "rounds": ["a", "d", "a"],                            // who won each round, in order
+              "winner": "attacker" | "defender" | "retreat",
+              "city": {"x", "y", "name"} | null, "razed": false}]}
 ```
 
 Terrain and overlay names are the engine's lower-case keys, as in the world snapshot; a resource shows only once the
@@ -83,6 +89,25 @@ reader of the old nine columns keeps working. What the OpenCiv3 client's art nee
   `disorder` adds the fire; `starving` (own cities) turns the label's population red.
 - A unit's `hp`/`hp_max` fill the hit point bar, drawn only when `combat`; `fortified` frames it. A foreign group
   shows the unit the client would draw of it, its best defender.
+- `battles` are what the client animates in combat: per round both units play ATTACK1 facing each other (the
+  defender facing back), the round's loser losing a hit point, and the loser of the battle plays DEATH. A battle
+  shows while its turn is this one or the last, if the seat fought it or had either tile in sight when it began,
+  whoever's turn it was (an AI attacking the seat, AI against AI in sight, the seat's own attacks); `id` grows
+  with each battle of the game, so a page plays each once. `rounds` are as the engine drew them: `"a"` the
+  attacker won the round (the defender loses a hit point), `"d"` the defender did; `hp_before - hp_after` is the
+  rounds the other side won, but for a `retreat`, whose last round's loser withdrew (the defender when it is
+  `"a"`, the attacker when `"d"`). `id` is the seat's own unit's; `x`, `y` are where the units stood. `city` is
+  the city on the defender's tile, and `razed` says the winner destroyed it. A `bombard` is the bombarder's
+  shots at a unit: `"a"` a hit, `"d"` a miss. The seat's own `attack` or `bombard` order answers with the same
+  record as the act's `result.battle`.
+
+The city screen and the advisors read two more commands' fields:
+
+- `city` (`GET /play/api/city`) has `worked`, `[[x, y, food, shields, commerce], ...]`, the centre first and then
+  every worked tile with the yields the client's city screen draws on it (`TileAssignmentLayer`), and `workable`,
+  `[[x, y], ...]`, the tiles in the city's radius it could work, around which the client draws the border.
+- `state` has `era`, the seat's era 0-3, by which the client picks the advisors' heads and the science advisor's
+  background.
 
 ## 4. The play API (the env, next to `/mcp`)
 

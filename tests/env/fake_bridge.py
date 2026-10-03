@@ -180,6 +180,7 @@ class Game:
         self.met = False
         self.government, self.anarchy_until, self.revolution_target = "Despotism", None, None
         self.wars, self.talks_from, self.barbarian_killed = set(), {}, False
+        self.battles = []  # known_map's, every one the seat's own attack
         self.threats_seen = set()
         self.risk_seen = set()
 
@@ -336,7 +337,7 @@ class Game:
         r = self.research
         return {
             "turn": self.turn, "turn_limit": self.turn_limit, "game_over": self.game_over(), "defeated": False,
-            "civ": self.civ, "government": self.government, "anarchy_until": self.anarchy_until,
+            "civ": self.civ, "era": 0, "government": self.government, "anarchy_until": self.anarchy_until,
             "tile_penalty": self.government == "Despotism",
             "governments": [g for g in self.governments_view()["available"]
                             if g["name"] != self.government and not self.anarchy_until],
@@ -502,9 +503,19 @@ class Game:
             if target != self.barbarian():
                 raise Refused("bad_target", f"There is nothing to attack at {target}.", self.attack_targets(u))
             self.barbarian_killed, u["moves"] = True, 0.0
+            civs = [self.civ, *self.opponents, "Barbarians"]
+            battle = {"id": len(self.battles) + 1, "turn": self.turn, "kind": "attack",
+                      "attacker": {"owner": civs.index(a.get("seat", self.civ)), "type": "Warrior", "x": u["pos"][0],
+                                   "y": u["pos"][1], "id": u["id"], "hp_before": u["hp"], "hp_after": u["hp"] - 1,
+                                   "hp_max": UNIT_STATS["Warrior"][1]},
+                      "defender": {"owner": len(civs) - 1, "type": "Warrior", "x": target[0], "y": target[1],
+                                   "id": None, "hp_before": 3, "hp_after": 0, "hp_max": 3},
+                      "rounds": ["a", "d", "a", "a"], "winner": "attacker", "city": None, "razed": False}
+            u["hp"] -= 1
+            self.battles.append(battle)
             return {"message": f"{u['id']} Warrior attacked the Barbarians Warrior at ({target[0]},{target[1]}) "
                                "(win chance about 50%) and won: the Barbarians Warrior was destroyed.",
-                    "unit": self.unit_view(u), "city": None, "path": None}
+                    "unit": self.unit_view(u), "city": None, "path": None, "battle": battle}
         if order == "found_city" or (order == "settle" and target == u["pos"]):
             if not self.can_found(u["pos"])["ok"]:
                 self.raise_cannot_found(u, u["pos"])
@@ -527,7 +538,7 @@ class Game:
                 u["moves"] = 0.0
             msg = f"{u['id']} {u['type']}: {order}."
         return {"message": msg, "unit": self.unit_view(u) if u["id"] in self.units else None, "city": city,
-                "path": path}
+                "path": path, "battle": None}
 
     def raise_cannot_found(self, u, p):
         sites = self.sites(u["pos"], 3)
@@ -845,7 +856,8 @@ class Game:
         return {"turn": self.turn, "width": WIDTH, "height": HEIGHT, "wrap_x": True,
                 "players": [{"index": i, "civ": c, "barbarian": c == "Barbarians", "me": i == mine,
                              "color": CLIENT_COLORS[colors[i]]} for i, c in enumerate(civs)],
-                "tiles": tiles, "cities": cities, "units": units}
+                "tiles": tiles, "cities": cities, "units": units,
+                "battles": [b for b in self.battles if b["turn"] >= self.turn - 1]}
 
     def handle(self, cmd, a, on_turn) -> dict:
         if a.get("seat", self.civ) not in self.seats:
@@ -874,8 +886,12 @@ class Game:
             return self.unit_order(a)
         if cmd == "city":
             c = self.city(a["city"])
+            tiles = area(c["pos"], 1)[: c["size"] + 1]
+            worked = [p for p in tiles if p != c["pos"]][: c["size"]]
             return {**self.city_view(c), "options": self.options(c),
-                    "tiles_worked": [{"x": p[0], "y": p[1]} for p in area(c["pos"], 1)[: c["size"] + 1]]}
+                    "tiles_worked": [{"x": p[0], "y": p[1]} for p in tiles],
+                    "worked": [[p[0], p[1], *tile_yield(p).values()] for p in [c["pos"], *worked]],
+                    "workable": [[p[0], p[1]] for p in area(c["pos"], 2) if p != c["pos"] and on_map(p)]}
         if cmd == "set_production":
             c = self.city(a["city"])
             names = [o["name"] for o in self.options(c)]

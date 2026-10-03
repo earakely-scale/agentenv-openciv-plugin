@@ -83,6 +83,10 @@ async def test_attack_targets_are_listed_and_taken(env, tools):
     assert "attack: (18,12) SE Barbarians Warrior 3/3 hp 50% to win" in await tools("list_units", filter="all")
     text = await tools("unit_order", unit="u4", order="attack", x=18, y=12)
     assert "and won: the Barbarians Warrior was destroyed." in text
+    # The battle record is for the play page's animation; the agent's text stays the message.
+    [battle] = (await env.bridge.call("known_map"))["battles"]
+    assert battle["attacker"]["id"] == "u4" and battle["winner"] == "attacker"
+    assert "rounds" not in text and "hp_before" not in text
 
 
 async def test_turn_brief(tools):

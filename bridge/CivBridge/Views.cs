@@ -20,6 +20,7 @@ sealed partial class Session {
 			["defeated"] = h.defeated,
 			["victory"] = VictoryJson(),
 			["civ"] = h.civilization.name,
+			["era"] = Math.Clamp(h.EraIndex(), 0, EraNames.Length - 1),
 			["government"] = h.government.name,
 			["anarchy_until"] = h.government.transitionType ? (JsonNode)h.inAnarchyUntilTurn : null,
 			["tile_penalty"] = h.government.hasTilePenalty,
@@ -265,6 +266,7 @@ sealed partial class Session {
 			["tiles"] = tiles,
 			["cities"] = cities,
 			["units"] = units,
+			["battles"] = BattlesJson(),
 		};
 	}
 
@@ -380,6 +382,12 @@ sealed partial class Session {
 				["yield"] = Yield(t.FoodYield(c).yield, t.ProductionYield(c).yield, t.CommerceYield(c).yield),
 			};
 		});
+		// The city screen's map (C7/Map/TileAssignmentLayer.cs): the centre and the worked tiles with the yields it draws
+		// on them, the engine's Tile.FoodYield/ProductionYield/CommerceYield for the city, which City.CurrentFoodYield and
+		// the rest sum; and the tiles in the city's radius it could work (City.GetWorkableTiles, the border it draws).
+		o["worked"] = Json.Array(c.residents.Select(r => r.tileWorked).Where(Tile.IsTileValid).Prepend(c.location),
+			t => new JsonArray(t.XCoordinate, t.YCoordinate, t.FoodYield(c).yield, t.ProductionYield(c).yield, t.CommerceYield(c).yield));
+		o["workable"] = Json.Array(c.GetWorkableTiles(), t => new JsonArray(t.XCoordinate, t.YCoordinate));
 		return o;
 	}
 
