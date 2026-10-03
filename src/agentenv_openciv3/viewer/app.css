@@ -278,6 +278,9 @@ body.stream .diplo ul.msgs { max-height: 200px; }
 body.stream #agentcard:not([hidden]) ~ #chartsec { display: none; }   /* a spotlight's card replaces the chart */
 body.stream .msgs .mh { font-size: 14px; } body.stream .msgs .mt { font-size: 16px; }
 body.stream .acard .mind .note { font-size: 15px; } body.stream .acard .mind .plan { font-size: 13px; }
+/* three rows of agents on the stream: the note and plan tell the story, the minimap keeps its room */
+body.stream .agentsview.dense .acard .think:not(:empty) + .act { display: none; }
+body.stream .agentsview.dense .acard .mind .tx { -webkit-line-clamp: 1; }
 
 /* ---- broadcast overlays (?stream): moment cards, the speech bubble, the chyron, captions, the notes ticker ---- */
 :root { --display: "Noto Sans Display", "Helvetica Neue", "DejaVu Sans", system-ui, -apple-system, sans-serif; }
@@ -314,12 +317,13 @@ body.stream .acard .mind .note { font-size: 15px; } body.stream .acard .mind .pl
 .moment.card-title { background: rgba(7,9,13,.95); padding: 0 140px; }
 .titlecard h1 { font: 900 132px/.95 var(--display); font-stretch: condensed; letter-spacing: -.015em; margin: 0; overflow-wrap: anywhere; }
 .titlecard p { font-size: 32px; color: var(--text2); margin: 22px 0 56px; max-width: 1300px; }
-.lineup { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; }
+.lineup { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 20px; }   /* one row */
 .lineup .seat { min-width: 0; border-top: 12px solid var(--a); padding: 20px 22px 24px;
   background: linear-gradient(180deg, color-mix(in srgb, var(--a) 24%, transparent), transparent 90%); }
-.lineup b { display: block; font: 800 46px/1.05 var(--display); font-stretch: condensed; white-space: nowrap; overflow: hidden;
-  text-overflow: ellipsis; }
-.lineup span { display: block; color: var(--text2); font-size: 22px; margin-top: 6px; }
+.lineup b { display: block; font: 800 calc(46px - max(0, var(--n) - 6) * 4px)/1.05 var(--display); font-stretch: condensed;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lineup span { display: block; color: var(--text2); font-size: calc(22px - max(0, var(--n) - 6) * 1px); margin-top: 6px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .moment.in { animation: fadein .3s ease-out both; }
 .moment.in .slab { animation: wipe .5s cubic-bezier(.2,.8,.2,1) both; }
 .moment.in .words, .moment.in .party { animation: slidein .55s .18s cubic-bezier(.2,.8,.2,1) both; }
