@@ -334,6 +334,10 @@ def test_failures_are_survived_and_the_key_is_never_printed(fake, capsys):
     clock.now += caster.RETRY_SECONDS
     c.tick()
     assert len(c.lines) == 3
+    fake.content = ""   # all of it spent thinking
+    clock.now += caster.RETRY_SECONDS
+    c.tick()
+    assert len(c.lines) == 3
     fake.content = None
     clock.now += caster.RETRY_SECONDS
     c.tick()
@@ -347,6 +351,7 @@ def test_failures_are_survived_and_the_key_is_never_printed(fake, capsys):
     assert printed.count("no match data") == 2   # once each time it goes away
     assert "HTTP 500 bad key <cast key>" in printed and "HTTP 429 slow down" in printed
     assert "no JSON in the reply" in printed and "no lines in the reply" in printed
+    assert "the reply has no text (finish_reason None)" in printed
     assert KEY not in printed
 
 
@@ -488,6 +493,8 @@ def test_lines_are_cleaned_up_for_speech():
     mixed_up = ('{"lines": [{"speaker": "Ada", "text": "Rome takes the lead, Ada."},'
                 ' {"speaker": "pbp", "text": "Max!"}]}')
     assert [line["text"] for line in caster.parse_lines(mixed_up, match)] == ["Rome takes the lead, Max.", "Ada!"]
+    twice = '{"lines": [{"speaker": "pbp", "text": "Go!"}]}\n{"lines": [{"speaker": "pbp", "text": "Again"}]}'
+    assert [line["text"] for line in caster.parse_lines(twice, match)] == ["Go!"]   # the first object only
     blocked = codecs.decode("Fuvg, gung'f n OHYYFUVG zbir", "rot13")
     assert caster.spoken(f"*grins* {blocked}; what the f**k, sh*t, s*** **Rome** 5*3") == (
         "bleep, that's a bleep move; what the bleep, bleep, bleep Rome 5*3")

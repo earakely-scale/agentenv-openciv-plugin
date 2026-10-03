@@ -52,6 +52,7 @@ NEWS_TURNS = 3          # nor is one from more turns ago, also when joining a ga
 MEMORY = 12             # lines the casters remember, so they don't repeat themselves
 AUDIO_KEPT = 200
 MAX_WORDS = 30
+MAX_TOKENS = 1500       # a beat's reply: a few lines, after whatever thinking the model does first
 WORDS_PER_SECOND = 2.5  # a line's length when its audio failed
 EVENTS = ("civ_destroyed", "city_captured", "city_destroyed", "war_declared", "peace_signed", "lead_change",
           "government_changed", "city_founded")   # the events worth a call, the biggest first
@@ -113,7 +114,8 @@ not "that's not X, that's Y", not "Ada here", and don't start lines with "And", 
 message is described in your own words, never quoted.
 
 Reply with JSON only: {"lines": [{"speaker": "Max" or "Ada", "text": "...", "focus": "<civ or null>"}]}, the number \
-of lines asked for, speakers alternating. "focus" is the civ a line is mostly about, else null."""
+of lines asked for, speakers alternating. "focus" is the civ a line is mostly about, else null. Inside a line's \
+text, quote with single quotes, never double quotes."""
 
 
 @dataclass
@@ -504,9 +506,12 @@ class Caster:
                   f"\n\nNOW\n{beat.task}\nWrite {beat.count} lines, {first} first, speakers alternating.")
         try:
             reply = json.loads(self.post("/v1/chat/completions", {
-                "model": self.model, "max_tokens": 400,
+                "model": self.model, "max_tokens": MAX_TOKENS,
                 "messages": [{"role": "system", "content": self.system}, {"role": "user", "content": prompt}]}, 45))
-            lines = parse_lines(reply["choices"][0]["message"]["content"], self.match, self.casters)
+            choice = reply["choices"][0]
+            if not choice["message"].get("content"):
+                raise ValueError(f"the reply has no text (finish_reason {choice.get('finish_reason')})")
+            lines = parse_lines(choice["message"]["content"], self.match, self.casters)
         except (OSError, ValueError, KeyError, IndexError, TypeError, http.client.HTTPException) as e:
             self.log(f"caster: the {beat.kind} beat failed, retrying in {RETRY_SECONDS} s: {failure(e)}")
             return None
@@ -669,14 +674,16 @@ def renamed(text: str, casters: dict[str, tuple[str, str, str]]) -> str:
 
 
 def parse_lines(content: str, match: Match, casters: dict[str, tuple[str, str, str]] = CASTERS) -> list[dict]:
-    """The lines in an LLM reply (JSON, maybe in a code fence), cleaned up for speech."""
-    found = re.search(r"\{.*\}", content, re.S)
-    if found is None:
+    """The lines in an LLM reply (its first JSON object, maybe in a code fence or followed by more), cleaned up for
+    speech."""
+    start = content.find("{")
+    if start < 0:
         raise ValueError(f"no JSON in the reply: {content[:120]!r}")
+    reply, _ = json.JSONDecoder().raw_decode(content, start)
     speakers = {name.lower(): speaker for speaker, (name, _, _) in casters.items()} | {s: s for s in casters}
     names = tuple(name for name, _, _ in casters.values())
     lines = []
-    for item in json.loads(found[0]).get("lines") or ():
+    for item in (reply.get("lines") if isinstance(reply, dict) else None) or ():
         speaker = speakers.get(str(item.get("speaker")).lower()) if isinstance(item, dict) else None
         if speaker and (text := spoken(item.get("text"), names)):
             own, other = (casters[s][0] for s in (speaker, PBP if speaker == COLOR else COLOR))
