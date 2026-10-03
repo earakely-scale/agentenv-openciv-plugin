@@ -116,11 +116,11 @@ harness reads this log; it is the authoritative record of what the agent did.
 - `data/reset`: start a new game from the current scenario.
 - `data/add`: a `DataPart` with `{"scenario": {...}}` updates the scenario and starts a new game.
 - `data/get`: one `DataPart` with the summary: `turn`, `turn_limit`, `game_over`, `defeated`, `seed`,
-  `civ`, `human` (a person plays it), `score`, `metrics` (cities, pop, techs, tiles, units, gold, explored_pct), `baselines`
-  (`null` and `engine_ai`, each with the score at the same turn and at the turn limit when known), and
-  `actions` (`ok`, `invalid`, `max_consecutive_errors`). With seats (or a human seat), these describe the first seat, and
-  `seats` lists every seat: `civ`, `label`, `human`, `defeated`, `score`, `metrics`, `decisions`, `actions`, `rank`, `share` and
-  `auto_ended_turns`; `standings` entries carry `seat`.
+  `civ`, `human` (a person plays it), `score`, `metrics` (cities, pop, techs, tiles, units, gold, explored_pct),
+  `baselines` (`null` and `engine_ai`, each with the score at the same turn and at the turn limit when known), and
+  `actions` (`ok`, `invalid`, `max_consecutive_errors`). With seats (or a human seat), these describe the first
+  seat, and `seats` lists every seat: `civ`, `label`, `human`, `defeated`, `score`, `metrics`, `decisions`,
+  `actions`, `rank`, `share` and `auto_ended_turns`; `standings` entries carry `seat`.
 - Extensions (REST, for harnesses and `apply_server_config`):
   - `urn:openciv3:new-game/v1`: scenario args, plus `seats` (more civs played by agents) and `labels`
     (`{civ: label}` for recordings and reports).
