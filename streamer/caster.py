@@ -674,16 +674,21 @@ def renamed(text: str, casters: dict[str, tuple[str, str, str]]) -> str:
 
 
 def parse_lines(content: str, match: Match, casters: dict[str, tuple[str, str, str]] = CASTERS) -> list[dict]:
-    """The lines in an LLM reply (its first JSON object, maybe in a code fence or followed by more), cleaned up for
-    speech."""
-    start = content.find("{")
-    if start < 0:
-        raise ValueError(f"no JSON in the reply: {content[:120]!r}")
-    reply, _ = json.JSONDecoder().raw_decode(content, start)
-    speakers = {name.lower(): speaker for speaker, (name, _, _) in casters.items()} | {s: s for s in casters}
+    """The lines in an LLM reply (its first JSON object, maybe in a code fence or followed by more; or, from a model
+    that forgot the JSON, its `Name: text` lines), cleaned up for speech."""
     names = tuple(name for name, _, _ in casters.values())
+    start = content.find("{")
+    if start >= 0:
+        reply, _ = json.JSONDecoder().raw_decode(content, start)
+        items = (reply.get("lines") if isinstance(reply, dict) else None) or ()
+    else:
+        said = "|".join(re.escape(name) for name in names)
+        items = [{"speaker": m[1], "text": m[2]} for m in re.finditer(rf"(?m)^\W*({said})\W*:\s*(.+)$", content)]
+        if not items:
+            raise ValueError(f"no JSON in the reply: {content[:120]!r}")
+    speakers = {name.lower(): speaker for speaker, (name, _, _) in casters.items()} | {s: s for s in casters}
     lines = []
-    for item in (reply.get("lines") if isinstance(reply, dict) else None) or ():
+    for item in items:
         speaker = speakers.get(str(item.get("speaker")).lower()) if isinstance(item, dict) else None
         if speaker and (text := spoken(item.get("text"), names)):
             own, other = (casters[s][0] for s in (speaker, PBP if speaker == COLOR else COLOR))

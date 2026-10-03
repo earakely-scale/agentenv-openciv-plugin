@@ -499,6 +499,9 @@ def test_lines_are_cleaned_up_for_speech():
         "I'm Max, and Max has the call: Rome first, Ada?", "Max, at your service. Ada thinks Rome is ahead, Max!"]
     twice = '{"lines": [{"speaker": "pbp", "text": "Go!"}]}\n{"lines": [{"speaker": "pbp", "text": "Again"}]}'
     assert [line["text"] for line in caster.parse_lines(twice, match)] == ["Go!"]   # the first object only
+    plain = "Max: Turn 4, and Rome says 'peace'!\n\n**Ada:** Rome has 2 units, Max.\nSomething else."
+    assert [(line["speaker"], line["text"]) for line in caster.parse_lines(plain, match)] == [
+        ("pbp", "Turn 4, and Rome says 'peace'!"), ("color", "Rome has 2 units, Max.")]
     blocked = codecs.decode("Fuvg, gung'f n OHYYFUVG zbir", "rot13")
     assert caster.spoken(f"*grins* {blocked}; what the f**k, sh*t, s*** **Rome** 5*3") == (
         "bleep, that's a bleep move; what the bleep, bleep, bleep Rome 5*3")
