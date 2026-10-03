@@ -178,6 +178,15 @@ def test_html_is_the_viewer_with_the_match_embedded(game, monkeypatch):
     assert seen["doc"] == expected and seen["videos"] is videos
 
 
+def test_the_viewer_marks_the_seats_people_play(game, monkeypatch):
+    seen = {}
+    monkeypatch.setattr("agentenv_openciv3.viewer.page", lambda doc, videos: seen.update(doc=doc) or "<html></html>")
+    recording.render(game, formats=["html"], humans=["rome"])
+    marked = {p["civ"]: p.get("human") for p in seen["doc"]["players"]}
+    assert marked["Rome"] is True and not any(v for civ, v in marked.items() if civ != "Rome")
+    assert "human" not in MatchData.from_snapshots(game).document()["players"][0]
+
+
 def test_the_live_frame_is_the_map_and_chart(game):
     png = Image.open(io.BytesIO(recording.map_png(iter(game), view="agent")))
     assert png.size == (PANEL_X, H - HEADER_H)

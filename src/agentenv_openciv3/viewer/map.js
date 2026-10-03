@@ -53,6 +53,32 @@ class World {
       if (!this.units.has(k)) this.units.set(k, []);
       this.units.get(k).push(u);
     }
+    this.rivers = this._rivers();
+  }
+  // River tiles only carry a flag, and joining every pair of river neighbours draws a lattice of little diamonds, so
+  // join them with a spanning forest (a branching line) and cut its corners at the segments' midpoints, as the
+  // viewer does. Each line is [tile key, x0, y0, x1, y1] in tile coordinates, drawn relative to that tile.
+  _rivers() {
+    const keys = [...this.tiles.keys()].filter(k => this.tiles.get(k).river), par = new Map(keys.map(k => [k, k]));
+    const root = k => { while (par.get(k) !== k) { par.set(k, par.get(par.get(k))); k = par.get(k); } return k; };
+    const mids = new Map(), add = (k, m) => { if (!mids.has(k)) mids.set(k, []); mids.get(k).push(m); };
+    for (const k of keys) {
+      const t = this.tiles.get(k);
+      for (const [dx, dy] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+        const j = this.key(t.x + dx, t.y + dy), n = this.tiles.get(j);
+        if (!n || !n.river) continue;
+        const a = root(k), b = root(j);
+        if (a === b) continue;
+        par.set(a, b);
+        add(k, [t.x + dx / 2, t.y + dy / 2]); add(j, [n.x - dx / 2, n.y - dy / 2]);
+      }
+    }
+    const lines = [];
+    for (const [k, ms] of mids) {
+      const t = this.tiles.get(k);
+      if (ms.length === 2) lines.push([k, ...ms[0], ...ms[1]]); else for (const m of ms) lines.push([k, t.x, t.y, ...m]);
+    }
+    return lines;
   }
   key(x, y) { return this.wx(x) * 4096 + y; }
   wx(x) { return this.wrap ? ((x % this.W) + this.W) % this.W : x; }
@@ -72,7 +98,7 @@ class World {
 
 // The camera: hw is half a tile's width in pixels; (cx, cy) the tile at the canvas centre.
 class Camera {
-  constructor() { this.hw = 26; this.cx = 0; this.cy = 0; }
+  constructor() { this.hw = 44; this.cx = 0; this.cy = 0; }   // tiles 88 px wide, near the game's 128
   screen(x, y, w, h, W) {   // the copy of x nearest the camera, round the wrap
     let dx = x - this.cx;
     if (W) dx = ((dx % W) + W + W / 2) % W - W / 2;
@@ -120,14 +146,14 @@ class PlayPainter {
       ctx.beginPath(); this.diamond(ctx, sx, sy, hw, 1.02); ctx.fillStyle = rgb(c); ctx.fill();
     }
     if (hw >= 14) for (const [t, sx, sy] of tiles) this._detail(ctx, t, sx, sy, hw);
-    // rivers: a thin line from the tile to each river neighbour (east and south halves, so each edge once)
-    ctx.strokeStyle = "rgba(70,120,170,.9)"; ctx.lineWidth = clamp(hw / 10, 1, 3); ctx.lineCap = "round"; ctx.beginPath();
-    for (const [t, sx, sy] of tiles) {
-      if (!t.river) continue;
-      for (const [dx, dy] of [[1, 1], [1, -1]]) {
-        const n = world.tile(t.x + dx, t.y + dy);
-        if (n && n.river) { ctx.moveTo(sx, sy); ctx.lineTo(sx + dx * hw, sy + dy * hw / 2); }
-      }
+    // rivers: the world's branching lines, each drawn from its tile's place on screen
+    const onScreen = new Map(tiles.map(([t, sx, sy]) => [world.key(t.x, t.y), [t, sx, sy]]));
+    ctx.strokeStyle = "rgba(64,98,132,.95)"; ctx.lineWidth = clamp(hw / 10, 1, 3); ctx.lineCap = ctx.lineJoin = "round";
+    ctx.beginPath();
+    for (const [k, ax, ay, bx, by] of world.rivers) {
+      const o = onScreen.get(k); if (!o) continue;
+      const [t, sx, sy] = o;
+      ctx.moveTo(sx + (ax - t.x) * hw, sy + (ay - t.y) * hw / 2); ctx.lineTo(sx + (bx - t.x) * hw, sy + (by - t.y) * hw / 2);
     }
     ctx.stroke();
     // borders between owners
@@ -274,7 +300,9 @@ class PlayPainter {
     }
     const fw = viewW / cam.hw * sx, fh = viewH / (cam.hw / 2) * sy;
     const fx = (((cam.cx * sx - fw / 2) % w) + w) % w, fy = cam.cy * sy - fh / 2;
-    ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5; ctx.strokeRect(fx, fy, fw, fh);
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5;
+    if (fw >= w) { ctx.strokeRect(0.75, fy, w - 1.5, fh); return; }   // the view is wider than the world
+    ctx.strokeRect(fx, fy, fw, fh);
     if (fx + fw > w) ctx.strokeRect(fx - w, fy, fw, fh);
   }
 }

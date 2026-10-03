@@ -10,6 +10,7 @@ import json
 import logging
 import subprocess
 import time
+from collections.abc import Iterable
 from pathlib import Path
 from typing import TypeVar
 
@@ -89,9 +90,9 @@ class LiveMatch:
     """The viewer's data of the game being played, added to as the bridge writes snapshots: each is read once,
     when it is whole, so a request never reads the whole game again."""
 
-    def __init__(self, record: Path, game: str, labels: dict[str, str] | None = None):
+    def __init__(self, record: Path, game: str, labels: dict[str, str] | None = None, humans: Iterable[str] = ()):
         self.record = record
-        self.data = matchdata.MatchData(game=game, labels=labels)
+        self.data = matchdata.MatchData(game=game, labels=labels, humans=humans)
         self.lock = asyncio.Lock()
 
     def update(self) -> None:
@@ -133,10 +134,11 @@ class Live:
         self.client_task: asyncio.Task | None = None
         self.match: LiveMatch | None = None
 
-    def match_of(self, record: Path, game: str, labels: dict[str, str] | None = None) -> LiveMatch:
+    def match_of(self, record: Path, game: str, labels: dict[str, str] | None = None,
+                 humans: Iterable[str] = ()) -> LiveMatch:
         """The viewer's data of `game`; a new game starts it over."""
         if self.match is None or self.match.data.game != game or self.match.record != record:
-            self.match = LiveMatch(record, game, labels)
+            self.match = LiveMatch(record, game, labels, humans)
         return self.match
 
     async def frame(self, record: Path, turn: int | None, view: str) -> bytes | None:

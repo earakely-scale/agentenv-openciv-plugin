@@ -152,7 +152,7 @@ while (turnsPlayed < MAX_TURNS) {
     await page.waitForSelector("#dialog li[data-item]", {timeout: 10_000});
     await page.screenshot({path: path.join(shots, `T${lastTurn}-city.png`)});
     const items = await page.$$eval("#dialog li[data-item]", ls => ls.map(l => l.dataset.item));
-    const want = items.find(i => i === "Warrior") || items.find(i => i !== c.producing) || items[0];
+    const want = ["Settler", "Worker", "Warrior"].find(i => items.includes(i) && i !== c.producing) || items.find(i => i !== c.producing);
     await page.click(`#dialog li[data-item="${want}"]`);
     const ok = await waitFor(async () => ((await view()).state.cities || []).find(x => x.id === c.id)?.producing === want, 10_000, "production").catch(() => false);
     check(ok, `T${lastTurn}: the city screen sets ${c.name} to build ${want} (from ${c.producing})`);
@@ -225,12 +225,21 @@ const seat = (live.live?.seats || []).find(s => s.civ === civ);
 check(seat && seat.human === true, `the viewer's live seats mark ${civ} as human`);
 const logPath = path.join(dir, "actions.jsonl");
 const lines = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8").trim().split("\n").filter(Boolean).map(l => JSON.parse(l)) : [];
-const mine = lines.filter(l => (l.seat || l.civ) === civ);
+// a one-seat game logs no seat: every line is that seat's
+const mine = lines.filter(l => (l.seat ?? civ) === civ);
 const tools = new Set(mine.map(l => l.tool));
 check(mine.length > 0, `the action log has ${mine.length} actions by ${civ}: ${[...tools].join(", ")}`);
 for (const t of ["unit_order", "set_production", "research", "set_rates", "end_turn"]) check(tools.has(t), `the action log has ${civ}'s ${t}`);
-const stalled = lines.filter(l => (l.seat || l.civ) === civ && /stall|ended for you|auto/i.test(JSON.stringify(l.result ?? l.text ?? "")) && l.tool === "end_turn" && l.auto);
-check(stalled.length === 0, `no turn was ended for ${civ} by the stall clock`);
+// bots.py writes data/get once the game is over: the env's count of turns it ended for a seat
+const summaryPath = path.join(dir, "summary.json");
+const summary = final.game.game_over
+  ? await waitFor(() => fs.existsSync(summaryPath) && JSON.parse(fs.readFileSync(summaryPath, "utf8")), 120_000, "summary.json").catch(() => null)
+  : null;
+const sumSeat = summary && ((summary.seats || []).find(x => x.civ === civ) || (summary.human ? summary : null));
+if (summary) {
+  check(sumSeat && sumSeat.human === true, `data/get marks ${civ} as human`);
+  check(sumSeat && !sumSeat.auto_ended_turns, `no turn was ended for ${civ} by the stall clock (${sumSeat?.auto_ended_turns ?? "?"})`);
+}
 check(errors.length === 0, `no page errors${errors.length ? ": " + errors.slice(0, 3).join(" | ") : ""}`);
 fs.writeFileSync(path.join(shots, "result.json"), JSON.stringify({civ, turnsPlayed, elapsed, checks, errors}, null, 2));
 await browser.close();

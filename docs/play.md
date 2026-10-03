@@ -21,6 +21,8 @@ the env, the task steps and the play UI.
   whoever has the link plays that civ. `agent-env openciv3 play --open` finds a running env's links and opens them.
 - **Waiting for the game:** a human plays no `prompt_agent` step, so a match with humans adds `openciv3_await_game`
   (below) and makes grading and the recording depend on it.
+- **Idle humans:** `human_turn_seconds: 0` lets a person take as long as they like, but an agent's `end_turn` then
+  waits on them, past the agents' own tool timeout if need be; keep a limit in matches with agents.
 - **Agents can't play a human's seat:** a tool call whose `X-OpenCiv3-Seat` names a human seat fails with
   `human_seat`.
 
@@ -40,9 +42,12 @@ the env, the task steps and the play UI.
 - `human_turn_seconds` (default `900`): replaces `SEAT_STALL_SECONDS` (300) for human seats; `0` never ends a
   human's turn for them.
 
-Its result adds `"play": {civ: "/play#token=<token>"}`, one per human seat; the token is 32 hex characters, new for
-every game. The env logs each one at INFO (`PLAY <civ> (<label>) /play#token=...`), which is how
-`agent-env openciv3 play` finds them. `data/get`'s `seats[]` gains `"human": true|false`.
+Its result adds `"play": {civ: "/play#token=<token>"}`, one per human seat (`{}` without humans); the token is 32
+hex characters, new for every game. The env logs `NEW GAME <id>` when any game starts, then each link at INFO
+(`PLAY <civ> (<label>) game <id> /play#token=...`), which is how `agent-env openciv3 play` finds the newest game's
+links. `data/get`'s `seats[]` gains `"human": true|false` (a one-seat game a person plays has a top-level `"human"`
+and lists its seat), and so do `/live`'s seats and the viewer's players. Leaving `humans` out of a new game means no
+humans.
 
 ## 3. The bridge: `known_map`
 
@@ -65,7 +70,9 @@ seat knows about it, as in `map`. Reading it never draws from the engine's RNG.
 ## 4. The play API (the env, next to `/mcp`)
 
 Every route but the page needs the seat's token, as the header `X-OpenCiv3-Token` or `?token=`; a wrong or missing
-token gets 401. Errors are JSON: `{"ok": false, "error": {"code", "message", "alternatives", "suggest"}}`.
+token gets 401. Errors are JSON: `{"ok": false, "error": {"code", "message", "alternatives", "suggest"}}`, with 400 for
+a malformed request (`bad_request`, `unknown_tool`, `bad_args`) and 200 for what the game refuses. The GET routes but
+`view` and `status` answer with the bridge's result as it is.
 
 | Route | What it does |
 |---|---|
@@ -76,7 +83,7 @@ token gets 401. Errors are JSON: `{"ok": false, "error": {"code", "message", "al
 | `GET /play/api/techs` | The bridge's `techs` |
 | `GET /play/api/diplomacy` | The bridge's `diplomacy` |
 | `GET /play/api/tile?x=&y=` | The bridge's `map` at radius 0: the tile's yield, resource, improvements and whether a city can be founded |
-| `GET /play/api/sites?unit=u3` | The bridge's `city_sites` for that settler |
+| `GET /play/api/sites?unit=u3&top=5` | The bridge's `city_sites` for that settler |
 | `POST /play/api/act` | `{"tool", "args"}`: one action, as the agents' tool of the same name (below) |
 
 `/play/api/view`:
@@ -91,7 +98,8 @@ token gets 401. Errors are JSON: `{"ok": false, "error": {"code", "message", "al
  "colors": {"1": "#3987e5", "2": "#d95926"},                // every player, as the viewer colours them
  "state": {...},                                            // the bridge's `state` for this seat
  "map": {...},                                              // the bridge's `known_map` for this seat
- "notices": [{"turn", "kind", "text"}]}                     // the env's notices to this seat this turn
+ "notices": [{"turn", "kind", "text"}]}                     // the env's notices to this seat, this turn and the last
+                                                            // (a turn the env ended for you is stamped with that turn)
 ```
 
 `POST /play/api/act` tools and args are the MCP tools': `unit_order` (`unit`, `order`, `x`, `y`), `set_production`
@@ -104,4 +112,20 @@ answers at once, `{"ok": true, "advanced": bool, "turn", "waiting_for": [civ]}`;
 turn moves on.
 
 Only explicit requests (an action, opening a city, techs, diplomacy, a tile) count as the human being there for the
-stall clock; the UI's polling of `view` and `status` does not.
+stall clock; the UI's polling of `view` and `status` does not. The explicit GETs count as calls under the agents'
+tool names (`city_info`, `research`, `diplomacy`, `view_map`, `find_city_sites`), so a person's call counts compare
+with an agent's.
+
+## 5. The UI
+
+`/play` is the game's own flow, drawn from the seat's `known_map`: the active unit blinks and the command bar lists
+its orders with the game's keys (B build city, G go to, X explore, A automate, R road, M mine, I irrigate, ⇧C clear
+forest, F fortify, ⇧W wake, Space skip, ⇧B bombard, ⇧D disband, W wait, C centre, Tab next unit); the arrow keys and
+the number pad move it a tile, attacking what stands there; right-click goes to a tile (or settles a suggested
+site, or attacks). Clicking a city opens the city screen (food, production, buy, what to build, its units); F1, F4
+and F6 open the domestic (rates, government), foreign (war, peace) and science advisors. Enter ends the turn (again
+to confirm while units still have moves); the start of a turn shows its report, and the science advisor when
+nothing is being researched. While the others play, a banner names who the turn waits for.
+
+`playtest/bots.py --humans Rome=you` starts a local match with a human seat against scripted bots, and
+`playtest/play_e2e.mjs` plays that seat in a headless browser through this UI, end to end.

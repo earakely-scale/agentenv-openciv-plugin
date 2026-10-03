@@ -35,6 +35,7 @@ the turns it hasn't seen; a recording embeds the whole document.
            "civilian": ["Settler", "Worker", ...],      // unit types that don't fight
            "victory": null},
   "players": [{"index": 1, "civ": "Rome", "label": "opus", "barbarian": false,
+               "human": true,           // only on a seat a person plays (docs/play.md)
                "seat": 0,               // the seat number (bit in `known`), or null for an AI civ
                "color": "#3987e5", "engine_color": "#c43434"}],
   "static": {"tiles": [[x, y, terrain, overlay_or_-1, river]]},   // sent once (since=-1)

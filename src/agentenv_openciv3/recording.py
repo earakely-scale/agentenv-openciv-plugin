@@ -1029,10 +1029,10 @@ class Mp4Pipe:
 
 def document(snapshots: Iterable[dict], *, seat_actions: matchdata.Actions | None = None,
              calls: matchdata.Calls | None = None, actions: dict | None = None,
-             labels: dict[str, str] | None = None) -> dict:
+             labels: dict[str, str] | None = None, humans: Iterable[str] = ()) -> dict:
     """The viewer's document for these snapshots, with the seats' actions and calls keyed by player index. Without
     `seat_actions`, the old merged `actions` timeline is split by its "name: " prefixes."""
-    m = MatchData.from_snapshots(snapshots, labels=labels)
+    m = MatchData.from_snapshots(snapshots, labels=labels, humans=humans)
     per_seat = by_player(seat_actions, m.players) if seat_actions else split_timeline(actions, m.players)
     return m.document(actions=per_seat, calls=by_player(calls, m.players))
 
@@ -1048,7 +1048,7 @@ def render(snapshots: list[dict], *, formats: Iterable[str] = ("mp4", "html"), v
            fps: int = 4, name: str = "openciv3", actions: dict | None = None,
            baselines: dict[str, dict] | None = None, seat_actions: matchdata.Actions | None = None,
            calls: matchdata.Calls | None = None, client_videos: dict[str, dict] | None = None,
-           labels: dict[str, str] | None = None) -> tuple[list[File], list[str]]:
+           labels: dict[str, str] | None = None, humans: Iterable[str] = ()) -> tuple[list[File], list[str]]:
     """Render the requested formats; returns the files and notes (e.g. that a gif replaced the mp4).
 
     `seat_actions` and `calls` are per turn and per seat (player index, or the civ's name); without
@@ -1057,7 +1057,7 @@ def render(snapshots: list[dict], *, formats: Iterable[str] = ("mp4", "html"), v
     if not snapshots:
         raise ValueError("no snapshots to render")
     formats = list(dict.fromkeys(formats))
-    doc = document(snapshots, seat_actions=seat_actions, calls=calls, actions=actions, labels=labels)
+    doc = document(snapshots, seat_actions=seat_actions, calls=calls, actions=actions, labels=labels, humans=humans)
     files, notes = [], []
     drawn = [f for f in formats if f in ("mp4", "gif", "png")]
     if drawn:

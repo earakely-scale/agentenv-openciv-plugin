@@ -1145,7 +1145,8 @@ class OpenCiv3Env(AgentEnvEnvironment):
         if own:
             files, rendered_notes = await asyncio.to_thread(
                 recording.render, snapshots, formats=own, view=view, fps=fps, name=name, actions=actions,
-                baselines=baselines, seat_actions=seat_actions, calls=calls, client_videos=client_videos or None)
+                baselines=baselines, seat_actions=seat_actions, calls=calls, client_videos=client_videos or None,
+                humans=[s.civ for s in self.seats if s.human])
             notes = rendered_notes + notes
         return {"turns": len(snapshots), "notes": notes,
                 "files": [{"name": f.name, "content_type": f.content_type, "bytes": len(f.data),
@@ -1202,7 +1203,8 @@ class OpenCiv3Env(AgentEnvEnvironment):
             return JSONResponse({**doc, "live": now}, headers=headers)
         actions, calls = self._per_seat(since)
         match = self.live.match_of(self.game_dir / "record", self.game_id,
-                                   {s.civ: s.label for s in self.seats if s.label})
+                                   {s.civ: s.label for s in self.seats if s.label},
+                                   [s.civ for s in self.seats if s.human])
         body = await match.document(since, actions, calls, now)
         return Response(body, media_type="application/json", headers=headers)
 
@@ -1354,6 +1356,8 @@ class OpenCiv3Env(AgentEnvEnvironment):
                                  "map": known, "notices": notices}, headers={"Cache-Control": "no-store"})
 
     async def _play_city(self, request: Request) -> Response:
+        if self._play_seat(request) is None:
+            return self._play_unauthorized()
         city = request.query_params.get("city")
         if not city:
             return self._play_error(BridgeError("bad_args", "give city, e.g. ?city=c1"), 400)
@@ -1373,6 +1377,8 @@ class OpenCiv3Env(AgentEnvEnvironment):
         return await self._play_call(request, "diplomacy", {"action": "status", "civ": None, "gold": 0}, body)
 
     async def _play_tile(self, request: Request) -> Response:
+        if self._play_seat(request) is None:
+            return self._play_unauthorized()
         try:
             x, y = int(request.query_params["x"]), int(request.query_params["y"])
         except (KeyError, ValueError):
@@ -1383,6 +1389,8 @@ class OpenCiv3Env(AgentEnvEnvironment):
         return await self._play_call(request, "view_map", {"x": x, "y": y, "radius": 0}, body)
 
     async def _play_sites(self, request: Request) -> Response:
+        if self._play_seat(request) is None:
+            return self._play_unauthorized()
         unit = request.query_params.get("unit") or None
         try:
             top = int(request.query_params.get("top", "5"))

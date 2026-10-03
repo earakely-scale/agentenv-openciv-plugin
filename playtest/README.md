@@ -162,6 +162,22 @@ cities razed, not captured.
   `history` (wars, peace, cities captured or razed, civs eliminated, from the snapshots).
 - `server.log` and `bots.log`: every call.
 
+## Human seats, end to end (`play_e2e.mjs`, `task_e2e.py`)
+
+A person plays a seat in the browser at `/play` (docs/play.md). `bots.py --humans civ=label,...` makes those civs
+human seats: the bots leave them alone, and the script prints each one's play link and writes them to `play.json`.
+`play_e2e.mjs` then plays the human seat in headless Chromium through the real UI, with the game's keys and clicks,
+until the game is over, and checks what the env saw (the seat's actions in the action log, no turn ended for it, the
+human flag in data/get and the viewer, 401 for a wrong token). Screenshots of every turn go to `<out>/e2e/`.
+
+```bash
+.venv/bin/python playtest/bots.py --seats 2 --humans Rome=you --turns 25 --size Small --linger 120 --out /tmp/hv &
+NODE_PATH=$(npm root -g) node playtest/play_e2e.mjs /tmp/hv          # waits for /tmp/hv/play.json
+.venv/bin/python playtest/task_e2e.py --out /tmp/task-e2e --turns 8   # the human-vs-ai steps: match, browser, await
+```
+
+Open the printed `PLAY` link yourself instead to play; `--human-turn-seconds` sets how long the env waits for you.
+
 ## Testing the harness without the engine
 
 `stub_env.py` serves the same tool names, card, data plane (decisions, harness counters,

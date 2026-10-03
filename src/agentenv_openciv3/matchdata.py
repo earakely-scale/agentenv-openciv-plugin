@@ -79,9 +79,10 @@ def seam(snap: dict) -> int:
 class MatchData:
     """The viewer's document for one game, built a turn at a time with `add`."""
 
-    def __init__(self, game: str = "game", labels: dict[str, str] | None = None):
+    def __init__(self, game: str = "game", labels: dict[str, str] | None = None, humans: Iterable[str] = ()):
         self.game = game
         self.labels = labels or {}           # civ -> label, for recordings made before seats had labels
+        self.humans = {h.lower() for h in humans}   # civs people play (docs/play.md)
         self.meta: dict = {}
         self.players: list[dict] = []
         self.tiles: list[list] = []
@@ -168,6 +169,7 @@ class MatchData:
             barb = is_barbarian(p)
             self.players.append({
                 "index": p["index"], "civ": p["civ"], "label": p.get("label") or self.labels.get(p["civ"]),
+                **({"human": True} if p["civ"].lower() in self.humans else {}),
                 "barbarian": barb, "seat": seat_of.get(p["index"]),
                 "color": BARBARIAN if barb else PALETTE[slot % len(PALETTE)],
                 "engine_color": "#" + "".join(f"{v:02x}" for v in (p.get("color") or (128, 128, 128))),

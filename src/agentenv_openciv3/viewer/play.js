@@ -75,9 +75,12 @@ function shell() {
 }
 function centerMessage(html) { $("#play").innerHTML = `<div class="center">${html}</div>`; }
 
+// The env's messages are written for agents: drop the hints that name tool calls, e.g. "(change it with
+// set_production(city="c1", item=...))", which a person does with the UI instead.
+const plain = text => String(text).replace(/\s*\([^()]*\b[a-z_]+\([^()]*\)[^()]*\)/g, "").replace(/\s*—?\s*consider [a-z_]+\([^)]*\)/g, "");
 function toast(text, err = false) {
   const el = document.createElement("div");
-  el.className = "toast" + (err ? " err" : ""); el.textContent = text;
+  el.className = "toast" + (err ? " err" : ""); el.textContent = plain(text);
   $("#toasts").appendChild(el);
   while ($("#toasts").children.length > 4) $("#toasts").firstChild.remove();
   setTimeout(() => { el.style.opacity = "0"; setTimeout(() => el.remove(), 450); }, err ? 6000 : 3500);
@@ -172,7 +175,7 @@ function renderStatus() {
   const s = state(), g = S.view.game, u = unit(S.sel);
   let body;
   if (g.game_over) body = `<div class="enter" style="animation:none">Game over</div>`;
-  else if (g.ended) body = `<div class="note">Your turn is over. Waiting for ${g.waiting_for.map(esc).join(", ") || "the others"}…</div>`;
+  else if (g.ended) body = `<div class="note">Your turn is over. Waiting for ${g.waiting_for.map(seatName).map(esc).join(", ") || "the others"}…</div>`;
   else if (u) {
     const hp = u.hp_max ? u.hp / u.hp_max * 100 : 100, found = u.can_found_city;
     body = `<div class="unit">${esc(u.type)} <span style="font-weight:500;font-size:12px">${esc(u.id)}</span></div>
@@ -214,11 +217,16 @@ function renderCommands() {
   for (const b of $$("button", el)) b.onclick = () => command(b.dataset.o);
 }
 
+// A seat by its player's name, with the civ: "sol (America)".
+function seatName(civ) {
+  const x = S.view.game.seats.find(s => s.civ === civ);
+  return x && x.label && x.label !== civ ? `${x.label} (${civ})` : civ;
+}
 function renderWaiting() {
   const g = S.view.game, el = $("#waiting");
   el.hidden = !g.ended || g.game_over;
   if (!el.hidden) {
-    const names = g.waiting_for.map(c => { const x = g.seats.find(s => s.civ === c); return x ? (x.label || x.civ) : c; });
+    const names = g.waiting_for.map(seatName);
     el.innerHTML = `<span class="dot"></span><span>Waiting for ${names.map(esc).join(", ") || "the turn to end"}…</span>`;
   }
 }
@@ -465,7 +473,7 @@ function turnReport() {
   if (!events.length && !notices.length) { if (noResearch) advisor("science"); return; }
   dialog(`<header><h2>Turn ${s.turn}</h2><span class="muted">${esc(state().civ)}</span><span class="grow"></span><button data-x>✕</button></header>
     <div class="body"><ul class="plain events">${[...notices.map(n => ({...n, kind: "notice"})), ...events].map(ev =>
-      `<li class="${HOT.has(ev.kind) || ev.kind === "notice" ? "hot" : ""}" ${ev.x != null ? `data-x="${ev.x}" data-y="${ev.y}" tabindex="0" style="cursor:pointer"` : ""}>${esc(ev.text)}</li>`).join("")}</ul>
+      `<li class="${HOT.has(ev.kind) || ev.kind === "notice" ? "hot" : ""}" ${ev.x != null ? `data-x="${ev.x}" data-y="${ev.y}" tabindex="0" style="cursor:pointer"` : ""}>${esc(plain(ev.text))}</li>`).join("")}</ul>
     <div class="actions"><button class="primary" data-x>Continue</button></div></div>`,
     {kind: "report", onClose: () => { if (noResearch) advisor("science"); }});
   for (const li of $$("#dialog li[data-x]")) li.onclick = () => { closeDialog(); centerOn(+li.dataset.x, +li.dataset.y); };
