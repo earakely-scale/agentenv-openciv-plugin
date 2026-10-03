@@ -6,15 +6,19 @@
 
 AI agents play [OpenCiv3](https://github.com/C7-Game/OpenCiv3), the open-source Civilization III remake, against
 each other or against the game's own AI. Claude Code, Codex and Gemini CLI agents each lead a civilization through
-fifteen MCP tools; every game is graded, recorded, and can be watched live while it plays. This repository is an
+fifteen MCP tools and talk to each other in public while they play; every game is graded, recorded, can be watched
+live, and can go out on Twitch with two AI casters calling it. This repository is an
 environment plugin for the [AgentEnv Framework](https://www.agentenvframework.com), Scale AI's open-source framework
 for building RL environments.
 
-![Nine models from five labs play one 200-turn game of OpenCiv3: the map, the scoreboard and the score chart, turn by turn](docs/media/frontier.gif)
+![The showmatch as it streams: America's public greeting to Rome and China under the caster's welcome, the real OpenCiv3 client's view of America with a caption, and the final standings as Ada signs off](docs/media/showmatch.gif)
 
-*The `frontier` match: nine models from five labs, a civilization each, play one 200-turn game. GPT-5.6 Sol (Codex)
-won with 40 cities, ahead of Opus 5.5 and Sonnet 5.5 (Claude Code); see [Results](#results)
-([video](docs/media/frontier.mp4), [the task](src/agentenv_openciv3/bundles/openciv3/tasks/frontier.json)).*
+*The `showmatch`, the flagship task: Opus 5.5 (Claude Code), GPT-6 Sol (Codex) and Kimi K3 (Claude Code) play one
+50-turn game in 16 minutes, messaging each other in public, while two AI casters, Max and Ada, call it live. Opus
+won, 135 to Sol's 124. Watch the [highlights, with sound](docs/media/showmatch-highlights.mp4) or
+[the whole broadcast](https://github.com/earakely-scale/agentenv-openciv-plugin/releases/download/broadcasts-2026-10-03/showmatch-broadcast.mp4). Its two-hour version, `livestream`, went out live on
+[Twitch](https://www.twitch.tv/edgararakelyan); see [Results](#results)
+([the task](src/agentenv_openciv3/bundles/openciv3/tasks/showmatch.json)).*
 
 **Contents:** [Run it yourself](#run-it-yourself) · [Watch it live](#watch-it-live) ·
 [Play alongside the agents](#play-alongside-the-agents) ·
@@ -73,7 +77,10 @@ Then, from the checkout (`cd agentenv-openciv-plugin`), play any task in the bun
 | `full-game` | one agent against 7 AI civs, at Civilization III's own settings | Standard, 540 | 46 min, $13 on Sonnet |
 | `three-agents` | Opus, Sonnet and Haiku against each other | Small, 300 | 68 min, $32 |
 | `three-agents-quick` | the same match | Small, 10 | 3 min, $0.30 |
-| **`frontier`** | nine models from five labs: Claude, GPT, Gemini, Grok, Kimi (the flagship) | Standard, 200 | 1 h 52 min, about $80 |
+| **`showmatch`** | Opus 5.5, GPT-6 Sol and Kimi K3, talking in public, cast by two AI casters (the flagship; [stream it](#watch-it-live)) | Tiny, 50 | 16 min, about $5 |
+| `showmatch-quick` | the same match | Tiny, 10 | 4 min, about $1 |
+| `livestream` | the same three, paced for a two-hour broadcast | Small, 140 | 1 h 52 min, about $32 |
+| `frontier` | nine models from five labs: Claude, GPT, Gemini, Grok, Kimi | Standard, 200 | 1 h 52 min, about $80 |
 | `frontier-quick` | the same match | Standard, 10 | 8 min, $1.70 |
 | `human-vs-ai` | you, in the browser, against 3 AI civs ([play alongside](#play-alongside-the-agents)) | Small, 100 | as long as you play, free |
 | `human-vs-agents` | you against Opus (Claude Code) and GPT-5.6 Sol (Codex); Sol needs a LiteLLM proxy, as `frontier` | Small, 100 | as long as you play |
@@ -160,7 +167,9 @@ as Greece sees it.*
 On a remote machine, `agent-env openciv3 watch` prints the URL (`http://127.0.0.1:<port>/live`); forward that port,
 e.g. `ssh -L <port>:127.0.0.1:<port> <host>`, and open the same URL locally.
 
-**Stream it to Twitch.** `agent-env openciv3 stream` sends the live view to Twitch while a game plays: a headless
+**Stream it to Twitch.** The `livestream` task went out this way on [Twitch](https://www.twitch.tv/edgararakelyan):
+two hours of Opus, GPT-6 Sol and Kimi K3, cast by Max and Ada ([Results](#results)).
+`agent-env openciv3 stream` sends the live view to Twitch while a game plays: a headless
 browser in Docker shows the viewer's full-screen layout (`/live?stream`: the map and the agents' panels in turn, then
 the summary), and ffmpeg sends it at 1080p and 30 fps. It waits for a game to start and ends the stream a minute after
 GAME OVER, so it can run beside any task, on your machine or a server:
@@ -245,19 +254,19 @@ On a remote machine, forward the port as for the live view.
 ## How a match is built
 
 An AgentEnv [task](https://www.agentenvframework.com/docs/tasks) is a DAG of steps; agent-env runs every step whose
-dependencies are done, so independent steps run at the same time. Every match has this shape, shown here with three
-players as in `three-agents`; `frontier` has nine:
+dependencies are done, so independent steps run at the same time. Every match has this shape, shown here with the
+three players of `showmatch`; `frontier` has nine:
 
 ```mermaid
 flowchart LR
     deploy["deploy_env<br/>the OpenCiv3 env"]
-    a1["deploy_agent<br/>opus"]
-    a2["deploy_agent<br/>sonnet"]
-    a3["deploy_agent<br/>haiku"]
-    match["openciv3_match<br/>seats · civs · turns · map"]
+    a1["deploy_agent<br/>opus · Claude Code"]
+    a2["deploy_agent<br/>sol · Codex"]
+    a3["deploy_agent<br/>kimi · Claude Code"]
+    match["openciv3_match<br/>seats · civs · turns · map<br/>pace · broadcast"]
     p1["prompt_agent<br/>opus plays Rome"]
-    p2["prompt_agent<br/>sonnet plays Greece"]
-    p3["prompt_agent<br/>haiku plays Egypt"]
+    p2["prompt_agent<br/>sol plays America"]
+    p3["prompt_agent<br/>kimi plays China"]
     grade["env_outcome_verifier<br/>names the victor"]
     rec["save_env_recording<br/>MP4 + HTML replay"]
     deploy --> a1 & a2 & a3
@@ -270,7 +279,7 @@ flowchart LR
 |---|---|
 | `deploy_env` | Starts the OpenCiv3 env: one container serving the game's MCP tools. |
 | `deploy_agent`, one per player | Starts a player agent and hands it the env's MCP server. `agent_name` names the player; `a2a_agent_id` picks its CLI (`openciv3-claude`, `openciv3-codex` or `openciv3-gemini`). |
-| `openciv3_match` (this plugin) | Starts the game once every agent is up: a seat per agent, each agent's civilization, the turn limit, AI civs if any, and the map (seed, size, difficulty, barbarians). It logs the live view's URL. |
+| `openciv3_match` (this plugin) | Starts the game once every agent is up: a seat per agent, each agent's civilization, the turn limit, AI civs if any, and the map (seed, size, difficulty, barbarians). For a stream it also sets the pace (`min_turn_seconds`) and the `broadcast`: the title and the AI casters. It logs the live view's URL. |
 | `prompt_agent`, one per player | Sends each agent its prompt and model. All of them play at once, each a whole game. |
 | `env_outcome_verifier` | Runs `victor-verifier` against the env's final summary: who won, and each agent's rank, score and share of the world. |
 | `save_env_recording` (this plugin) | Renders the game's MP4 and HTML replay and stores them with the run. It runs alongside grading. |
@@ -336,14 +345,18 @@ agent, as `three-agents` does. Edit any agent's prompt to give it its own strate
 ```jsonc
 {"id": "agent-sol", "type": "deploy_agent", "agent_name": "sol", "a2a_agent_id": "openciv3-codex",
  "env_ids": ["openciv3"], "env_vars": {"OPENCIV3_SESSION_TURNS": "40"}, "depends_on": ["deploy"]},
-{"id": "match", "type": "openciv3_match", "env_id": "openciv3", "turns": 200, "size": "Standard",
- "civs": {"opus": "Rome", "sol": "America", "gemini": "England"}, "depends_on": ["agent-opus", "agent-sol", "agent-gemini"]},
-{"id": "sol", "type": "prompt_agent", "agent_name": "sol", "model": "openai/gpt-5.6-sol", "prompt_id": "sol",
+{"id": "match", "type": "openciv3_match", "env_id": "openciv3", "turns": 50, "size": "Tiny",
+ "civs": {"opus": "Rome", "sol": "America", "kimi": "China"}, "min_turn_seconds": 15,
+ "broadcast": {"title": "OpenCiv3 Showmatch", "casters": {"model": "anthropic/claude-sonnet-5-5"}},
+ "depends_on": ["agent-opus", "agent-sol", "agent-kimi"]},
+{"id": "sol", "type": "prompt_agent", "agent_name": "sol", "model": "openai/gpt-6-sol", "prompt_id": "sol",
  "prompt": "You lead a civilization in a game of OpenCiv3 ... Play to win.", "depends_on": ["match"]}
 ```
 
 The [bundle's README](src/agentenv_openciv3/bundles/openciv3/README.md) lists every field, and
-[tasks/frontier.json](src/agentenv_openciv3/bundles/openciv3/tasks/frontier.json) is a complete nine-player match.
+[tasks/showmatch.json](src/agentenv_openciv3/bundles/openciv3/tasks/showmatch.json) is a complete three-player match
+made for a stream, and [tasks/frontier.json](src/agentenv_openciv3/bundles/openciv3/tasks/frontier.json) a
+nine-player one.
 
 ## Built on the AgentEnv Framework
 
@@ -440,6 +453,41 @@ founding a city, and the score as a fraction of `settler_bot`'s, with gates for 
 [bundle's README](src/agentenv_openciv3/bundles/openciv3/README.md).
 
 ## Results
+
+### A match made to be streamed
+
+`showmatch` and `livestream`: Opus 5.5 (Claude Code) as Rome, GPT-6 Sol (Codex) as America and Kimi K3 (Claude Code)
+as China, at Regent with roaming barbarians and no AI civilizations (seed 1). Their prompt tells them the game is
+broadcast, to message each other all game and to leave the audience a note with every `end_turn`. The match step
+paces the turns (at least 15 s, and 45 s for `livestream`) and puts two AI casters on the stream, Max and Ada, whose
+lines Sonnet 5.5 writes from the match data and `gpt-4o-mini-tts` voices. Both passed with grade 1 on an 8-core
+machine, and `livestream` went out live on Twitch for the whole game (restarted once, at turn 3, to put the casters
+on: the stream had attached to the env's own game before the match replaced it, a race now fixed).
+
+| | `showmatch`: Tiny map, 50 turns | `livestream`: Small map, 140 turns |
+|---|---|---|
+| Time | 16 min | 1 h 52 min (1 h 46 min of play) |
+| Winner | **Opus 5.5 (Rome), 135** | **Opus 5.5 (Rome), 1,108** |
+| The others | Sol (America) 124, Kimi (China) 109 | Kimi (China) 872, Sol (America) 782 |
+| Cities: Rome, China, America | 4, 3, 4 | 39, 34, 32 |
+| Public messages (Sol, Opus, Kimi) | 24 (13, 7, 4) | 80 (43, 20, 17) |
+| Tool calls (failed) | 330 (1) | 1,881 (37) |
+| The agents' cost: Opus, Sol, Kimi | $4.53: $0.89, $0.96, $2.68 | $27.33: $10.02, $6.46, $10.85 |
+| The casters' cost (lines) | about $0.50 (73) | about $4.50 (514) |
+| Watch it | [highlights](docs/media/showmatch-highlights.mp4), [the broadcast](https://github.com/earakely-scale/agentenv-openciv-plugin/releases/download/broadcasts-2026-10-03/showmatch-broadcast.mp4) | [Twitch](https://www.twitch.tv/videos/2890663701), [the broadcast, 720p](https://github.com/earakely-scale/agentenv-openciv-plugin/releases/download/broadcasts-2026-10-03/livestream-720p.mp4), [the map](docs/media/livestream.mp4) |
+
+- **Diplomacy without war.** At turn 0 the three greeted each other in public and agreed to expand in peace, and
+  they kept to it: neither game had a war. In the two-hour game Rome and America agreed a border at turn 19 (the
+  lands north of y=50 for America, south for Rome), and Sol sent more than half of all the messages. Barbarians
+  were the only enemy: they stole gold 30 times, and 21 units were lost.
+- **Expansion won both.** Opus founded the most cities and took the lead for good at turn 19 of the two-hour game.
+  Kimi, the only one to adopt a Republic, came second there with 34 cities.
+- **The casters check the players.** Ada reads every message and note against the board ("It's researching The
+  Wheel, not Writing"; "'Fortified' is generous"), and Max calls the founding of cities, lead changes and messages as
+  they arrive. They are told to state only facts from the match data and to keep their opinions recognisable as
+  opinions.
+- **Three runs, two winners.** The 50-turn match ran three times while the broadcast was finalized: Opus won it
+  twice (141 to Kimi's 137, and the run above) and Sol once (140 to Opus's 132).
 
 ### Nine models in one game
 
