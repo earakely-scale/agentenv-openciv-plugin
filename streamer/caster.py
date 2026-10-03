@@ -687,7 +687,8 @@ def parse_lines(content: str, match: Match, casters: dict[str, tuple[str, str, s
         speaker = speakers.get(str(item.get("speaker")).lower()) if isinstance(item, dict) else None
         if speaker and (text := spoken(item.get("text"), names)):
             own, other = (casters[s][0] for s in (speaker, PBP if speaker == COLOR else COLOR))
-            text = re.sub(rf"\b{re.escape(own)}\b", other, text)   # "a fine move, Ada" from Ada was meant for Max
+            # "A fine move, Ada" from Ada was meant for Max; "I'm Ada" is not addressed to anyone.
+            text = re.sub(rf"(?:(?<=, )|^){re.escape(own)}(?=\s*(?:[,.!?]|$))", other, text)
             lines.append({"speaker": speaker, "text": text, "focus": match.civ_named(item.get("focus"))})
     if not lines:
         raise ValueError(f"no lines in the reply: {content[:120]!r}")

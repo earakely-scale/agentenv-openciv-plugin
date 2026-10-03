@@ -493,6 +493,10 @@ def test_lines_are_cleaned_up_for_speech():
     mixed_up = ('{"lines": [{"speaker": "Ada", "text": "Rome takes the lead, Ada."},'
                 ' {"speaker": "pbp", "text": "Max!"}]}')
     assert [line["text"] for line in caster.parse_lines(mixed_up, match)] == ["Rome takes the lead, Max.", "Ada!"]
+    intro = ('{"lines": [{"speaker": "pbp", "text": "I\'m Max, and Max has the call: Rome first, Max?"},'
+             ' {"speaker": "color", "text": "Ada, at your service. Ada thinks Rome is ahead, Ada!"}]}')
+    assert [line["text"] for line in caster.parse_lines(intro, match)] == [
+        "I'm Max, and Max has the call: Rome first, Ada?", "Max, at your service. Ada thinks Rome is ahead, Max!"]
     twice = '{"lines": [{"speaker": "pbp", "text": "Go!"}]}\n{"lines": [{"speaker": "pbp", "text": "Again"}]}'
     assert [line["text"] for line in caster.parse_lines(twice, match)] == ["Go!"]   # the first object only
     blocked = codecs.decode("Fuvg, gung'f n OHYYFUVG zbir", "rot13")
