@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>OpenCiv3 · seat grid</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root{--bg:#0f1115;--surface:#16191f;--raise:#1d2129;--line:#262b33;--line2:#343a45;--text:#eceef2;--text2:#b6bac3;
+  --muted:#80868f;--gold:#e9c46a;--good:#3fb950;--bad:#f0745a;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:13px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif}
+body{display:grid;grid-template-rows:auto 1fr;height:100vh}
+header{display:flex;align-items:center;gap:14px;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--surface)}
+header h1{font-size:15px;margin:0;font-weight:650;white-space:nowrap}
+.sub{color:var(--muted);white-space:nowrap}
+#turn{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap;min-width:110px;text-align:right}
+#turn small{font-size:13px;color:var(--muted);font-weight:500}
+input[type=range]{flex:1;accent-color:#b6bac3}
+button{background:var(--raise);color:var(--text);border:1px solid var(--line2);border-radius:6px;padding:5px 10px;cursor:pointer;font:inherit}
+#grid{display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);gap:10px;padding:10px;min-height:0}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;display:grid;
+  grid-template-rows:auto 1fr auto;min-height:0;overflow:hidden;position:relative}
+.card.lead{border-color:var(--gold);box-shadow:0 0 0 1px var(--gold) inset}
+.card.out{opacity:.5}
+.top{display:flex;align-items:center;gap:8px;padding:8px 10px 6px}
+.sw{display:inline-block;width:10px;height:10px;border-radius:3px;flex:none}
+.name b{font-weight:650;font-size:14px} .name span{color:var(--muted);margin-left:4px}
+.rank{margin-left:auto;display:flex;align-items:baseline;gap:8px;font-variant-numeric:tabular-nums}
+.rank .r{color:var(--muted);font-size:12px}
+.rank .s{font-size:18px;font-weight:700}
+.up{color:var(--good);font-size:11px} .down{color:var(--bad);font-size:11px}
+.crown{color:var(--gold);font-size:11px;font-weight:650;letter-spacing:.04em}
+.mapbox{position:relative;min-height:0}
+.mapbox canvas{position:absolute;inset:0;width:100%;height:100%}
+.foot{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;padding:6px 10px 8px;border-top:1px solid var(--line)}
+.stats{display:flex;gap:12px;font-variant-numeric:tabular-nums;color:var(--text2);white-space:nowrap}
+.stats b{color:var(--text);font-weight:600}
+.stats i{font-style:normal;color:var(--good);font-size:11px;margin-left:2px}
+.spark{justify-self:end}
+.ev{grid-column:1/-1;color:var(--text2);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;height:34px}
+.ev div{overflow:hidden;text-overflow:ellipsis}
+.ev .t{color:var(--muted);margin-right:6px;font-variant-numeric:tabular-nums}
+</style></head><body>
+<header>
+  <h1>OpenCiv3 · seat grid</h1><span class="sub" id="sub"></span>
+  <button id="play">Play</button>
+  <input id="slider" type="range" min="0" value="0" aria-label="Turn">
+  <div id="turn"></div>
+</header>
+<div id="grid"></div>
+<script>/*__COMMON__*/</script>
+<script id="data" type="application/json">/*__DATA__*/</script>
+<script>
+"use strict";
+const M = new Match(JSON.parse(document.getElementById("data").textContent));
+const P = new MapPainter(M);
+const $ = id => document.getElementById(id);
+const S = {ti: M.last, timer: null};
+$("sub").textContent = `${M.civs.length} agents · seed ${M.meta.seed} · each panel follows one seat`;
+$("slider").max = M.last;
+// Each seat's camera is fixed for the whole game: the box around its territory at the end, so panels don't jump.
+const boxes = Object.fromEntries(M.civs.map(p => [p.index, M.civBox(p.index, M.last, 2) || M.landBox]));
+const peak = Math.max(...M.civs.map(p => Math.max(...M.series[p.index].map(s => s[0]))));
+
+$("grid").innerHTML = M.civs.map(p => `<div class="card" data-i="${p.index}">
+  <div class="top"><span class="sw" style="background:${p.color}"></span>
+    <span class="name"><b>${esc(p.label || p.civ)}</b><span>${esc(p.label ? p.civ : "")}</span></span>
+    <span class="rank"><span class="crown"></span><span class="d"></span><span class="r"></span><span class="s"></span></span></div>
+  <div class="mapbox"><canvas></canvas></div>
+  <div class="foot"><div class="stats"></div><svg class="spark" width="120" height="22"></svg><div class="ev"></div></div>
+</div>`).join("");
+
+function render() {
+  const ti = S.ti, t = M.turns[ti], ranks = M.ranks(ti), before = M.ranks(Math.max(0, ti - 10)), back = Math.max(0, ti - 10);
+  const leader = M.civs.find(p => ranks[p.index] === 1).index;
+  $("turn").innerHTML = `T${t.turn} <small>/ ${M.limit}</small>`;
+  $("slider").value = ti;
+  for (const card of $("grid").children) {
+    const i = +card.dataset.i, p = M.byIndex[i], s = M.series[i][ti], b = M.series[i][back];
+    card.classList.toggle("lead", i === leader);
+    card.classList.toggle("out", !!s[5]);
+    const d = before[i] - ranks[i];
+    card.querySelector(".crown").textContent = i === leader ? "LEADS" : "";
+    card.querySelector(".d").innerHTML = d > 0 ? `<span class="up">▲${d}</span>` : d < 0 ? `<span class="down">▼${-d}</span>` : "";
+    card.querySelector(".r").textContent = `#${ranks[i]}`;
+    card.querySelector(".s").textContent = s[0];
+    const inc = (k, label) => `<span><b>${s[k]}</b> ${label}${s[k] > b[k] ? `<i>+${s[k] - b[k]}</i>` : ""}</span>`;
+    card.querySelector(".stats").innerHTML = inc(1, "cities") + inc(2, "pop") + inc(4, "techs") + inc(3, "land");
+    const others = M.civs.filter(q => q !== p).map(q =>
+      `<path d="${sparkPath(M.series[q.index].slice(0, ti + 1).map(x => x[0]), 120 * ti / M.last || 1, 20, peak)}" fill="none" stroke="#343941" stroke-width="1"/>`).join("");
+    card.querySelector(".spark").innerHTML = others +
+      `<path d="${sparkPath(M.series[i].slice(0, ti + 1).map(x => x[0]), 120 * ti / M.last || 1, 20, peak)}" fill="none" stroke="${p.color}" stroke-width="1.8"/>`;
+    const evs = M.events.filter(e => e.turn <= t.turn && (e.owner === i || e.from === i) && e.kind !== "tech_learned").slice(-2).reverse();
+    card.querySelector(".ev").innerHTML = evs.map(e => `<div><span class="t">T${e.turn}</span>${esc(e.text)}</div>`).join("")
+      || `<div style="color:var(--muted)">No events yet</div>`;
+    const canvas = card.querySelector("canvas"), {ctx, w, h} = sizeCanvas(canvas);
+    P.draw(ctx, ti, fitView(boxes[i], w, h), w, h, {focus: i, labels: "auto", ownLabels: true});
+  }
+}
+function stop() { clearInterval(S.timer); S.timer = null; $("play").textContent = "Play"; }
+$("play").onclick = () => {
+  if (S.timer) return stop();
+  if (S.ti === M.last) S.ti = 0;
+  $("play").textContent = "Pause";
+  S.timer = setInterval(() => { if (S.ti >= M.last) return stop(); S.ti++; render(); }, 200);
+};
+$("slider").oninput = () => { stop(); S.ti = +$("slider").value; render(); };
+document.addEventListener("keydown", e => {
+  if (e.key === "ArrowRight") { stop(); S.ti = Math.min(M.last, S.ti + 1); render(); }
+  if (e.key === "ArrowLeft") { stop(); S.ti = Math.max(0, S.ti - 1); render(); }
+  if (e.key === " ") { e.preventDefault(); $("play").onclick(); }
+});
+new ResizeObserver(() => render()).observe($("grid"));
+render();
+</script></body></html>

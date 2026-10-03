@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>OpenCiv3 · interactive replay</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root{--bg:#0f1115;--surface:#16191f;--raise:#1d2129;--line:#272c35;--line2:#343a45;--text:#eceef2;--text2:#b6bac3;
+  --muted:#80868f;--accent:#e9c46a;--good:#3fb950;--bad:#f0745a;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+  font:13px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif}
+body{display:grid;grid-template-rows:auto 1fr;height:100vh;overflow:hidden}
+header{display:flex;align-items:center;gap:16px;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--surface)}
+header h1{font-size:15px;margin:0;font-weight:650;white-space:nowrap}
+header .sub{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#turnbig{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums;margin-left:auto;white-space:nowrap}
+#turnbig small{font-size:13px;color:var(--muted);font-weight:500}
+main{display:grid;grid-template-columns:1fr 400px;min-height:0}
+#left{display:grid;grid-template-rows:1fr auto;min-height:0;min-width:0}
+#stage{position:relative;min-height:0;overflow:hidden;background:#0e1420}
+#map{width:100%;height:100%;display:block;cursor:grab}
+#map.drag{cursor:grabbing}
+#tip{position:absolute;pointer-events:none;background:rgba(18,21,27,.96);border:1px solid var(--line2);border-radius:8px;
+  padding:8px 10px;min-width:160px;box-shadow:0 6px 24px rgba(0,0,0,.4);font-size:12px;display:none;z-index:5}
+#tip b{font-weight:650} #tip .k{color:var(--muted)}
+.layers{position:absolute;top:10px;left:10px;display:flex;gap:4px;flex-wrap:wrap;z-index:4}
+.chip{background:rgba(22,25,31,.88);border:1px solid var(--line2);color:var(--text2);border-radius:999px;padding:3px 10px;
+  font:inherit;font-size:12px;cursor:pointer;user-select:none}
+.chip.on{color:var(--text);border-color:#58606e;background:rgba(46,52,64,.95)}
+.zoom{position:absolute;right:10px;top:10px;display:flex;flex-direction:column;gap:4px;z-index:4}
+.zoom button{width:30px;height:30px;padding:0;font-size:16px}
+#focusnote{position:absolute;left:10px;bottom:10px;z-index:4;display:none}
+button{background:var(--raise);color:var(--text);border:1px solid var(--line2);border-radius:6px;padding:5px 10px;
+  cursor:pointer;font:inherit}
+button:hover{border-color:#58606e}
+#timeline{border-top:1px solid var(--line);background:var(--surface);padding:8px 16px 10px}
+.trow{display:flex;align-items:center;gap:8px}
+#play{width:64px}
+#speed{background:var(--raise);color:var(--text);border:1px solid var(--line2);border-radius:6px;padding:4px}
+#scrub{position:relative;flex:1;height:38px;cursor:pointer}
+#scrub svg{width:100%;height:100%;display:block;overflow:visible}
+aside{border-left:1px solid var(--line);background:var(--surface);display:flex;flex-direction:column;min-height:0}
+aside section{padding:12px 14px;border-bottom:1px solid var(--line)}
+aside h2{font-size:11px;letter-spacing:.07em;color:var(--muted);margin:0 0 8px;font-weight:650;text-transform:uppercase;
+  display:flex;align-items:center;gap:8px}
+aside h2 .grow{flex:1}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+#standings td{padding:3px 4px;white-space:nowrap}
+#standings tr.row{cursor:pointer}
+#standings tr.row:hover td{background:#20252e}
+#standings tr.focus td{background:#262c37}
+#standings tr.out td{opacity:.45}
+#standings th{font-weight:500;color:var(--muted);font-size:11px;text-align:right;padding:0 4px 4px}
+.n{text-align:right;color:var(--text2)}
+.rk{color:var(--muted);width:18px}
+.delta{font-size:11px;width:26px}
+.up{color:var(--good)} .down{color:var(--bad)}
+.sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.who b{font-weight:650} .who span{color:var(--muted);margin-left:4px}
+.bar{height:4px;border-radius:0 4px 4px 0;margin-top:2px}
+.tabs{display:flex;gap:2px}
+.tabs button{padding:2px 7px;font-size:11px;border-radius:5px;background:transparent;border-color:transparent;color:var(--muted)}
+.tabs button.on{background:var(--raise);border-color:var(--line2);color:var(--text)}
+#chart{width:100%;height:190px;display:block}
+#feedwrap{flex:1;min-height:0;display:flex;flex-direction:column}
+#feed{list-style:none;margin:0;padding:0 14px 12px;overflow:auto;flex:1}
+#feed li{display:grid;grid-template-columns:40px 1fr;gap:6px;padding:4px 0;border-bottom:1px solid #1e2229;cursor:pointer}
+#feed li:hover{background:#1c2028}
+#feed li.now{background:#1f2530}
+#feed .t{color:var(--muted);font-variant-numeric:tabular-nums}
+#feed .tag{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-left:6px}
+.kfilter{display:flex;gap:4px;flex-wrap:wrap;padding:0 14px 8px}
+.kfilter .chip{font-size:11px;padding:1px 8px}
+.hint{color:var(--muted);font-size:11px}
+kbd{background:var(--raise);border:1px solid var(--line2);border-radius:3px;padding:0 4px;font-size:10px}
+</style></head><body>
+<header>
+  <h1>OpenCiv3 · interactive replay</h1>
+  <div class="sub" id="sub"></div>
+  <div id="turnbig"></div>
+</header>
+<main>
+  <div id="left">
+    <div id="stage">
+      <canvas id="map" aria-label="The world map at the selected turn"></canvas>
+      <div class="layers" id="layers"></div>
+      <div class="zoom"><button id="zin" title="Zoom in">+</button><button id="zout" title="Zoom out">−</button>
+        <button id="zfit" title="Fit the land" style="font-size:12px">⤢</button></div>
+      <div id="focusnote" class="chip on"></div>
+      <div id="tip"></div>
+    </div>
+    <div id="timeline">
+      <div class="trow">
+        <button id="play">Play</button>
+        <select id="speed" aria-label="Speed"><option value="2">2 t/s</option><option value="5" selected>5 t/s</option>
+          <option value="10">10 t/s</option><option value="20">20 t/s</option></select>
+        <div id="scrub" role="slider" tabindex="0" aria-label="Turn"><svg id="scrubsvg"></svg></div>
+      </div>
+      <div class="hint" style="margin-top:4px"><kbd>Space</kbd> play · <kbd>←</kbd><kbd>→</kbd> turn ·
+        <kbd>Shift</kbd>+arrows 10 turns · <kbd>1</kbd>–<kbd>9</kbd> focus a civ · <kbd>Esc</kbd> clear ·
+        drag to pan, wheel to zoom · ticks on the timeline are lead changes and cities lost</div>
+    </div>
+  </div>
+  <aside>
+    <section>
+      <h2>Standings <span class="grow"></span><span class="hint" style="text-transform:none;letter-spacing:0">click to focus</span></h2>
+      <table id="standings"></table>
+    </section>
+    <section>
+      <h2><span id="chart-title">Score</span><span class="grow"></span><span class="tabs" id="metrics"></span></h2>
+      <svg id="chart"></svg>
+    </section>
+    <div id="feedwrap">
+      <section style="border:0;padding-bottom:6px"><h2>Events <span class="grow"></span>
+        <span class="hint" style="text-transform:none;letter-spacing:0" id="feedscope">all civs · up to this turn</span></h2></section>
+      <div class="kfilter" id="kfilter"></div>
+      <ul id="feed"></ul>
+    </div>
+  </aside>
+</main>
+<script>/*__COMMON__*/</script>
+<script id="data" type="application/json">/*__DATA__*/</script>
+<script>
+"use strict";
+const M = new Match(JSON.parse(document.getElementById("data").textContent));
+const P = new MapPainter(M);
+const $ = id => document.getElementById(id);
+const METRICS = [["Score", 0], ["Cities", 1], ["Pop", 2], ["Land", 3], ["Techs", 4]];
+const S = {ti: M.last, focus: null, metric: 0, playing: null, view: null,
+  layers: {territory: true, borders: true, units: true, labels: "auto"},
+  kinds: new Set(["lead_change", "city_captured", "city_destroyed", "civ_destroyed", "city_founded", "war_declared",
+    "peace_signed", "unit_lost"]), pulses: []};
+
+$("sub").textContent = `${M.civs.length} agents · seed ${M.meta.seed} · ${M.W}×${M.H} map · ${M.limit} turns`;
+
+// ---- map view: pan and zoom ----
+const canvas = $("map");
+function fit() {
+  const r = canvas.getBoundingClientRect();
+  S.view = fitView(M.landBox, r.width, r.height);
+}
+function zoomAt(f, px, py) {
+  const v = S.view, gx = px / v.hw + v.box.x0, gy = py / (v.hw / 2) + v.box.y0;
+  const hw = Math.min(60, Math.max(3, v.hw * f));
+  S.view = {hw, box: {x0: gx - px / hw, y0: gy - py / (hw / 2)}};
+  draw();
+}
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();
+  const r = canvas.getBoundingClientRect();
+  zoomAt(Math.exp(-e.deltaY * 0.0015), e.clientX - r.left, e.clientY - r.top);
+}, {passive: false});
+let drag = null;
+canvas.addEventListener("pointerdown", e => { drag = {x: e.clientX, y: e.clientY, box: {...S.view.box}, moved: 0};
+  canvas.setPointerCapture(e.pointerId); canvas.classList.add("drag"); });
+canvas.addEventListener("pointermove", e => {
+  if (drag) {
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.moved = Math.max(drag.moved, Math.abs(dx) + Math.abs(dy));
+    S.view.box = {x0: drag.box.x0 - dx / S.view.hw, y0: drag.box.y0 - dy / (S.view.hw / 2)};
+    $("tip").style.display = "none"; draw(); return;
+  }
+  tip(e);
+});
+canvas.addEventListener("pointerup", e => {
+  canvas.classList.remove("drag");
+  if (drag && drag.moved < 4) clickTile(e);
+  drag = null;
+});
+canvas.addEventListener("pointerleave", () => { $("tip").style.display = "none"; });
+$("zin").onclick = () => { const r = canvas.getBoundingClientRect(); zoomAt(1.4, r.width / 2, r.height / 2); };
+$("zout").onclick = () => { const r = canvas.getBoundingClientRect(); zoomAt(1 / 1.4, r.width / 2, r.height / 2); };
+$("zfit").onclick = () => { fit(); draw(); };
+
+function tileUnder(e) {
+  const r = canvas.getBoundingClientRect();
+  return P.pick(e.clientX - r.left, e.clientY - r.top, S.view);
+}
+function tip(e) {
+  const i = tileUnder(e), el = $("tip");
+  if (i == null) { el.style.display = "none"; return; }
+  const t = M.tiles[i], own = M.owners(S.ti)[i], turn = M.turns[S.ti];
+  const city = turn.cities.find(c => M.sx(c[0]) === t.x && c[1] === t.y);
+  const units = turn.units.filter(u => M.sx(u[0]) === t.x && u[1] === t.y);
+  const terr = t.over ? `${t.over} on ${t.base}` : t.base;
+  let h = city ? `<div><b>${esc(city[2])}</b> <span class="k">size ${city[4]}${city[5] ? " · capital" : ""}</span></div>` : "";
+  h += `<div class="k">${esc(terr)}${t.river ? " · river" : ""} · (${(t.x + M.seam) % M.W},${t.y})</div>`;
+  h += own >= 0 ? `<div><span class="sw" style="background:${M.byIndex[own].color}"></span>${esc(M.full(own))}</div>`
+    : `<div class="k">unclaimed</div>`;
+  for (const [, , o, civil, mil] of units)
+    h += `<div class="k"><span class="sw" style="background:${M.byIndex[o]?.color || "#777"}"></span>` +
+      `${mil ? mil + " military" : ""}${mil && civil ? ", " : ""}${civil ? civil + " civilian" : ""}</div>`;
+  el.innerHTML = h; el.style.display = "block";
+  const r = $("stage").getBoundingClientRect();
+  let x = e.clientX - r.left + 14, y = e.clientY - r.top + 14;
+  if (x + el.offsetWidth > r.width - 8) x -= el.offsetWidth + 28;
+  if (y + el.offsetHeight > r.height - 8) y -= el.offsetHeight + 28;
+  el.style.left = x + "px"; el.style.top = y + "px";
+}
+function clickTile(e) {
+  const i = tileUnder(e); if (i == null) return;
+  const own = M.owners(S.ti)[i];
+  setFocus(own >= 0 && !M.byIndex[own].barbarian && S.focus !== own ? own : null);
+}
+
+// ---- layers ----
+const LAYERS = [["territory", "Territory"], ["borders", "Borders"], ["units", "Armies"], ["labels", "Labels: auto"]];
+function renderLayers() {
+  $("layers").innerHTML = LAYERS.map(([k, label]) => {
+    const on = k === "labels" ? S.layers.labels !== "none" : S.layers[k];
+    const text = k === "labels" ? `Labels: ${S.layers.labels}` : label;
+    return `<button class="chip ${on ? "on" : ""}" data-k="${k}">${text}</button>`;
+  }).join("");
+  for (const b of $("layers").children) b.onclick = () => {
+    const k = b.dataset.k;
+    if (k === "labels") S.layers.labels = {auto: "all", all: "none", none: "auto"}[S.layers.labels];
+    else S.layers[k] = !S.layers[k];
+    renderLayers(); draw();
+  };
+}
+
+// ---- drawing ----
+let raf = 0;
+function draw() { cancelAnimationFrame(raf); raf = requestAnimationFrame(paint); }
+function paint() {
+  const {ctx, w, h} = sizeCanvas(canvas);
+  if (!S.view) fit();
+  const now = performance.now();
+  S.pulses = S.pulses.filter(p => now - p.start < 1400);
+  P.draw(ctx, S.ti, S.view, w, h, {...S.layers, focus: S.focus,
+    pulses: S.pulses.map(p => ({...p, t: (now - p.start) / 1400}))});
+  if (S.pulses.length) raf = requestAnimationFrame(paint);
+}
+
+// ---- standings ----
+function renderStandings() {
+  const ti = S.ti, ranks = M.ranks(ti), before = M.ranks(Math.max(0, ti - 10));
+  const order = M.civs.slice().sort((a, b) => ranks[a.index] - ranks[b.index]);
+  const top = Math.max(1, ...order.map(p => M.series[p.index][ti][0]));
+  $("standings").innerHTML = `<tr><th></th><th></th><th style="text-align:left">civ</th><th>score</th><th>cities</th>
+    <th>pop</th><th>techs</th></tr>` + order.map(p => {
+    const s = M.series[p.index][ti], d = before[p.index] - ranks[p.index];
+    const delta = d > 0 ? `<span class="up">▲${d}</span>` : d < 0 ? `<span class="down">▼${-d}</span>` : `<span class="k">–</span>`;
+    return `<tr class="row ${S.focus === p.index ? "focus" : ""} ${s[5] ? "out" : ""}" data-i="${p.index}">
+      <td class="rk">${ranks[p.index]}</td><td class="delta">${delta}</td>
+      <td class="who"><span class="sw" style="background:${p.color}"></span><b>${esc(p.label || p.civ)}</b><span>${esc(p.label ? p.civ : "")}</span>
+        <div class="bar" style="width:${(s[0] / top * 100).toFixed(1)}%;background:${p.color}"></div></td>
+      <td class="n" style="color:var(--text);font-weight:600">${s[0]}</td><td class="n">${s[1]}</td><td class="n">${s[2]}</td>
+      <td class="n">${s[4]}</td></tr>`;
+  }).join("");
+  for (const tr of $("standings").querySelectorAll("tr.row"))
+    tr.onclick = () => setFocus(S.focus === +tr.dataset.i ? null : +tr.dataset.i);
+}
+
+// ---- chart ----
+const NS = "http://www.w3.org/2000/svg";
+function renderMetrics() {
+  $("metrics").innerHTML = METRICS.map(([l, k]) => `<button class="${k === S.metric ? "on" : ""}" data-k="${k}">${l}</button>`).join("");
+  for (const b of $("metrics").children) b.onclick = () => { S.metric = +b.dataset.k; renderMetrics(); renderChart(); };
+  $("chart-title").textContent = METRICS.find(m => m[1] === S.metric)[0];
+}
+function renderChart() {
+  const svg = $("chart"), W = svg.clientWidth || 370, H = 190, L = 34, R = 56, T = 8, B = 20;
+  const k = S.metric, n = M.turns.length;
+  // The y scale follows the turns played so far, so early turns aren't squashed against the axis.
+  const seen = Math.max(1, ...M.civs.flatMap(p => M.series[p.index].slice(0, S.ti + 1).map(s => s[k])));
+  const max = niceTicks(seen * 1.08).at(-1) < seen * 1.08 ? seen * 1.08 : niceTicks(seen * 1.08).at(-1);
+  const X = i => L + (W - L - R) * M.turns[i].turn / M.limit, Y = v => T + (H - T - B) * (1 - v / max);
+  const nice = niceTicks(max);
+  let h = nice.map(v => `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="#262b33"/>` +
+    `<text x="${L - 6}" y="${Y(v) + 3.5}" fill="#80868f" font-size="10" text-anchor="end">${v}</text>`).join("");
+  for (const t of [0, Math.round(M.limit / 2), M.limit])
+    h += `<text x="${L + (W - L - R) * t / M.limit}" y="${H - 5}" fill="#80868f" font-size="10" text-anchor="middle">T${t}</text>`;
+  const ends = [];
+  const order = M.civs.slice().sort((a, b) => (a.index === S.focus) - (b.index === S.focus));
+  const leader = M.civs.reduce((a, b) => M.series[b.index][S.ti][k] > M.series[a.index][S.ti][k] ? b : a);
+  for (const p of order) {
+    const pts = M.series[p.index].slice(0, S.ti + 1).map((s, i) => `${X(i).toFixed(1)},${Y(s[k]).toFixed(1)}`);
+    const dim = S.focus != null && S.focus !== p.index;
+    const wid = S.focus === p.index ? 2.5 : p === leader && S.focus == null ? 2 : 1.4;
+    h += `<polyline points="${pts.join(" ")}" fill="none" stroke="${dim ? "#3a3f48" : p.color}" stroke-width="${wid}"
+      stroke-linejoin="round" data-i="${p.index}"/>`;
+    if (!dim) ends.push({y: Y(M.series[p.index][S.ti][k]), x: X(S.ti), p});
+  }
+  const ys = spread(ends.map(e => e.y), 11, T, H - B);
+  ends.forEach((e, i) => { h += `<text x="${e.x + 5}" y="${ys[i] + 3.5}" font-size="10" fill="#b6bac3">${esc(e.p.label || e.p.civ)}</text>`; });
+  h += `<line id="xh" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="#80868f" stroke-width="1" visibility="hidden"/>`;
+  h += `<rect x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent" id="hit"/>`;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.innerHTML = h;
+  const hit = svg.querySelector("#hit"), xh = svg.querySelector("#xh"), tipEl = $("tip");
+  const at = e => {
+    const r = svg.getBoundingClientRect(), x = (e.clientX - r.left) * W / r.width;
+    const turn = Math.round(Math.max(0, Math.min(M.limit, (x - L) / (W - L - R) * M.limit)));
+    return Math.min(S.ti, M.turns.findIndex(t => t.turn >= turn));
+  };
+  hit.onmousemove = e => {
+    const i = at(e); if (i < 0) return;
+    xh.setAttribute("x1", X(i)); xh.setAttribute("x2", X(i)); xh.setAttribute("visibility", "visible");
+    const rows = M.civs.map(p => [p, M.series[p.index][i][k]]).sort((a, b) => b[1] - a[1]);
+    chartTip.innerHTML = `<div style="margin-bottom:4px"><b>T${M.turns[i].turn}</b> <span class="k">${METRICS.find(m => m[1] === k)[0].toLowerCase()}</span></div>` +
+      rows.map(([p, v]) => `<div style="display:flex;gap:8px;${S.focus != null && S.focus !== p.index ? "opacity:.5" : ""}">
+        <span><span class="sw" style="background:${p.color}"></span>${esc(p.label || p.civ)}</span>
+        <span style="margin-left:auto;font-variant-numeric:tabular-nums">${v}</span></div>`).join("");
+    chartTip.style.display = "block";
+    const r = svg.getBoundingClientRect();
+    chartTip.style.left = Math.max(8, r.left - chartTip.offsetWidth - 12) + "px";
+    chartTip.style.top = Math.max(8, r.top + 10) + "px";
+  };
+  hit.onmouseleave = () => { xh.setAttribute("visibility", "hidden"); chartTip.style.display = "none"; };
+  hit.onclick = e => { const i = at(e); if (i >= 0) setTurn(i); };
+}
+const chartTip = document.createElement("div");
+chartTip.id = "ctip"; chartTip.style.cssText = $("tip").style.cssText;
+Object.assign(chartTip.style, {position: "fixed", pointerEvents: "none", background: "rgba(18,21,27,.97)",
+  border: "1px solid #343a45", borderRadius: "8px", padding: "8px 10px", minWidth: "170px", fontSize: "12px",
+  display: "none", zIndex: 10, boxShadow: "0 6px 24px rgba(0,0,0,.4)"});
+document.body.appendChild(chartTip);
+
+function niceTicks(max) {
+  const step = Math.pow(10, Math.floor(Math.log10(max))), m = max / step;
+  const s = (m <= 2 ? 0.5 : m <= 5 ? 1 : 2) * step;
+  const out = []; for (let v = 0; v <= max; v += s) out.push(Math.round(v)); return out;
+}
+function spread(ys, gap, lo, hi) {
+  const order = ys.map((_, i) => i).sort((a, b) => ys[a] - ys[b]), out = ys.slice();
+  let prev = lo - gap; for (const i of order) prev = out[i] = Math.max(ys[i], prev + gap);
+  let next = hi + gap; for (const i of order.reverse()) next = out[i] = Math.min(out[i], next - gap);
+  return out;
+}
+
+// ---- timeline ----
+const MARKS = ["lead_change", "city_captured", "city_destroyed", "civ_destroyed", "war_declared"];
+function renderScrub() {
+  const svg = $("scrubsvg"), W = svg.clientWidth || 800, H = 38, y = 24;
+  const X = turn => 6 + (W - 12) * turn / M.limit;
+  let h = `<rect x="6" y="${y - 2}" width="${W - 12}" height="4" rx="2" fill="#272c35"/>`;
+  // a leader ribbon: who led at each turn
+  let start = 0;
+  for (let i = 1; i <= M.turns.length; i++) {
+    const lead = i < M.turns.length ? leaderAt(i) : -2;
+    if (i === M.turns.length || lead !== leaderAt(start)) {
+      const p = M.byIndex[leaderAt(start)];
+      h += `<rect x="${X(M.turns[start].turn)}" y="${y + 6}" width="${Math.max(1, X(M.turns[i - 1].turn) - X(M.turns[start].turn) + (W - 12) / M.limit)}"
+        height="3" fill="${p.color}" opacity=".85"><title>${esc(M.name(p.index))} leads T${M.turns[start].turn}–T${M.turns[i - 1].turn}</title></rect>`;
+      start = i;
+    }
+  }
+  for (const e of M.events) {
+    if (!MARKS.includes(e.kind)) continue;
+    const c = e.kind === "lead_change" ? "#e9c46a" : "#f0745a";
+    h += `<path d="M${X(e.turn)},${y - 13} l4,5 l-4,5 l-4,-5z" fill="${c}"><title>T${e.turn} · ${esc(e.text)}</title></path>`;
+  }
+  h += `<rect x="6" y="${y - 2}" width="${X(M.turns[S.ti].turn) - 6}" height="4" rx="2" fill="#80868f"/>`;
+  h += `<circle cx="${X(M.turns[S.ti].turn)}" cy="${y}" r="7" fill="#eceef2" stroke="#0f1115" stroke-width="2"/>`;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.innerHTML = h;
+}
+const leaders = M.turns.map((_, i) => M.civs.reduce((a, b) => M.series[b.index][i][0] > M.series[a.index][i][0] ? b : a).index);
+function leaderAt(i) { return leaders[i]; }
+(() => {
+  const el = $("scrub");
+  const go = e => {
+    const r = el.getBoundingClientRect(), turn = Math.round((e.clientX - r.left - 6) / (r.width - 12) * M.limit);
+    const i = M.turns.findIndex(t => t.turn >= Math.max(0, Math.min(M.limit, turn)));
+    setTurn(i < 0 ? M.last : i);
+  };
+  let down = false;
+  el.addEventListener("pointerdown", e => { down = true; el.setPointerCapture(e.pointerId); stop(); go(e); });
+  el.addEventListener("pointermove", e => { if (down) go(e); });
+  el.addEventListener("pointerup", () => { down = false; });
+})();
+
+// ---- events feed ----
+const FEED_KINDS = [["lead_change", "lead"], ["city_founded", "founded"], ["city_captured", "captured"],
+  ["city_destroyed", "razed"], ["civ_destroyed", "eliminated"], ["war_declared", "war"], ["tech_learned", "techs"],
+  ["unit_lost", "units lost"]];
+function renderKinds() {
+  const present = new Set(M.events.map(e => e.kind));
+  $("kfilter").innerHTML = FEED_KINDS.filter(([k]) => present.has(k)).map(([k, l]) =>
+    `<button class="chip ${S.kinds.has(k) ? "on" : ""}" data-k="${k}">${l}</button>`).join("");
+  for (const b of $("kfilter").children) b.onclick = () => {
+    S.kinds.has(b.dataset.k) ? S.kinds.delete(b.dataset.k) : S.kinds.add(b.dataset.k); renderKinds(); renderFeed();
+  };
+}
+function renderFeed() {
+  const turn = M.turns[S.ti].turn;
+  const items = M.events.filter(e => e.turn <= turn && S.kinds.has(e.kind)
+    && (S.focus == null || e.owner === S.focus || e.from === S.focus)).slice(-150).reverse();
+  $("feedscope").textContent = (S.focus == null ? "all civs" : M.name(S.focus)) + " · up to T" + turn;
+  $("feed").innerHTML = items.map((e, i) => `<li class="${e.turn === turn ? "now" : ""}" data-i="${i}">
+    <span class="t">T${e.turn}</span><span><span class="sw" style="background:${M.byIndex[e.owner]?.color || "#777"}"></span>${esc(e.text)}<span class="tag">${KIND_LABEL[e.kind] || e.kind}</span></span></li>`).join("")
+    || `<li><span></span><span class="k" style="color:var(--muted)">No events of these kinds yet.</span></li>`;
+  $("feed").querySelectorAll("li[data-i]").forEach(li => li.onclick = () => {
+    const e = items[+li.dataset.i];
+    setTurn(M.turns.findIndex(t => t.turn === e.turn));
+    if (e.x != null) centerOn(e.x, e.y, Math.max(S.view.hw, 16));
+  });
+}
+function centerOn(x, y, hw) {
+  const r = canvas.getBoundingClientRect();
+  S.view = {hw, box: {x0: x - r.width / 2 / hw, y0: y - r.height / 2 / (hw / 2)}};
+  draw();
+}
+
+// ---- state changes ----
+function setTurn(i, quiet) {
+  i = Math.max(0, Math.min(M.last, i));
+  const step = i === S.ti + 1;
+  S.ti = i;
+  if (step) {   // pulse this turn's located events while playing forward
+    const now = performance.now();
+    for (const e of M.turns[i].events)
+      if (e.x != null && ["city_founded", "city_captured", "city_destroyed", "lead_change"].includes(e.kind))
+        S.pulses.push({x: M.sx(e.x), y: e.y, color: M.byIndex[e.owner]?.rgb || [255, 255, 255], start: now});
+  }
+  const t = M.turns[i];
+  $("turnbig").innerHTML = `T${t.turn} <small>/ ${M.limit}</small>`;
+  document.title = `T${t.turn} · OpenCiv3 replay`;
+  draw(); renderStandings(); renderChart(); renderScrub(); renderFeed();
+}
+function setFocus(i) {
+  S.focus = i;
+  $("focusnote").style.display = i == null ? "none" : "block";
+  if (i != null) $("focusnote").innerHTML = `<span class="sw" style="background:${M.byIndex[i].color}"></span>Focused: ${esc(M.full(i))} · Esc to clear`;
+  draw(); renderStandings(); renderChart(); renderFeed();
+}
+function stop() { clearInterval(S.playing); S.playing = null; $("play").textContent = "Play"; }
+function play() {
+  if (S.playing) return stop();
+  if (S.ti === M.last) setTurn(0);
+  $("play").textContent = "Pause";
+  S.playing = setInterval(() => S.ti < M.last ? setTurn(S.ti + 1) : stop(), 1000 / +$("speed").value);
+}
+$("play").onclick = play;
+$("speed").onchange = () => { if (S.playing) { stop(); play(); } };
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "SELECT") return;
+  const k = e.key;
+  if (k === " ") { e.preventDefault(); play(); }
+  else if (k === "ArrowRight") { stop(); setTurn(S.ti + (e.shiftKey ? 10 : 1)); }
+  else if (k === "ArrowLeft") { stop(); setTurn(S.ti - (e.shiftKey ? 10 : 1)); }
+  else if (k === "Home") { stop(); setTurn(0); }
+  else if (k === "End") { stop(); setTurn(M.last); }
+  else if (k === "Escape") setFocus(null);
+  else if (/^[1-9]$/.test(k)) {
+    const ranks = M.ranks(S.ti), p = M.civs.find(c => ranks[c.index] === +k);
+    if (p) setFocus(S.focus === p.index ? null : p.index);
+  }
+});
+new ResizeObserver(() => { fit(); draw(); renderChart(); renderScrub(); }).observe($("stage"));
+
+renderLayers(); renderMetrics(); renderKinds(); setTurn(M.last);
+</script></body></html>
