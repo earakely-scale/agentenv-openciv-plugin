@@ -488,8 +488,10 @@ function star(ctx, cx, cy, r) {
 const M = new Match();
 let P = null;                           // the painter, made when the first document arrives
 const LIVE = !window.OPENCIV_DATA;
-// ?stream: a full-screen layout for broadcasting (agent-env openciv3 stream), with a director instead of controls.
+// ?stream: a full-screen layout for broadcasting (agent-env openciv3 stream), with a director instead of controls;
+// ?stream&client puts the spotlit agent's client view full size instead of in the corner.
 const STREAM = new URLSearchParams(location.search).has("stream");
+const STREAM_CLIENT = STREAM && new URLSearchParams(location.search).has("client");
 const VIDEOS = window.OPENCIV_VIDEOS || {};
 const S = {
   ti: 0, follow: true, view: "map", pov: null, focus: null, metric: 0, speed: 5, playing: null,
@@ -1392,6 +1394,7 @@ function direct() {
   if (S.view !== "map") setView("map");
   if (next === "overview") { closeClient(); setFocus(null); S.userMoved = false; fitMap(); draw(); return; }
   setFocus(p.index, {fly: true});
+  S.client.big = STREAM_CLIENT;
   if (M.live?.client && p.seat != null) openClient(p.index); else closeClient();
 }
 
