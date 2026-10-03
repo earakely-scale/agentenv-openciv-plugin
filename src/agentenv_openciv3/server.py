@@ -518,13 +518,14 @@ class OpenCiv3Env(AgentEnvEnvironment):
     async def _pace(self, seat: Seat) -> None:
         """The broadcast pace (new-game min_turn_seconds): in a game with several seats, the last seat still playing a
         turn ends it no sooner than that long after it began, so spectators can follow every turn. It waits with the
-        env free, as _seat_turn does; a new game meanwhile fails the call."""
+        env free, as _seat_turn does. A new game or an engine restart meanwhile fails the call: a restart takes the
+        turn back to its start, so the seat plays it again, as the seats waiting on the turn do."""
         pace = self.scenario.get("min_turn_seconds") or 0
         while self.multi and pace and all(s.ready or s.over for s in self.seats if s is not seat):
             left = self.turn_started + pace - time.monotonic()
             if left <= 0:
                 return
-            game = self.game_id
+            game, restarts = self.game_id, self.harness["engine_restarts"]
             seat.pacing, seat.ended_at = True, time.monotonic()
             self.lock.release()
             try:
@@ -534,6 +535,12 @@ class OpenCiv3Env(AgentEnvEnvironment):
                 seat.pacing, seat.last_call = False, time.monotonic()
             if self.game_id != game:
                 raise BridgeError("new_game", "a new game started; this one is over.")
+            if self.failed:
+                raise BridgeError("engine_failed", self.failed)
+            if self.harness["engine_restarts"] != restarts:
+                restarted = next(n for n in reversed(seat.notices) if n["kind"] == "engine_restarted")
+                raise BridgeError("engine_restarted", f"{restarted['text']}; end your turn again.",
+                                  suggest="get_turn_brief()")
 
     async def close(self) -> None:
         if self.stall_watch:

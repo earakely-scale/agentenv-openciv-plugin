@@ -259,3 +259,21 @@ async def test_a_new_game_while_the_last_seat_waits_for_the_pace_fails_its_end_t
     await env.new_game(**MATCH)
     assert all("a new game started" in err for err in await asyncio.gather(*waiting))
     assert env.turn == 1
+
+
+async def test_an_engine_restart_while_the_last_seat_waits_for_the_pace_has_every_seat_end_the_turn_again(
+        env, monkeypatch):
+    monkeypatch.setattr(server, "SEAT_WAIT_SECONDS", 3)
+    await env.new_game(**MATCH, min_turn_seconds=1)
+    leaders = {civ: Leader(env, civ) for civ in CIVS}
+    waiting = [asyncio.create_task(leaders[c].error("end_turn", skip_idle=True)) for c in CIVS]
+    await asyncio.sleep(0.3)
+    assert env.seats[2].pacing
+    env.bridge._proc.kill()
+    await env.bridge._proc.wait()
+    assert "!! the engine restarted from the start of turn 1" in await leaders["Rome"]("get_turn_brief")
+    again = ("the engine restarted from the start of turn 1; orders given since then are lost; every civilization ends "
+             "this turn again; end your turn again.")
+    assert all(again in err for err in await asyncio.gather(*waiting))
+    assert env.turn == 1 and not any(s.ready or s.pacing for s in env.seats)
+    assert all(t.startswith("TURN T1 → T2") for t in await end_turn(leaders))

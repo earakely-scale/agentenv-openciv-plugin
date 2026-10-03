@@ -15,8 +15,9 @@ def _asset(name: str) -> str:
 
 
 def _json(value) -> str:
-    """JSON safe inside a <script>: no `</` can close it."""
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+    """JSON safe inside a <script>: with no `<` at all, no text an agent wrote (`</script>`, `<!--<script>`) can end
+    the script early or keep it from ending."""
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c")
 
 
 def page(data: dict | None = None, videos: dict[str, dict] | None = None) -> str:

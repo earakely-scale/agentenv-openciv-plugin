@@ -560,6 +560,11 @@ function ask(title, html, yes = "OK", cls = "primary") {
   });
 }
 
+// A notice as the person reads it: a message from another leader with its sender, as agents read it, and its text as
+// written; the env's own notices without their tool hints.
+const noticeText = n => n.kind === "message"
+  ? `✉ ${n.from}${n.label ? ` (${n.label})` : ""} to ${n.to_all ? "all" : "you"}: "${n.text}"` : plain(n.text);
+
 // The start of a turn: what happened, as the game's advisors report it.
 function turnReport() {
   const s = state(), events = s.last_events || [], notices = S.view.notices || [];
@@ -567,9 +572,11 @@ function turnReport() {
   S.lastEventsTurn = s.turn;
   const noResearch = (s.blockers || []).some(b => b.kind === "no_research");
   if (!events.length && !notices.length) { if (noResearch) advisor("science"); return; }
+  const items = [...notices.map(n => ({...n, kind: "notice", text: noticeText(n)})),
+                 ...events.map(ev => ({...ev, text: plain(ev.text)}))];
   dialog(`<header><h2>Turn ${s.turn}</h2><span class="muted">${esc(state().civ)}</span><span class="grow"></span><button data-x>✕</button></header>
-    <div class="body"><ul class="plain events">${[...notices.map(n => ({...n, kind: "notice"})), ...events].map(ev =>
-      `<li class="${HOT.has(ev.kind) || ev.kind === "notice" ? "hot" : ""}" ${ev.x != null ? `data-x="${ev.x}" data-y="${ev.y}" tabindex="0" style="cursor:pointer"` : ""}>${esc(plain(ev.text))}</li>`).join("")}</ul>
+    <div class="body"><ul class="plain events">${items.map(ev =>
+      `<li class="${HOT.has(ev.kind) || ev.kind === "notice" ? "hot" : ""}" ${ev.x != null ? `data-x="${ev.x}" data-y="${ev.y}" tabindex="0" style="cursor:pointer"` : ""}>${esc(ev.text)}</li>`).join("")}</ul>
     <div class="actions"><button class="primary" data-x>Continue</button></div></div>`,
     {kind: "report", onClose: () => { if (noResearch) advisor("science"); }});
   for (const li of $$("#dialog li[data-x]")) li.onclick = () => { closeDialog(); centerOn(+li.dataset.x, +li.dataset.y); };

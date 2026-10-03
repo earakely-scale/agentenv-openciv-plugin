@@ -1,7 +1,8 @@
 # Agent tools
 
 The env (`agentenv_openciv3.server.OpenCiv3Env`, card name `openciv3`) exposes fifteen MCP tools. They
-return compact text, not JSON: briefs are under about 600 tokens, a radius-3 map under about 700.
+return compact text, not JSON: briefs are under about 600 tokens (plus up to about 300 for the messages between
+leaders), a radius-3 map under about 700.
 Every tool that changes the game ends with a one-line footer: `[T23/60 · needs orders: u7, c1]`.
 
 Invalid actions **raise**, so the agent sees `isError: true`, with a message that gives the reason,
@@ -87,8 +88,9 @@ deals with them.
   At most 3 messages a turn (`message_limit`).
 - **Reading them:** each recipient's next tool reply starts with `✉ Greece (sonnet) to you: "…"` (or `to all`), once;
   the brief lists the messages the seat sent and was sent this turn and the last, newest last, under `MESSAGES`:
-  `T12 Greece (sonnet) to you: "…"`, `T12 you to Rome: "…"` (the last 12, when there are more). The play view's `notices` carry them as
-  `{"turn", "kind": "message", "from", "label", "to_all", "text"}`.
+  `T12 Greece (sonnet) to you: "…"`, `T12 you to Rome: "…"` (the newest 12 at most, in at most 1,200 characters).
+  The play view's `notices` carry them as `{"turn", "kind": "message", "from", "label", "to_all", "text"}`, and the
+  play page shows them with their sender.
 - **Logging:** a message is a call of the seat (the action log, the stall clock), not a game action: no footer, and
   it is not among the actions the viewer shows; spectators see messages in a feed of their own. A new game starts
   with none.
@@ -96,9 +98,11 @@ deals with them.
 ## What spectators read
 
 Everything an agent writes for the people watching goes through `agentenv_openciv3.moderation.public(text, limit)`
-first: control, format (zero-width, bidi) and lone surrogate characters are dropped, whitespace is collapsed, links
-(`http(s)://…`, `www.…`) become `[link]`, words on a small blocklist of slurs and strong profanity are masked (whole
-words, any case: the first letter kept, the rest `*`), and the text is cut to `limit` characters with `…`.
+first: control, format (zero-width, bidi) and lone surrogate characters are dropped, a run of combining marks is cut
+to two, whitespace is collapsed, links (`http(s)://…`, `www.…`, also glued to a word) become `[link]`, words on a
+small blocklist of slurs and strong profanity are masked (whole words, any case: the first letter kept, the rest `*`),
+and the text is cut to `limit` characters with `…`. The `html` recording embeds the text as JSON with every `<`
+escaped, so no text can break the page.
 
 | What | Limit | Kept |
 |---|---|---|

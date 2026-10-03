@@ -18,10 +18,18 @@ def test_hidden_characters_go_and_whitespace_collapses():
     assert public("emoji 🏛️ and accents: Ελλάδα, Égypte", 50) == "emoji 🏛️ and accents: Ελλάδα, Égypte"
 
 
+def test_a_pile_of_combining_marks_is_cut_to_two():
+    assert public("z" + "\u0336" * 16 + "algo", 50) == "z\u0336\u0336algo"
+    assert public("o" + "\u200b\u0336" * 5, 50) == "o\u0336\u0336"
+    assert public("Vie\u0323\u0302t Nam, ภาษาไทย น้ำ, tiếng", 50) == "Vi\u1ec7t Nam, ภาษาไทย น้ำ, tiếng"
+
+
 def test_links_become_link():
     assert public("see https://evil.example/x?y=1, now", 80) == "see [link], now"
     assert public("(HTTP://A.B/c) and www.example.com.", 80) == "([link]) and [link]."
     assert public("plain words: http and www are fine", 80) == "plain words: http and www are fine"
+    assert public("glued: seehttps://evil.example/x and _www.evil.example", 80) == "glued: see[link] and _[link]"
+    assert public("Awww. Fine. Awww... www.", 80) == "Awww. Fine. Awww... www."
     assert public("http://" + "." * 50_000 + " ok", 12) == "[link]....." + "…"    # in linear time
 
 

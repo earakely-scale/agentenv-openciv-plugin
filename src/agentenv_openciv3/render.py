@@ -24,6 +24,9 @@ TERRAIN_NAMES = {"g": "grassland", "p": "plains", "d": "desert", "t": "tundra", 
                  "m": "mountains", "F": "forest", "j": "jungle", "s": "marsh", "v": "volcano", "~": "water"}
 BASELINE_LABELS = {"engine_ai": "built-in AI", "settler_bot": "settler bot", "null": "do-nothing"}
 MAX_UNIT_LINES, MAX_STANDING, MAX_CITY_LINES, MAX_EVENTS, MAX_AUTO, MAX_MESSAGES = 5, 6, 6, 5, 3, 12
+# The characters of messages a brief lists at most (about 300 tokens; the oldest are left out first): every brief
+# repeats them, and the seat has read each one in full once already.
+MESSAGE_CHARS = 1200
 # An item is delivered only when the city is bigger than its population cost (Settler 2, Worker 1 in the ruleset).
 MIN_SIZE = {"Settler": 3, "Worker": 2}
 IDLE_GOLD = 100
@@ -461,9 +464,12 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
     if events and s.get("last_events"):
         lines.append("EVENTS " + " | ".join(events_lines(s["last_events"])))
     if messages:
-        lines.append("MESSAGES" + (f" (the last {MAX_MESSAGES} of {len(messages)})"
-                                   if len(messages) > MAX_MESSAGES else ""))
-        lines += ["  " + m for m in messages[-MAX_MESSAGES:]]
+        shown = messages[-MAX_MESSAGES:]
+        while len(shown) > 1 and sum(map(len, shown)) > MESSAGE_CHARS:
+            shown = shown[1:]
+        lines.append("MESSAGES" + (f" (the last {len(shown)} of {len(messages)})"
+                                   if len(shown) < len(messages) else ""))
+        lines += ["  " + m for m in shown]
     lines.append(f"PLAN (T{plan_turn}) {plan}" if plan else "PLAN none — record your strategy with plan(text=...)")
     return "\n".join(lines)
 

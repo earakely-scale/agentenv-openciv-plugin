@@ -40,12 +40,14 @@ def test_the_page_embeds_the_app_and_the_data():
     live_page = viewer.page()
     assert "window.OPENCIV_DATA = null;" in live_page and "window.OPENCIV_VIDEOS = null;" in live_page
     assert "/*__" not in live_page
-    doc = {"game": "g-1", "turns": [{"events": [{"text": "</script><script>alert(1)</script>"}]}]}
+    # Agents' text ends up in the data: neither `</script>` nor `<!--<script>` may end the script or keep it open.
+    doc = {"game": "g-1", "turns": [{"events": [{"text": "</script><script>alert(1)</script>"}],
+                                      "messages": [{"from": 0, "to": "all", "text": "Hold <!--<script> the river"}]}]}
     videos = {"Rome": {"file": "x.client-A.mp4", "fps": 4, "turns": [0, 1]}}
     page = viewer.page(doc, videos)
-    assert "</script><script>alert" not in page and "<\\/script><script>alert(1)<\\/script>" in page
+    assert page.count("<script") == live_page.count("<script")
     embedded = page.split("window.OPENCIV_DATA = ", 1)[1].split("; window.OPENCIV_VIDEOS = ", 1)
-    assert json.loads(embedded[0]) == doc
+    assert "<" not in embedded[0] and json.loads(embedded[0]) == doc
     assert json.loads(embedded[1].split(";</script>", 1)[0]) == videos
 
 

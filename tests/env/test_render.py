@@ -116,6 +116,9 @@ def test_the_brief_lists_this_and_last_turns_messages_before_the_plan():
     many = render.brief(state(2, idle=1, standing=0, n_events=0), start_techs=2,
                         messages=[f'T34 Egypt to all: "{n}"' for n in range(20)]).splitlines()
     assert many[-14:-12] == ["MESSAGES (the last 12 of 20)", '  T34 Egypt to all: "8"']
+    long = [f'T34 Egypt to all: "{n} {"x" * 270}"' for n in range(6)]
+    capped = render.brief(state(2, idle=1, standing=0, n_events=0), start_techs=2, messages=long).splitlines()
+    assert capped[-6:-4] == ["MESSAGES (the last 4 of 6)", f"  {long[2]}"] and capped[-2] == f"  {long[5]}"
     assert render.message_line(render.leader("Greece", "sonnet"), "you", "Hi.") == 'Greece (sonnet) to you: "Hi."'
     assert render.message_line(render.leader("Egypt", None), "all", "Hi.") == 'Egypt to all: "Hi."'
 

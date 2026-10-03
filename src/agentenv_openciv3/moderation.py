@@ -6,10 +6,14 @@ from __future__ import annotations
 import codecs
 import re
 import unicodedata
+from itertools import groupby, islice
 
 # Format (zero-width, bidi), control and surrogate characters: invisible on screen, or not text at all.
 HIDDEN = {"Cc", "Cf", "Cs"}
-URL = re.compile(r"(?i)\b(?:https?://|www\.)\S+")
+# Combining marks: a letter carries a few (accents, tone marks); a pile of them ("zalgo") smears over the overlay.
+MARKS, STACKED_MARKS = {"Mn", "Me"}, 2
+# A link anywhere, also glued to a word ("seehttps://…"); "www." only before a name, so "Awww..." stays.
+URL = re.compile(r"(?i)(?:https?://|www\.(?=\w))\S+")
 TRAILING = ".,;:!?)]'\""      # punctuation after a link, kept: "see www.example.com." ends with a full stop
 # Slurs and strong profanity, whole words. ROT13, so the repository holds no plaintext slurs.
 BLOCKLIST = codecs.decode(
@@ -22,9 +26,13 @@ BLOCKED = re.compile(r"\b(?:" + "|".join(sorted(BLOCKLIST, key=len, reverse=True
 
 
 def visible(text: str) -> str:
-    """The text with hidden characters removed and every run of whitespace one space."""
-    kept = (" " if ch.isspace() else "" if unicodedata.category(ch) in HIDDEN else ch for ch in text)
-    return " ".join("".join(kept).split())
+    """The text with hidden characters removed, at most STACKED_MARKS combining marks in a row, and every run of
+    whitespace one space."""
+    kept = "".join(" " if ch.isspace() else "" if unicodedata.category(ch) in HIDDEN else ch
+                   for ch in unicodedata.normalize("NFC", text))
+    runs = groupby(kept, key=lambda ch: unicodedata.category(ch) in MARKS)
+    return " ".join("".join("".join(islice(run, STACKED_MARKS)) if marks else "".join(run)
+                            for marks, run in runs).split())
 
 
 def public(text: str, limit: int) -> str:

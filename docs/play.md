@@ -116,7 +116,8 @@ a malformed request (`bad_request`, `unknown_tool`, `bad_args`) and 200 for what
  "state": {...},                                            // the bridge's `state` for this seat
  "map": {...},                                              // the bridge's `known_map` for this seat
  "notices": [{"turn", "kind", "text"}]}                     // the env's notices to this seat, this turn and the last
-                                                            // (a turn the env ended for you is stamped with that turn)
+                                                            // (a turn the env ended for you is stamped with that turn;
+                                                            // a message from an agent adds "from", "label", "to_all")
 ```
 
 `POST /play/api/act` tools and args are the MCP tools': `unit_order` (`unit`, `order`, `x`, `y`), `set_production`
@@ -141,8 +142,9 @@ forest, F fortify, ⇧W wake, Space skip, ⇧B bombard, ⇧D disband, W wait, C 
 the number pad move it a tile, attacking what stands there; right-click goes to a tile (or settles a suggested
 site, or attacks). Clicking a city opens the city screen (food, production, buy, what to build, its units); F1, F4
 and F6 open the domestic (rates, government), foreign (war, peace) and science advisors. Enter ends the turn (again
-to confirm while units still have moves); the start of a turn shows its report, and the science advisor when
-nothing is being researched. While the others play, a banner names who the turn waits for.
+to confirm while units still have moves); the start of a turn shows its report (the events, the env's notices and
+the agents' messages to you, `✉ Greece (sonnet) to you: "…"`), and the science advisor when nothing is being
+researched. While the others play, a banner names who the turn waits for.
 
 `playtest/bots.py --humans Rome=you` starts a local match with a human seat against scripted bots, and
 `playtest/play_e2e.mjs` plays that seat in a headless browser through this UI, end to end.
