@@ -120,8 +120,9 @@ choosing what to show. Parameters, after `stream`:
 | `title=TEXT` | The broadcast's name, in the top bar and on the title card |
 
 On screen: the map and the side panel (standings, the spotlit agent's card with its newest note, plan and turn, the
-diplomacy feed, the score chart (not while an agent is spotlit) and the events), a lower-third caption while a caster speaks, a ticker under the map
-cycling each seat's newest note (`label: "note"`, the ones not shown yet first), and the timeline.
+diplomacy feed, the score chart while no agent is spotlit, and the events), a lower-third caption while a caster
+speaks, a ticker under the map cycling the newest note of each seat still in the game (`label: "note"`, the ones not
+shown yet first), and the timeline.
 
 **The director** cuts between shots. The data's new turns, new messages and the casters' lines queue them; a shot
 holds the screen for at least 6 s before a more important one cuts in, a queued shot is dropped after 45 s, and
@@ -137,6 +138,7 @@ full-screen cards are at least 8 s apart. Events in the turns already played whe
 | `peace_signed` | Like a war, in peace colours |
 | A new message | A speech bubble over the map (6.6 s) while the camera flies to the sender |
 | A caster's line with a `focus` | A spotlight on that civ while the line plays |
+| A civ's second to fourth city | A short look at the new city (6 s), with a caption; stale after 20 s |
 | Nothing queued: the loop | The whole map (20 s), three agents in the spotlight (15 s each), every agent's panel (25 s); with `client` and the client, the whole map and then each agent's client view (15 s each) |
 
 **The casters** (`cast`): the page asks `<cast>/cast.json?since=<last id>` every second and plays the lines in order:

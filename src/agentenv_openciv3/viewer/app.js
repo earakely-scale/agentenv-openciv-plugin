@@ -1665,11 +1665,12 @@ function chyron(e, ms) {
   flash(el, ms);
 }
 
-// ---- the notes ticker: each seat's newest end_turn note, the ones not shown yet first ----
+// ---- the notes ticker: each seat still in the game, its newest end_turn note, the ones not shown yet first ----
 
 function renderTicker() {
   if (!M.ready || !$("#ticker")) return;
-  const notes = M.seats.map(p => ({p, n: M.lastNote(M.last, p.index)})).filter(x => x.n);
+  const notes = M.seats.filter(p => !M.series[p.index][M.last][5]).map(p => ({p, n: M.lastNote(M.last, p.index)}))
+    .filter(x => x.n);
   $("#ticker").hidden = !notes.length;
   if (!notes.length) return;
   const key = x => `${x.n.turn}:${x.p.index}`, fresh = notes.filter(x => !bc.notes.has(key(x)));
