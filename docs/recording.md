@@ -60,13 +60,20 @@ in memory, per turn: its game actions and how many calls succeeded and failed. T
   per seat, `<name>.client-<label or civ>.mp4` (e.g. `openciv3-seed1-seats.client-opus.mp4`), each a frame per
   kept turn from that seat's point of view; `client_seats` limits it to some seats.
 
-**What a frame shows:**
-- **The map:** the diamond grid drawn as diamonds. Terrain is coloured; borders are tinted with the owner's colour; rivers are blue lines. Cities are discs in the owner's colour with name and size. Units are small dots.
-- **A side panel:**
-  - the turn and limit;
-  - the scoreboard (civ, score, cities, pop, techs), with the human highlighted;
-  - the agent's actions that turn, one per line, for example `u4 settle → (32,28)` and `c1 builds Settler`;
-  - the turn's events.
+**What a frame shows** (mp4, gif, png and the live view's map): one 1920x1080 frame per turn, drawn from the
+viewer's data (`matchdata.MatchData`, [viewer.md](viewer.md)). A frame for turn T shows nothing after T.
+- **The map:** cut at the column with the least land and cropped to the land. Borders and a tint in each civ's
+  colour; cities are discs sized by population, capitals starred; military units are dots. Labels go to capitals,
+  then the largest cities, and never overlap. A city captured or razed in the last few turns is ringed in red.
+  `view=agent` draws only the tiles some seat has explored.
+- **Standings:** rank and its change over 10 turns, score bar, cities, pop, techs and a 40-turn sparkline. Under
+  each civ, in games with agents or wars: the seat's tool calls and failures in the turn just played and its
+  latest game action (an AI civ's government instead), and whom it is at war with.
+- **Territory:** each civ's share of the claimed tiles.
+- **Key moments:** eliminations, captures, razings, wars, peace, lead changes, governments, foundings and techs,
+  ranked by weight and age; eliminations, captures, razings and wars stand out in red.
+- **The score chart:** every civ over the turns so far (the y scale follows them), lead changes on the axis, and
+  the baselines' scores when the env plays them.
 
 Rendering lives in `agentenv_openciv3.recording` and uses Pillow only, so the playtest harness and
 tests can call it directly on a directory of snapshots.

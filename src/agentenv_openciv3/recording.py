@@ -641,7 +641,7 @@ class Renderer:
         ranks, prev = self.ranks[ti], self.ranks[ti - 10] if ti >= 10 else None
         order = sorted(self.civs, key=lambda p: ranks[p["index"]])
         score = self.score[ti]
-        lead_score = max(1, score[order[0]["index"]][0])
+        lead_score = max([1] + [score[p["index"]][0] for p in order])
         n = len(order)
         row_h = min(46 if two else 40, max(30 if two else 24, (H - 470 - y) // max(1, n)))
         top = y
@@ -849,7 +849,10 @@ class Renderer:
         for v in range(0, int(ytop) + 1, step):
             d.line([(left * S, Y(v) * S), (right * S, Y(v) * S)], fill=GRID if v else (58, 63, 72), width=S)
         xstep = next(s for s in (5, 10, 25, 50, 100, 250, 500, 1000, 10 ** 9) if self.limit / s <= 8)
-        for t in range(0, self.limit + 1, xstep):
+        ticks = list(range(0, self.limit + 1, xstep))
+        if ticks[-1] != self.limit and X(self.limit) - X(ticks[-1]) > 36:
+            ticks.append(self.limit)
+        for t in ticks:
             d.line([(X(t) * S, bottom * S), (X(t) * S, (bottom + 4) * S)], fill=(58, 63, 72), width=S)
         d.line([(X(now) * S, (top - 10) * S), (X(now) * S, bottom * S)], fill=(84, 90, 100), width=S)
         ends: list[tuple[float, float, str, str, tuple, bool]] = []
@@ -861,7 +864,7 @@ class Renderer:
                 ends.append((xy[-1][1] / S, xy[-1][0] / S, BASELINE_LABELS.get(policy, policy), str(pts[-1][1]),
                              MUTED, False))
         ranks = self.ranks[ti]
-        leader = min(self.civs, key=lambda p: ranks[p["index"]])["index"]
+        leader = min(self.civs, key=lambda p: ranks[p["index"]])["index"] if self.civs else None
         for p in sorted(self.civs, key=lambda p: (p["index"] == leader, -ranks[p["index"]])):
             i = p["index"]
             vals = self.series[i][: ti + 1]
@@ -885,7 +888,7 @@ class Renderer:
         cd.text((bw - 12, 12), txt("◆ lead change"), font=sf, fill=MUTED, anchor="ra")
         for v in range(0, int(ytop) + 1, step):
             cd.text((left - 8, Y(v)), str(v), font=sf, fill=MUTED, anchor="rm")
-        for t in range(0, self.limit + 1, xstep):
+        for t in ticks:
             cd.text((X(t), bottom + 8), f"T{t}", font=sf, fill=MUTED, anchor="mt")
         if 0 < now < self.limit:
             cf = font(11, bold=True)
