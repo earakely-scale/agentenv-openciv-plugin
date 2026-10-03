@@ -471,7 +471,7 @@ def test_the_casters_never_say_what_the_env_masks(fake):
     assert "quoting it unless it is rude" in fake.prompts[-1] and "stays unsaid" in caster.SYSTEM
     said = [line["text"] for line in c.lines[3:]]
     assert said == ['Greece goes nuclear: "Rome, you bleep bleep coward."', "Rome, you bleep bleep coward. Bold words."]
-    assert [s["input"] for s in fake.speech[3:]] == said
+    assert sorted(s["input"] for s in fake.speech[3:]) == sorted(said)   # voiced in parallel
 
 
 def test_the_casters_block_the_words_the_env_blocks():
