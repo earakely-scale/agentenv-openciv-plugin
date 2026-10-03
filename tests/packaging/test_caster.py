@@ -301,9 +301,13 @@ def test_failures_are_survived_and_the_key_is_never_printed(fake, capsys):
     clock.now += caster.RETRY_SECONDS
     c.tick()
     assert len(c.lines) == 5 and c.lines[3]["audio"] == "audio/4.wav"
+    fake.data_down = True   # the env is gone: nothing to talk about
+    until_quiet(c, clock)
+    c.tick()
+    assert len(c.lines) == 5
     out = capsys.readouterr()
     printed = out.out + out.err
-    assert "no match data" in printed and printed.count("no match data") == 1
+    assert printed.count("no match data") == 2   # once each time it goes away
     assert "HTTP 500 bad key <cast key>" in printed and "HTTP 429 slow down" in printed
     assert "no JSON in the reply" in printed and "no lines in the reply" in printed
     assert KEY not in printed

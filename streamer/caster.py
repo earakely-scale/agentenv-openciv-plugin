@@ -248,8 +248,8 @@ class Caster:
             self.polled_at = now
             self.poll()
         due = self.speaking_until - now <= LEAD_SECONDS + self.writing_seconds
-        if self.finished or now < self.retry_at or not (due or self.match.over):   # the outro waits for no one
-            return
+        if self.finished or self.data_down or now < self.retry_at or not (due or self.match.over):
+            return   # the outro waits for no one; with the match data gone, there is nothing to talk about
         if beat := self.next_beat():
             self.cast(beat)
 
