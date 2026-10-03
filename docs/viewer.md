@@ -121,12 +121,16 @@ choosing what to show. Parameters, after `stream`:
 
 On screen: the map and the side panel (standings, the spotlit agent's card with its newest note, plan and turn, the
 diplomacy feed, the score chart while no agent is spotlit, and the events), a lower-third caption while a caster
-speaks, a ticker under the map cycling the newest note of each seat still in the game (`label: "note"`, the ones not
-shown yet first), and the timeline.
+speaks, a ticker under the map with the newest note of each seat still in the game (`label: "note"`, every 5 s, seat
+by seat, a note not shown yet before the others), and the timeline.
 
-**The director** cuts between shots. The data's new turns, new messages and the casters' lines queue them; a shot
-holds the screen for at least 6 s before a more important one cuts in, a queued shot is dropped after 45 s, and
-full-screen cards are at least 8 s apart. Events in the turns already played when the page opens are not replayed.
+**The director** cuts between shots. The data's new turns and new messages queue them; a shot holds the screen for at
+least 6 s before a more important one cuts in, a queued shot is dropped after 45 s, and full-screen cards are at least
+8 s apart. Events in the turns already played when the page opens are not replayed. Messages can come faster than
+their bubbles, so once the loop (last row) has been off the screen for 30 s, messages and new cities wait while it shows
+its next wide shot (the whole map or every agent's panel) whole. The casters steer the loop rather than cut away from
+it: a line about a civ sends the next spotlight to that civ, and turns a spotlight already on screen for 6 s that has
+at least 6 s left.
 
 | Shot (most important first) | What it shows |
 |---|---|
@@ -134,10 +138,9 @@ full-screen cards are at least 8 s apart. Events in the turns already played whe
 | `civ_destroyed` | An "eliminated" card, then the whole map |
 | `city_captured`, `city_destroyed` | The camera flies in on the city, with a caption naming the event; with the client, a capture cuts to the taker's client view |
 | `war_declared` | A card splitting the screen between the two sides' colours, then the camera on their border (or their closest cities) |
-| A new leader | "X TAKES THE LEAD" (4 s), then a spotlight on it; at most one every 45 s, after turn 5 |
+| A new leader | "X TAKES THE LEAD" (4 s), then a spotlight on it, once it has led two turns running (and if it still leads when the card's turn comes); at most one every 45 s, after turn 5 |
 | `peace_signed` | Like a war, in peace colours |
-| A new message | A speech bubble over the map (6.6 s) while the camera flies to the sender |
-| A caster's line with a `focus` | A spotlight on that civ while the line plays |
+| A new message | A speech bubble over the map (6.6 s) while the camera flies to the sender; one waits per sender, a newer message taking the older one's place, stale after 30 s (the diplomacy feed has them all) |
 | A civ's second to fourth city | A short look at the new city (6 s), with a caption; stale after 20 s |
 | Nothing queued: the loop | The whole map (20 s), three agents in the spotlight (15 s each), every agent's panel (25 s); with `client` and the client, the whole map and then each agent's client view (15 s each) |
 

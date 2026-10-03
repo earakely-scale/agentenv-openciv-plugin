@@ -1449,42 +1449,67 @@ function keys() {
 
 // ======================================================================== broadcast (?stream)
 
-// The stream's director cuts between shots. The match's events, the agents' messages and the casters' lines queue
-// shots by priority; a shot holds the screen for at least DWELL before a more important one cuts in, a queued shot goes
-// stale after MAX_AGE, and full-screen cards are at least CARD_GAP apart. With nothing queued it runs the loop: the
-// whole map (20 s), three agents in the spotlight (15 s each: the map flies to the civ, its card shows its plan and
-// turn, and with the client its client view sits in the corner), then every agent's panel (25 s); with ?stream&client
-// and the client, the whole map, then every agent's client view full size in turn. A title card opens the broadcast;
-// once the game is over a winner card leads to the summary, which stays up.
-const DWELL = 6000, MAX_AGE = 45000, CARD_GAP = 8000, LEAD_GAP = 45000;
+// The stream's director cuts between shots. The match's events and the agents' messages queue shots by priority; a
+// shot holds the screen for at least DWELL before a more important one cuts in, a queued shot goes stale after MAX_AGE,
+// and full-screen cards are at least CARD_GAP apart. With nothing queued it runs the loop: the whole map (20 s), three
+// agents in the spotlight (15 s each: the map flies to the civ, its card shows its plan and turn, and with the client
+// its client view sits in the corner), then every agent's panel (25 s); with ?stream&client and the client, the whole
+// map, then every agent's client view full size in turn. Messages can come faster than their bubbles, and each bubble
+// already shows a civ: once the loop has been off the screen for LOOP_GAP, minor shots wait while it shows its next wide
+// shot (the whole map or every agent's panel) whole. The casters steer the loop: a line about a civ sends the next
+// spotlight to it, or turns the one on screen. A title card opens the broadcast; once the game is over a winner card
+// leads to the summary, which stays up.
+const DWELL = 6000, MAX_AGE = 45000, CARD_GAP = 8000, LEAD_GAP = 45000, LOOP_GAP = 30000, MINOR = 5;
 class Director {
-  constructor(loop) { this.loop = loop; this.queue = []; this.keys = new Set(); this.on = null; this.lastCard = -Infinity; this.step = 0; }
-  // Queue a shot {key, prio (lower first), ms, card, focus, expires, run}; a key queued before is ignored.
+  constructor(loop, now = 0) {
+    Object.assign(this, {loop, queue: [], keys: new Set(), on: null, lastCard: -Infinity, loopAt: now, step: 0, seq: 0, wish: null});
+  }
+  // Queue a shot {key, prio (lower first), ms, card, focus, expires, valid, group, run}; it is dropped once it expires
+  // or valid() turns false. A key queued before is ignored; a shot of a group takes the place of the one of that group
+  // still waiting (a sender's newer message, the older's place).
   add(shot, now) {
     if (this.keys.has(shot.key)) return false;
     this.keys.add(shot.key);
-    this.queue.push({expires: now + MAX_AGE, ...shot, born: now});
+    const k = shot.group == null ? -1 : this.queue.findIndex(s => s.group === shot.group);
+    const queued = {expires: now + MAX_AGE, ...shot, seq: k < 0 ? this.seq++ : this.queue[k].seq};
+    if (k < 0) this.queue.push(queued); else this.queue[k] = queued;
     return true;
   }
+  // A caster's line about civ `focus`, until `until`: the loop's spotlights go to it.
+  steer(focus, until) { this.wish = {focus, until}; }
   // The shot to cut to at `now`, or null to stay on the one on screen.
   next(now) {
-    this.queue = this.queue.filter(s => s.expires > now);
+    this.queue = this.queue.filter(s => s.expires > now && s.valid?.() !== false);
     const on = this.on, held = on ? now - on.start : Infinity, done = !on || held >= on.ms;
-    const best = this.queue.filter(s => !s.card || now - this.lastCard >= CARD_GAP)
-      .sort((a, b) => a.prio - b.prio || a.born - b.born)[0];
+    const starved = !on?.loop && now - this.loopAt >= LOOP_GAP;
+    const waiting = starved ? this.queue.filter(s => s.prio < MINOR) : this.queue;
+    const best = waiting.filter(s => !s.card || now - this.lastCard >= CARD_GAP)
+      .sort((a, b) => a.prio - b.prio || a.seq - b.seq)[0];
     if (best && (done || (held >= DWELL && best.prio < on.prio))) {
       this.queue.splice(this.queue.indexOf(best), 1);
       return this.cut(best, now);
     }
-    return done && !this.queue.length ? this.cut(this.loop(this.step++), now) : null;   // a card waits for its gap
+    if (waiting.length) return null;   // it waits for the dwell, or a card for its gap
+    const wish = this.wish?.until > now ? this.wish.focus : null;
+    if (done) {
+      let shot = this.loop(this.step++, wish);
+      while (starved && shot.focus != null) shot = this.loop(this.step++, wish);
+      return this.cut({...shot, loop: true, ...(starved && {prio: MINOR})}, now);
+    }
+    if (on.loop && on.focus != null && wish != null && wish !== on.focus && held >= DWELL && on.ms - held >= DWELL) {
+      const turned = this.loop(this.step - 1, wish);   // the spotlight on screen turns, in the time it has left
+      if (turned.focus === wish) return this.cut({...turned, loop: true, prio: on.prio, ms: on.ms - held}, now);
+    }
+    return null;
   }
   cut(shot, now) {
     if (shot.card) this.lastCard = now;
+    if (this.on?.loop) this.loopAt = now;
     return (this.on = {...shot, start: now});
   }
 }
 
-const bc = {director: null, timers: [], leader: null, leadAt: -Infinity, notes: new Set(), tick: 0};
+const bc = {director: null, timers: [], leader: null, leadAt: -Infinity, notes: new Map()};
 function later(ms, fn) { bc.timers.push(setTimeout(fn, ms)); }
 function tick() {
   if (!M.ready || !bc.director) return;
@@ -1497,7 +1522,8 @@ function tick() {
 }
 function broadcastStart() {
   for (const t of bc.timers) clearTimeout(t);
-  Object.assign(bc, {director: new Director(loopShot), timers: [], leader: M.leaders[M.last], leadAt: -Infinity, notes: new Set()});
+  Object.assign(bc, {director: new Director(loopShot, performance.now()), timers: [], leader: M.leaders[M.last], leadAt: -Infinity,
+    notes: new Map()});
   for (const m of M.messagesUpTo(M.last)) bc.director.keys.add(msgKey(m));   // only what happens from now on
   bc.director.add({key: "title", prio: 0, card: true, ms: 9000, run: () => { overview(); card("title", titleCard(), 8000); }},
     performance.now());
@@ -1510,13 +1536,18 @@ function broadcastNews(wasLast) {
   let k = M.events.length; while (k > 0 && M.events[k - 1].ti > wasLast) k--;
   for (const e of M.events.slice(k)) { const s = eventShot(e); if (s) d.add(s, now); }
   for (const m of M.messagesUpTo(M.last)) d.add(messageShot(m), now);
-  const lead = M.leaders[M.last];
-  if (lead != null && lead !== bc.leader && now - bc.leadAt >= LEAD_GAP && M.turns[M.last].turn > 5) {
-    bc.leader = lead; bc.leadAt = now; d.add(leadShot(M.byIndex[lead]), now);
-  }
+  const lead = newLeader(now);
+  if (lead != null) { bc.leader = lead; bc.leadAt = now; d.add(leadShot(M.byIndex[lead]), now); }
   if ($("#ticker").hidden) renderTicker();
   if (M.live?.game_over) d.add({key: "over", prio: 0, card: true, ms: Infinity,
     run: () => { overview(); card("win", winCard(), 8000); later(7600, () => setView("summary")); }}, now);
+}
+// A score leader worth a card: a new one that has led two turns running (in a close race the lead flips straight back),
+// after turn 5, at most one every LEAD_GAP.
+function newLeader(now) {
+  const lead = M.leaders[M.last];
+  return lead != null && lead !== bc.leader && M.leaders[M.last - 1] === lead && now - bc.leadAt >= LEAD_GAP
+    && M.turns[M.last].turn > 5 ? lead : null;
 }
 
 // ---- shots ----
@@ -1535,17 +1566,20 @@ function spotlight(p) {
   S.client.big = STREAM_CLIENT;
   if (M.live?.client && p.seat != null) openClient(p.index);
 }
-function loopShot(step) {
-  const seats = (M.seats.length ? M.seats : M.civs).filter(p => !M.series[p.index][M.last][5]);
-  const shot = (ms, run, p = null) => ({key: "loop", prio: 9, ms, run, focus: p?.index ?? null});
-  if (!seats.length) return shot(20000, overview);
+// The loop's shot number `step`; a spotlight goes to civ `wish` (a caster is talking about it) when it is in the game.
+function loopShot(step, wish = null) {
+  const playing = p => !M.series[p.index][M.last][5], seats = (M.seats.length ? M.seats : M.civs).filter(playing);
+  const shot = (key, ms, run, p = null) => ({key, prio: 9, ms, run, focus: p?.index ?? null});
+  const overall = () => shot("overview", 20000, overview), wished = M.civs.find(p => p.index === wish && playing(p));
+  const spot = p => { const q = wished || p; return shot("spotlight", 15000, () => spotlight(q), q); };
+  if (!seats.length) return overall();
   if (STREAM_CLIENT && M.live?.client) {
     const p = seats[step % (seats.length + 1) - 1];
-    return p ? shot(15000, () => spotlight(p), p) : shot(20000, overview);
+    return p ? spot(p) : overall();
   }
   const k = step % 5, p = seats[(Math.floor(step / 5) * 3 + k - 1) % seats.length];
-  return k === 0 ? shot(20000, overview) : k === 4 ? shot(25000, () => { closeClient(); setFocus(null); setView("agents"); })
-    : shot(15000, () => spotlight(p), p);
+  return k === 0 ? overall() : k === 4 ? shot("agents", 25000, () => { closeClient(); setFocus(null); setView("agents"); })
+    : spot(p);
 }
 const near = (x, y, r) => ({x0: x - r, x1: x + r, y0: y - r * 2, y1: y + r * 2});
 function eventShot(e) {
@@ -1575,10 +1609,11 @@ function eventShot(e) {
   return null;
 }
 const leadShot = p => ({key: `lead:${p.index}:${M.last}`, prio: 3, card: true, ms: 10000, focus: p.index,
-  run: () => { onMap(); card("lead", leadCard(p), 4000); later(3600, () => spotlight(p)); }});
+  valid: () => M.leaders[M.last] === p.index, run: () => { onMap(); card("lead", leadCard(p), 4000); later(3600, () => spotlight(p)); }});
 const msgKey = m => `msg:${m.turn}:${m.from}:${m.text}`;
-const messageShot = m => ({key: msgKey(m), prio: 5, ms: 7000, focus: m.from,
-  run: () => { onMap({focus: m.from, box: M.civBox(m.from, S.ti, 4)}); bubble(m, 6600); }});
+// One bubble waits per sender, its newest message; the diplomacy feed has them all, so a bubble goes stale after 30 s.
+const messageShot = m => ({key: msgKey(m), group: "msg:" + m.from, prio: MINOR, ms: 7000, focus: m.from,
+  expires: performance.now() + 30000, run: () => { onMap({focus: m.from, box: M.civBox(m.from, S.ti, 4)}); bubble(m, 6600); }});
 // Where two civs meet: their shared border, or else the two closest cities of theirs.
 function borderBox(a, b) {
   const own = M.owners(S.ti), pts = [];
@@ -1665,7 +1700,7 @@ function chyron(e, ms) {
   flash(el, ms);
 }
 
-// ---- the notes ticker: each seat still in the game, its newest end_turn note, the ones not shown yet first ----
+// ---- the notes ticker: the newest end_turn note of each seat still in the game, seat by seat ----
 
 function renderTicker() {
   if (!M.ready || !$("#ticker")) return;
@@ -1673,10 +1708,19 @@ function renderTicker() {
     .filter(x => x.n);
   $("#ticker").hidden = !notes.length;
   if (!notes.length) return;
-  const key = x => `${x.n.turn}:${x.p.index}`, fresh = notes.filter(x => !bc.notes.has(key(x)));
-  const x = fresh.length ? fresh.sort((a, b) => a.n.turn - b.n.turn || a.p.seat - b.p.seat)[0] : notes[bc.tick++ % notes.length];
-  bc.notes.add(key(x));
+  const x = nextNote(notes, bc.notes);
   $("#tk").innerHTML = `<div class="item">${sw(x.p)}<b>${lab(x.p)}:</b><span class="q">${quote(x.n.text)}</span><span class="t">T${x.n.turn}</span></div>`;
+}
+// Of the seats' notes [{p, n}], the one to show next: a note not shown yet before the others, and of those the seat
+// shown longest ago (never first). `shown`: seat index -> the note shown last, the seat shown longest ago first.
+function nextNote(notes, shown) {
+  const order = [...shown.keys()], key = x => `${x.n.turn}:${x.n.text}`;
+  const fresh = notes.filter(x => shown.get(x.p.index) !== key(x));
+  const x = (fresh.length ? fresh : notes)
+    .sort((a, b) => order.indexOf(a.p.index) - order.indexOf(b.p.index) || a.p.seat - b.p.seat)[0];
+  shown.delete(x.p.index);
+  shown.set(x.p.index, key(x));
+  return x;
 }
 
 // ---- the casters (&cast=URL): their lines in order, voiced, with a caption while each plays ----
@@ -1720,9 +1764,7 @@ function speak() {
 function castFocus(line) {
   if (!line.focus || !bc.director || !M.ready) return;
   const f = String(line.focus).toLowerCase(), p = M.civs.find(q => q.civ.toLowerCase() === f || (q.label || "").toLowerCase() === f);
-  const now = performance.now(), ms = Math.max(DWELL, (line.seconds || 4) * 1000);
-  if (p && bc.director.on?.focus !== p.index)
-    bc.director.add({key: "cast:" + line.id, prio: 6, ms, expires: now + ms, focus: p.index, run: () => spotlight(p)}, now);
+  if (p) bc.director.steer(p.index, performance.now() + Math.max(DWELL, (line.seconds || 4) * 1000));
 }
 
 // ======================================================================== startup and live polling

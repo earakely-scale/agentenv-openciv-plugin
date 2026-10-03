@@ -16,6 +16,7 @@ import time
 import urllib.parse
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -244,8 +245,21 @@ def test_the_director_holds_shots_by_priority_and_skips_the_backlog(doc, tmp_pat
       d = new Director(loop); d.add(shot("msg", 5, 7000), 0); d.next(0); d.add(shot("cast", 6, 4000), 100);
       out.lower = [d.next(6500), d.next(7000)].map(key);
       d = new Director(loop); d.add(shot("war", 2, 10000), 0); d.next(0);
-      d.add(shot("cast", 6, 4000, {expires: 4000}), 0);
+      d.add(shot("city", 7, 6000, {expires: 4000}), 0);
       out.expired = key(d.next(10000));
+      d = new Director(loop); d.add(shot("a1", 5, 7000, {group: "a"}), 0); d.add(shot("b1", 5, 7000, {group: "b"}), 0);
+      d.add(shot("a2", 5, 7000, {group: "a"}), 1000);
+      out.grouped = [d.next(1000), d.next(8000), d.next(15000)].map(key);
+      let still = true;
+      d = new Director(loop); d.add(shot("lead", 3, 10000, {valid: () => still}), 0); still = false;
+      out.invalid = key(d.next(0));
+      Object.assign(bc, {leader: 0, leadAt: -Infinity});
+      M.leaders[M.last - 1] = 0; M.leaders[M.last] = 1;
+      out.lead = [newLeader(0)];
+      M.leaders[M.last - 1] = 1;
+      out.lead.push(newLeader(0));
+      bc.leadAt = -10000;
+      out.lead.push(newLeader(0));
       const lines = [1, 2, 3].map(id => ({id, seconds: 4}));
       const now = Date.now() / 1000;
       out.backlog = [stillOn(lines, now + 6), stillOn(lines, now - 1)].map(l => l.map(x => x.id));
@@ -259,5 +273,57 @@ def test_the_director_holds_shots_by_priority_and_skips_the_backlog(doc, tmp_pat
     assert out["stale"] == ["over", "loop"]                       # a shot queued over 45 s ago is dropped
     assert out["dedupe"] == [True, False]
     assert out["lower"] == [None, "cast"]                         # a less important shot waits its turn
-    assert out["expired"] == "loop"                               # a caster's focus lasts only its line
+    assert out["expired"] == "loop"                               # a shot can go stale sooner (a new city)
+    assert out["grouped"] == ["a2", "b1", "loop"]                 # a sender's newer message takes the older's place
+    assert out["invalid"] == "loop"                               # a lead lost while its card waited is not shown
+    assert out["lead"] == [None, 1, None]                         # a lead held two turns, one card every 45 s
     assert out["backlog"] == [[2, 3], []]                         # a page opened mid-cast skips the said lines
+
+
+def test_the_director_shares_a_busy_broadcast(doc, tmp_path):
+    """Three minutes with a caster's line about a civ every 6 s and, from 20 s to 140 s, a message every 2 s from one
+    of three senders: the loop keeps getting the screen (while the bubbles flood in, its wide shots: the whole map and
+    every agent's panel), its spotlights go where the casters look, each bubble shows its sender's newest message, and
+    no shot is cut short."""
+    probe = """
+      const civs = M.civs.slice(0, 3).map(p => p.index), d = new Director(loopShot), cuts = [], newest = {};
+      for (let t = 0; t <= 180000; t += 250) {
+        if (t % 6000 === 0) d.steer(civs[t / 6000 % 2], t + 6000);
+        if (t >= 20000 && t < 140000 && t % 2000 === 0) {
+          const from = civs[t / 2000 % 3];
+          newest[from] = t;
+          d.add({key: "m" + t, group: "msg:" + from, prio: MINOR, ms: 7000, focus: from, sent: t}, t);
+        }
+        const s = d.next(t);
+        if (s) cuts.push({t, key: s.key, focus: s.focus, wish: d.wish.focus,
+                          newest: s.sent == null || s.sent === newest[s.focus]});
+      }
+      $("#probe").textContent = JSON.stringify(cuts);"""
+    page = tmp_path / "busy.html"
+    page.write_text(probed(viewer.page(doc), probe), encoding="utf-8")
+    cuts = run(page.as_uri(), 500, tmp_path)
+    loop = [c for c in cuts if c["key"] in ("overview", "spotlight", "agents")]
+    gone = {a["t"]: b["t"] for a, b in pairwise(cuts)}   # when each shot left the screen
+    assert {c["key"] for c in loop if 20000 <= c["t"] < 140000} == {"overview", "agents"}, cuts   # the wide shots
+    assert all(b["t"] - gone[a["t"]] <= 37000 for a, b in pairwise(loop)), cuts   # off the screen 37 s at most
+    assert all(c["focus"] == c["wish"] for c in cuts if c["key"] == "spotlight"), cuts
+    assert sum(c["key"].startswith("m") for c in cuts) >= 8 and all(c["newest"] for c in cuts), cuts
+    assert all(b["t"] - a["t"] >= 6000 for a, b in pairwise(cuts)), cuts
+
+
+def test_the_ticker_goes_round_every_seat(doc, tmp_path):
+    """Nine seats writing a note every turn, a 15 s turn and the ticker moving every 5 s: every seat in nine ticks."""
+    probe = """
+      const seats = Array.from({length: 9}, (_, k) => ({index: 20 + k, seat: k})), shown = new Map(), out = {};
+      const pick = (turn, fresh = -1) => nextNote(seats.map(p => ({p, n: {turn: p.seat === fresh ? turn + 1 : turn,
+        text: "note"}})), shown).p.seat;
+      out.busy = Array.from({length: 36}, (_, tick) => pick(Math.floor(tick / 3)));
+      out.quiet = Array.from({length: 12}, () => pick(99));
+      out.fresh = [pick(99, 7), pick(99, 7)];
+      $("#probe").textContent = JSON.stringify(out);"""
+    page = tmp_path / "ticker.html"
+    page.write_text(probed(viewer.page(doc), probe), encoding="utf-8")
+    out = run(page.as_uri(), 500, tmp_path)
+    assert all(sorted(out["busy"][k:k + 9]) == list(range(9)) for k in range(0, 28)), out["busy"]
+    assert all(sorted(out["quiet"][k:k + 9]) == list(range(9)) for k in range(0, 4)), out["quiet"]
+    assert out["fresh"][0] == 7 and out["fresh"][1] != 7                # a new note goes first, then the round goes on
