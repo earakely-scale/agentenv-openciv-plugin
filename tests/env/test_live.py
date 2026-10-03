@@ -119,7 +119,7 @@ async def test_the_live_seats_say_who_has_ended_the_turn(env, tools):
     doc = await data(env)
     rome, greek = doc["live"]["seats"]
     assert (rome["civ"], rome["label"], rome["ended"]) == ("Rome", None, False)
-    assert greek == {"civ": "Greece", "label": "B", "ended": True, "seconds": 2.5,
+    assert greek == {"civ": "Greece", "label": "B", "human": False, "ended": True, "seconds": 2.5,
                      "calls": {"ok": 1, "failed": 0}, "actions": [{"text": "u1 found_city", "ok": True}]}
 
 

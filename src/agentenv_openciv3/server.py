@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import difflib
+import inspect
 import json
 import logging
 import os
@@ -313,9 +314,10 @@ class OpenCiv3Env(AgentEnvEnvironment):
         self.restarts, self.failed = {}, None
         self.harness["new_games"] += 1
         self.harness["autoplay_turns"] = 0
+        log.info("NEW GAME %s", self.game_id)
         for seat in seats:
             if seat.human:
-                log.info("PLAY %s (%s) %s", seat.civ, seat.name, self._play_link(seat))
+                log.info("PLAY %s (%s) game %s %s", seat.civ, seat.name, self.game_id, self._play_link(seat))
         await old_bridge.close()
         if old_dir is not None:
             shutil.rmtree(old_dir, ignore_errors=True)
@@ -480,8 +482,8 @@ class OpenCiv3Env(AgentEnvEnvironment):
             text = (f"the env ended your turn {turn} after {duration(self._stall_seconds(seat))} without a move from "
                     "you, so the other civilizations could play on")
         else:
-            text = (f"the env ended your turn {turn} after {SEAT_STALL_SECONDS} s without a call from you, so the other "
-                    "civilizations could play on")
+            text = (f"the env ended your turn {turn} after {SEAT_STALL_SECONDS} s without a call from you, so the "
+                    "other civilizations could play on")
         seat.notices.append({"turn": turn, "kind": "turn_ended", "text": text})
         seat.actions.note(turn, text, ok=False)
         if "seats" in res:
@@ -981,7 +983,8 @@ class OpenCiv3Env(AgentEnvEnvironment):
         s = states[self.seats[0].civ]
         summary = {
             "turn": s["turn"], "turn_limit": s["turn_limit"], "game_over": s["game_over"], "defeated": s["defeated"],
-            "seed": self.game["seed"], "civ": s["civ"], **self._seat_summary(self.seats[0], s),
+            "seed": self.game["seed"], "civ": s["civ"], "human": self.seats[0].human,
+            **self._seat_summary(self.seats[0], s),
             "baselines": self.baselines.summary(s["turn"]) if self.baselines and not self.multi
             else {p: {"status": "disabled"} for p in POLICIES},
             "harness": dict(self.harness),
@@ -990,10 +993,11 @@ class OpenCiv3Env(AgentEnvEnvironment):
             "share": world.get("human_share"),
             "victory": s.get("victory"),
         }
-        if self.multi:
+        if self.multi or self.seats[0].human:
             players = {p["civ"]: p for p in world.get("players", [])}
             ranks = {p["civ"]: i for i, p in enumerate(standings, 1)}
-            summary["seats"] = [{"civ": seat.civ, "label": seat.label, "defeated": states[seat.civ]["defeated"],
+            summary["seats"] = [{"civ": seat.civ, "label": seat.label, "human": seat.human,
+                                 "defeated": states[seat.civ]["defeated"],
                                  **self._seat_summary(seat, states[seat.civ]), "rank": ranks.get(seat.civ),
                                  "share": (players.get(seat.civ) or {}).get("share"),
                                  "auto_ended_turns": seat.auto_ended_turns} for seat in self.seats]
@@ -1014,18 +1018,23 @@ class OpenCiv3Env(AgentEnvEnvironment):
     @extension("urn:openciv3:new-game/v1",
                description="Start a new game; omitted args keep the current scenario. seats: more civs played by "
                            "agents (each in an opponent slot), each agent naming its civ in the X-OpenCiv3-Seat "
-                           "header; labels: a name per civ for recordings and reports, e.g. the agent's model.")
+                           "header; labels: a name per civ for recordings and reports, e.g. the agent's model; "
+                           "humans: civs (among civ and seats) that people play in the browser, each through the "
+                           "link in the result's `play` (none when omitted); human_turn_seconds: how long a human "
+                           "seat may idle while others wait before the env ends its turn (0: never).")
     async def new_game(self, seed: int | None = None, civ: str | None = None, opponents: int | None = None,
                        size: str | None = None, difficulty: str | None = None, barbarians: str | None = None,
                        landform: str | None = None, ocean: int | None = None, turn_limit: int | None = None,
-                       seats: list[str] | None = None, labels: dict[str, str] | None = None) -> dict:
+                       seats: list[str] | None = None, labels: dict[str, str] | None = None,
+                       humans: list[str] | None = None, human_turn_seconds: int = HUMAN_TURN_SECONDS) -> dict:
         self.harness["extension_calls"] += 1
         args = {"seed": seed, "civ": civ, "opponents": opponents, "size": size, "difficulty": difficulty,
                 "barbarians": barbarians, "landform": landform, "ocean": ocean, "turn_limit": turn_limit,
-                "seats": seats, "labels": labels}
+                "seats": seats, "labels": labels, "humans": humans or [], "human_turn_seconds": human_turn_seconds}
         async with self.lock:
             await self._new_game(merge_scenario(self.scenario, args))
-            return {**self.game, "scenario": self.scenario}
+            return {**self.game, "scenario": self.scenario,
+                    "play": {seat.civ: self._play_link(seat) for seat in self.seats if seat.human}}
 
     @extension("urn:openciv3:autoplay/v1", description="Advance the game a number of turns with a scripted policy.")
     async def autoplay(self, turns: int, policy: AUTOPLAY_POLICIES = "null") -> dict:
@@ -1149,8 +1158,13 @@ class OpenCiv3Env(AgentEnvEnvironment):
         self.live = live.Live()
         for path, handler in (("/live", self._live_page), ("/live/data.json", self._live_data),
                               ("/live/state.json", self._live_state), ("/live/frame.png", self._live_frame),
-                              ("/live/client.png", self._live_client)):
+                              ("/live/client.png", self._live_client), ("/play", self._play_page),
+                              ("/play/api/view", self._play_view), ("/play/api/status", self._play_status),
+                              ("/play/api/city", self._play_city), ("/play/api/techs", self._play_techs),
+                              ("/play/api/diplomacy", self._play_diplomacy), ("/play/api/tile", self._play_tile),
+                              ("/play/api/sites", self._play_sites)):
             app.custom_route(path, methods=["GET"])(handler)
+        app.custom_route("/play/api/act", methods=["POST"])(self._play_act)
         return app
 
     async def _live_page(self, request: Request) -> Response:
@@ -1168,7 +1182,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
         return {
             "turn": turn, "game_over": victory is not None or any(st.get("game_over") for st in states),
             "victory": victory, "client": self.client, "recording": self.record,
-            "seats": [{"civ": s.civ, "label": s.label, "ended": s.ready or s.over,
+            "seats": [{"civ": s.civ, "label": s.label, "human": s.human, "ended": s.ready or s.over,
                        "seconds": round(max(0.0, (s.ended_at if s.ready and s.ended_at else now) - self.turn_started),
                                         1),
                        "calls": dict(s.actions.calls.get(turn) or {"ok": 0, "failed": 0}),
@@ -1226,6 +1240,269 @@ class OpenCiv3Env(AgentEnvEnvironment):
         turn, png = shown
         return Response(png, media_type="image/png", headers={"X-OpenCiv3-Turn": str(turn), "X-OpenCiv3-Seat": seat.civ,
                                                               "Cache-Control": "no-store"})
+
+    # ---- the play API: a person plays a human seat in the browser (docs/play.md, section 4) ----
+
+    async def _play_page(self, request: Request) -> Response:
+        return HTMLResponse(viewer.play_page(), headers={"Cache-Control": "no-cache"})
+
+    @staticmethod
+    def _play_token(request: Request) -> str | None:
+        return request.headers.get(TOKEN_HEADER) or request.query_params.get("token")
+
+    def _play_seat(self, request: Request) -> Seat | None:
+        return self._seat_of_token(self._play_token(request))
+
+    @staticmethod
+    def _play_error(err: BridgeError, status: int = 200) -> JSONResponse:
+        return JSONResponse({"ok": False, "error": {"code": err.code, "message": err.message,
+                                                     "alternatives": err.alternatives, "suggest": err.suggest}},
+                            status, headers={"Cache-Control": "no-store"})
+
+    def _play_unauthorized(self) -> JSONResponse:
+        return self._play_error(BridgeError("bad_token", "this link plays no seat in the running game: the token is "
+                                            "missing or wrong, or a new game has started since"), 401)
+
+    def _bound_seat(self, token: str | None) -> Callable[[], Seat]:
+        def seat_of() -> Seat:
+            seat = self._seat_of_token(token)
+            if seat is None:
+                raise BridgeError("bad_token", "this link plays no seat in the running game; a new game has started")
+            return seat
+        return seat_of
+
+    async def _play_call(self, request: Request, tool_name: str, args: dict, body: Callable[[], Awaitable[Any]], *,
+                         mutating: bool = False, extra: dict | None = None,
+                         answer: Callable[[Seat, Any], Awaitable[dict]] | None = None) -> JSONResponse:
+        """A request of the play API that plays the seat: the same guarded path as an agent's MCP tool (`tool_name`
+        and `args` as that tool's, for the action log), answered with `answer(seat, body's value)`, by default the
+        value itself."""
+        token = self._play_token(request)
+        if self._seat_of_token(token) is None:
+            return self._play_unauthorized()
+
+        async def done(seat: Seat, value: Any, calls: int) -> JSONResponse:
+            return JSONResponse(await answer(seat, value) if answer else value, headers={"Cache-Control": "no-store"})
+
+        async def failed(seat: Seat | None, err: BridgeError, calls: int) -> JSONResponse:
+            return self._play_error(err, 401 if err.code == "bad_token" else 200)
+
+        return await self._guarded(tool_name, {k: v for k, v in args.items() if v is not None}, body,
+                                   seat_of=self._bound_seat(token), mutating=mutating,
+                                   extra={} if extra is None else extra, done=done, failed=failed)
+
+    def _game_over(self) -> tuple[bool, dict | None]:
+        states = [s.last_state for s in self.seats if s.last_state]
+        victory = next((st["victory"] for st in states if st.get("victory")), None)
+        return victory is not None or any(st.get("game_over") for st in states), victory
+
+    def _waiting_for(self, seat: Seat) -> list[str]:
+        """The seats still playing the turn, once `seat` has ended it."""
+        return [s.civ for s in self.seats if not s.ready and not s.over] if seat.ready else []
+
+    def _play_seats(self) -> list[dict]:
+        _, colors, index = self.colors if self.colors[0] == self.game_id else (None, {}, {})
+        return [{"civ": s.civ, "label": s.label, "human": s.human, "ended": s.ready or s.over,
+                 "defeated": bool((s.last_state or {}).get("defeated")), "color": colors.get(index.get(s.civ, -1))}
+                for s in self.seats]
+
+    async def _player_colors(self, seat: Seat) -> tuple[dict[int, str], dict[str, int]]:
+        """Every player's colour as the viewer gives it (matchdata.player_colors), and each civ's player index; read
+        from the bridge's world once per game."""
+        if self.colors[0] != self.game_id:
+            players = (await self._call("world", seat=seat)).get("players") or []
+            self.colors = (self.game_id, matchdata.player_colors(players), {p["civ"]: p["index"] for p in players})
+        return self.colors[1], self.colors[2]
+
+    async def _play_status(self, request: Request) -> Response:
+        """Cheap, for polling: reads the env's state without its lock or the bridge, and is no sign of the person."""
+        seat = self._play_seat(request)
+        if seat is None:
+            return self._play_unauthorized()
+        game_over, _ = self._game_over()
+        return JSONResponse({"game": self.game_id, "turn": self.turn, "game_over": game_over,
+                             "ended": seat.ready or seat.over, "waiting_for": self._waiting_for(seat),
+                             "seats": self._play_seats(), "seconds_left": self._seconds_left(seat)},
+                            headers={"Cache-Control": "no-store"})
+
+    async def _play_view(self, request: Request) -> Response:
+        """Everything the play UI draws. Not a call of the seat: no action log, and the stall clock runs on."""
+        token = self._play_token(request)
+        if self._seat_of_token(token) is None:
+            return self._play_unauthorized()
+        async with self.lock:
+            try:
+                await self._ensure_game()
+                seat = self._bound_seat(token)()
+                state = await self._state(seat)
+                known = await self._call("known_map", seat=seat)
+                colors, index = await self._player_colors(seat)
+            except Exception as e:
+                err = await self._failure(e, "play view")
+                return self._play_error(err, 401 if err.code == "bad_token" else 200)
+            game_over, victory = self._game_over()
+            me = next((p["index"] for p in known.get("players") or [] if p.get("me")), index.get(seat.civ))
+            game = {"id": self.game_id, "turn": self.turn, "turn_limit": state["turn_limit"],
+                    "game_over": game_over or state["game_over"], "victory": victory or state.get("victory"),
+                    "me": {"civ": seat.civ, "label": seat.label, "index": me, "color": colors.get(me)},
+                    "ended": seat.ready or seat.over, "waiting_for": self._waiting_for(seat),
+                    "seats": self._play_seats(), "human_turn_seconds": self._stall_seconds(seat),
+                    "seconds_left": self._seconds_left(seat)}
+            # The notices of this turn and the last: a turn the env ended for the seat is noted with that turn.
+            notices = [n for n in seat.notices if self.turn is not None and n["turn"] >= self.turn - 1]
+            return JSONResponse({"game": game, "colors": {str(i): c for i, c in colors.items()}, "state": state,
+                                 "map": known, "notices": notices}, headers={"Cache-Control": "no-store"})
+
+    async def _play_city(self, request: Request) -> Response:
+        city = request.query_params.get("city")
+        if not city:
+            return self._play_error(BridgeError("bad_args", "give city, e.g. ?city=c1"), 400)
+
+        async def body():
+            return await self._call("city", city=city)
+        return await self._play_call(request, "city_info", {"city": city}, body)
+
+    async def _play_techs(self, request: Request) -> Response:
+        async def body():
+            return await self._call("techs")
+        return await self._play_call(request, "research", {}, body)
+
+    async def _play_diplomacy(self, request: Request) -> Response:
+        async def body():
+            return await self._call("diplomacy")
+        return await self._play_call(request, "diplomacy", {"action": "status", "civ": None, "gold": 0}, body)
+
+    async def _play_tile(self, request: Request) -> Response:
+        try:
+            x, y = int(request.query_params["x"]), int(request.query_params["y"])
+        except (KeyError, ValueError):
+            return self._play_error(BridgeError("bad_args", "give the tile as ?x=..&y=.., two integers"), 400)
+
+        async def body():
+            return await self._call("map", x=x, y=y, radius=0)
+        return await self._play_call(request, "view_map", {"x": x, "y": y, "radius": 0}, body)
+
+    async def _play_sites(self, request: Request) -> Response:
+        unit = request.query_params.get("unit") or None
+        try:
+            top = int(request.query_params.get("top", "5"))
+        except ValueError:
+            return self._play_error(BridgeError("bad_args", "top is a number of sites, 1-10"), 400)
+
+        async def body():
+            return await self._call("city_sites", **({"unit": unit} if unit else {}), top=top)
+        return await self._play_call(request, "find_city_sites", {"unit": unit, "top": top}, body)
+
+    async def _play_act(self, request: Request) -> Response:
+        """POST {"tool", "args"}: one action, run as the agents' tool of that name."""
+        if self._play_seat(request) is None:
+            return self._play_unauthorized()
+        try:
+            req = await request.json()
+        except ValueError:
+            req = None
+        if not isinstance(req, dict) or not isinstance(req.get("args", {}), dict):
+            return self._play_error(BridgeError("bad_request", 'send JSON {"tool": "...", "args": {...}}'), 400)
+        tool_name, given = req.get("tool"), req.get("args") or {}
+        if tool_name not in PLAY_TOOLS:
+            return self._play_error(BridgeError("unknown_tool", f"{tool_name!r} is not an action here.",
+                                                sorted(PLAY_TOOLS)), 400)
+        if tool_name == "end_turn":
+            if given:
+                return self._play_error(BridgeError("bad_args", "end_turn takes no args."), 400)
+            return await self._play_end_turn(request)
+        try:
+            args = play_args(tool_name, given)
+        except ValidationError as e:
+            problems = "; ".join(f"{'.'.join(map(str, d['loc'])) or 'args'}: {d['msg']}" for d in e.errors())
+            return self._play_error(BridgeError("bad_args", f"{tool_name}: {problems}"), 400)
+        body, mutating = self._play_action(tool_name, args)
+
+        async def answer(seat: Seat, value: dict) -> dict:
+            return {"ok": True, **value}
+        return await self._play_call(request, tool_name, args, body, mutating=mutating, answer=answer)
+
+    def _play_action(self, tool_name: str, a: dict) -> tuple[Callable[[], Awaitable[dict]], bool]:
+        """The body of a play API action and whether it acts (as the MCP tool's: research and diplomacy only read
+        with no tech or action)."""
+        async def body() -> dict:
+            if tool_name == "unit_order":
+                res, message = await self._unit_order({k: a[k] for k in ("unit", "order", "x", "y")})
+            elif tool_name == "set_production":
+                res, message = await self._set_production(a["city"], a["item"])
+            elif tool_name == "research":
+                if a["tech"] is None:
+                    return {"message": "the techs you can research", "result": await self._call("techs")}
+                res, message = await self._research(a["tech"])
+            elif tool_name == "set_rates":
+                res, message = await self._set_rates(a["science"], a["luxury"])
+            elif tool_name == "buy":
+                res, message = await self._buy(a["city"])
+            elif tool_name == "revolution":
+                res, message = await self._revolution(a["government"])
+            elif a["action"] == "status":
+                return {"message": "the civilizations you know", "result": await self._call("diplomacy")}
+            else:
+                res, message = await self._diplomacy(a["action"], a["civ"], a["gold"])
+            return {"message": message, "result": res}
+        mutating = not ((tool_name == "research" and a["tech"] is None)
+                        or (tool_name == "diplomacy" and a["action"] == "status"))
+        return body, mutating
+
+    async def _play_end_turn(self, request: Request) -> Response:
+        """End the seat's turn with skip_idle, at once: the answer says whether the turn advanced and, if not, who is
+        still playing it; the UI polls status meanwhile. Logged as the MCP end_turn(skip_idle=true)."""
+        extra = {"idle_units": 0, "turns_advanced": 0}
+
+        async def body() -> dict | None:
+            seat = self.seat
+            before = await self._state()
+            extra["idle_units"] = sum(b.get("kind") == "idle_unit" for b in before.get("blockers", []))
+            if seat.ready:
+                return None
+            seat.cache = None
+            try:
+                res = await self._call("end_turn", skip_idle=True)
+            except BridgeError as e:
+                if e.code not in DEAD:
+                    extra["turns_advanced"] = (await self._state())["turn"] - before["turn"]
+                raise
+            if res.get("blocked"):
+                seat.cache = before
+                raise BridgeError("blocked", render.blocked(res, before))
+            if "seats" in res:
+                self._advanced(res["seats"])
+                res = res["seats"][seat.civ]
+            elif self.multi:
+                seat.ready, seat.ended_at, seat.ended_itself = True, time.monotonic(), True
+                self._watch_stalls()
+            extra["turns_advanced"] = res.get("turns_advanced", 0)
+            return res
+
+        async def answer(seat: Seat, res: dict | None) -> dict:
+            await self._state(seat)
+            return {"ok": True, "advanced": not seat.ready and res is not None, "turn": self.turn,
+                    "waiting_for": self._waiting_for(seat)}
+
+        return await self._play_call(request, "end_turn", {"skip_idle": True, "until_attention": False,
+                                                           "max_turns": 5}, body, mutating=True, extra=extra,
+                                     answer=answer)
+
+
+PLAY_TOOLS = ("unit_order", "set_production", "research", "set_rates", "buy", "revolution", "diplomacy", "end_turn")
+_PLAY_MODELS: dict[str, type[BaseModel]] = {}
+
+
+def play_args(tool_name: str, given: dict) -> dict:
+    """The play API's args for an action, validated as the MCP tool's (same types, ranges and defaults)."""
+    if tool_name not in _PLAY_MODELS:
+        fn = getattr(OpenCiv3Env, tool_name)
+        hints = get_type_hints(fn, include_extras=True)
+        params = list(inspect.signature(fn).parameters.values())[1:]
+        _PLAY_MODELS[tool_name] = create_model(
+            f"{tool_name}_args", __config__=ConfigDict(extra="forbid"),
+            **{p.name: (hints[p.name], ... if p.default is p.empty else p.default) for p in params})
+    return _PLAY_MODELS[tool_name].model_validate(given).model_dump()
 
 
 def file_part(name: str) -> str:

@@ -26,8 +26,10 @@ PLAYERS = {  # A2A agent id: its directory under agents/, the CLI it plays with,
 }
 REPO = "https://github.com/earakely-scale/agentenv-openciv-plugin"
 ENV_PORT = re.compile(r":(\d+)->18765/tcp")
-# The env logs one per human seat when a game starts (docs/play.md): `PLAY <civ> (<label>) /play#token=<token>`.
-PLAY_LINK = re.compile(r"\bPLAY (?P<civ>.+?) \((?P<label>.*)\):? (?:\S*?)(?P<path>/play#token=\w+)")
+# The env logs `NEW GAME <id>` when a game starts, then one line per human seat (docs/play.md):
+# `PLAY <civ> (<label>) game <id> /play#token=<token>`.
+PLAY_LINK = re.compile(r"\bPLAY (?P<civ>.+?) \((?P<label>.*)\):?(?: game \S+)? \S*?(?P<path>/play#token=\w+)")
+NEW_GAME_LINE = re.compile(r"\bNEW GAME \S+")
 STREAMER_IMAGE = "openciv3-streamer"
 STREAM_KEY = "OPENCIV3_STREAM_KEY"
 
@@ -265,9 +267,13 @@ def _container_log(name: str) -> str:
 
 
 def _play_links(log: str) -> list[tuple[str, str, str]]:
-    """The newest game's play links in an env's log, as (civ, label, path): the env logs a game's links together when
-    it starts the game, so they are the last run of PLAY lines, up to a civ named twice (an earlier game's)."""
+    """The newest game's play links in an env's log, as (civ, label, path): the PLAY lines after the last NEW GAME line
+    (none if the newest game has no humans). An older env logs no NEW GAME: then the last run of PLAY lines, up to a
+    civ named twice (an earlier game's)."""
     lines = log.splitlines()
+    starts = [i for i, line in enumerate(lines) if NEW_GAME_LINE.search(line)]
+    if starts:
+        return [(m["civ"], m["label"], m["path"]) for line in lines[starts[-1]:] if (m := PLAY_LINK.search(line))]
     ends = [i for i, line in enumerate(lines) if PLAY_LINK.search(line)]
     links: list[tuple[str, str, str]] = []
     for line in reversed(lines[:ends[-1] + 1] if ends else []):
