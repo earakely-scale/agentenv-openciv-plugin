@@ -1,0 +1,153 @@
+Cities are captured: a combat unit that enters an enemy city takes it (CityInteractions.CaptureCity) instead of destroying it, as in Civilization III. The city loses a citizen, and one of size 1 is destroyed instead. Its palace and small wonders, which belong to the civ that built them, are lost (the old owner is left without a capital, as when its capital is destroyed); great wonders and other buildings stay. The production and food boxes empty and the new owner's ChooseProducible picks what to build. The old owner's units still in the city are lost, as when a city is destroyed. The citizens keep their nationality and are re-assigned to the new owner's tiles, and the borders are recomputed from the new owner's culture in the city (City.perPlayerCulture): the tiles it owned under its old owner, and the fringe Laws VII and VIII added, are cleared first. MsgCityCaptured tells a UI. A taken city still counts as a city lost in the war (PlayerRelationship.RecordLoss). Barbarians still only take gold. Taking a city draws nothing from GameData.rng beyond what ChooseProducible and tile assignment draw when a city is built.
+
+--- a/C7Engine/C7GameData/MapUnit_Actions.cs
++++ b/C7Engine/C7GameData/MapUnit_Actions.cs
+@@ -44,8 +44,9 @@ public partial class MapUnit {
+ 			}
+ 		}
+ 
+-		// Destroy the enemy city on the tile unless we're the barbarians,
+-		// in which case we'll just take some gold.
++		// Take the enemy city on the tile (CityInteractions.CaptureCity: one
++		// of size 1 is destroyed) unless we're the barbarians, in which case
++		// we'll just take some gold.
+ 		if (tile.HasCity() && !owner.IsAtPeaceWith(tile.cityAtTile.owner)) {
+ 			if (owner.isBarbarians) {
+ 				// TODO: Add rules for how much gold is taken.
+@@ -57,7 +58,7 @@ public partial class MapUnit {
+ 				}
+ 			} else {
+ 				PlayerRelationship.RecordLoss(tile.cityAtTile.owner, owner, city: true);
+-				CityInteractions.DestroyCity(tile);
++				CityInteractions.CaptureCity(tile.cityAtTile, owner);
+ 			}
+ 		}
+ 
+--- a/C7Engine/C7GameData/Player.cs
++++ b/C7Engine/C7GameData/Player.cs
+@@ -495,7 +495,7 @@ namespace C7GameData {
+ 		// the refuse-contact window, a locked war, a war younger than
+ 		// MinimumWarTurns, longer after `other` broke a treaty with us).
+ 		// Otherwise the price grows with our lead in military strength, units
+-		// killed and cities razed in this war, and fades to 0 over the 60 turns
++		// killed and cities taken or destroyed in this war, and fades to 0 over the 60 turns
+ 		// after the minimum, or right away when we are not ahead.
+ 		public int PeacePriceFor(GameData gameData, Player other) {
+ 			if (!TryGetRelationship(this, other, out PlayerRelationship ours) || !ours.AtWar()
+--- a/C7Engine/C7GameData/PlayerRelationship.cs
++++ b/C7Engine/C7GameData/PlayerRelationship.cs
+@@ -46,7 +46,7 @@ public class PlayerRelationship {
+ 	public int warStartedOnTurn = 0;
+ 
+ 	// p1.playerRelationships[p2].unitsLostToThem and citiesLostToThem count
+-	// what p1 lost to p2 in the current war (cities are razed when taken).
++	// what p1 lost to p2 in the current war (cities taken or destroyed).
+ 	public int unitsLostToThem = 0;
+ 	public int citiesLostToThem = 0;
+ 
+--- a/C7Engine/EntryPoints/CityInteractions.cs
++++ b/C7Engine/EntryPoints/CityInteractions.cs
+@@ -1,3 +1,4 @@
++using System.Collections.Generic;
+ using System.Linq;
+ using C7Engine.AI;
+ 
+@@ -45,6 +46,78 @@ namespace C7Engine {
+ 			return newCity;
+ 		}
+ 
++		// A city taken in war changes hands, as in Civilization III: it loses a
++		// citizen, and a city of size 1 is destroyed instead. Its palace and
++		// small wonders, which belong to the civ that built them, are lost; its
++		// great wonders and other buildings stay. The production and food boxes
++		// empty and the new owner picks what to build. The old owner's units
++		// still in the city are lost, as when a city is destroyed. The citizens
++		// keep their nationality and work the new owner's tiles, and the borders
++		// follow the new owner's culture in the city.
++		public static void CaptureCity(City city, Player conqueror) {
++			if (city.residents.Count <= 1) {
++				DestroyCity(city);
++				return;
++			}
++			GameData gameData = EngineStorage.gameData;
++			Player loser = city.owner;
++
++			city.location.DisbandNonDefendingUnits(loser);
++
++			// What the city owned under its old owner (its borders, and the
++			// fringe Laws VII and VIII add), cleared below so the borders are
++			// recomputed for the new owner.
++			List<Tile> oldBorders = city.GetTilesWithinBorders();
++			HashSet<ID> oldBorderIds = oldBorders.Select(x => x.Id).ToHashSet();
++			List<Tile> oldFringe = oldBorders.SelectMany(t => t.GetEdgeNeighbors())
++				.Where(t => !oldBorderIds.Contains(t.Id) && !t.HasCity() && t.owningCity == city).Distinct().ToList();
++
++			List<Civilization> nationalities = city.residents.Select(r => r.nationality).ToList();
++			nationalities.RemoveAt(nationalities.Count - 1);
++			city.RemoveAllCitizens();
++
++			city.capital = false;
++			city.constructed_buildings.RemoveAll(cb => cb.building.isCenterOfEmpire || cb.building.isSmallWonder);
++			city.SetStoredShields(0);
++			city.foodStored = 0;
++			city.isInCivilDisorder = false;
++			city.turnsOfUnhappinessDueToPopRushing = 0;
++
++			loser.cities.Remove(city);
++			conqueror.cities.Add(city);
++			city.owner = conqueror;
++			city.perPlayerCulture.TryAdd(conqueror, 0);
++
++			// Residents before tile owners: a city with no residents counts as
++			// destroyed (GameData.UpdateTileOwners).
++			CitizenType laborer = gameData.citizenTypes.Find(x => x.IsDefaultCitizen);
++			foreach (Civilization nationality in nationalities) {
++				city.AddCitizen(new CityResident { citizenType = laborer, nationality = nationality, city = city });
++			}
++
++			foreach (Tile t in oldBorders.Concat(oldFringe)) {
++				if (t.owningCity == city) {
++					t.owningCity = null;
++				}
++			}
++			gameData.UpdateTileOwners();
++
++			// As when a city is built: the trade network first (assigning tiles
++			// needs the luxuries), then the citizens, then production.
++			gameData.InvalidateCachedTradeNetwork();
++			foreach (CityResident resident in city.residents.ToList()) {
++				CityTileAssignmentAI.AssignNewCitizenToTile(gameData, resident);
++			}
++			city.SetItemBeingProduced(ChooseProducible.Choose(city, conqueror));
++
++			new MsgCityCaptured(city, loser).send();
++			gameData.CheckForCivDestructionAndNotifyUi(loser);
++
++			// Rank corruption depends on each civ's cities.
++			loser.DoCorruptionCalculations(gameData);
++			conqueror.DoCorruptionCalculations(gameData);
++		}
++
+ 		public static void DestroyCity(City city) {
+ 			DestroyCity(city.location);
+ 		}
+--- a/C7Engine/EntryPoints/MessageToUI.cs
++++ b/C7Engine/EntryPoints/MessageToUI.cs
+@@ -83,6 +83,17 @@ namespace C7Engine {
+ 		}
+ 	}
+ 
++	// A city changed hands: `city.owner` is its new owner, `from` the one it was taken from.
++	public class MsgCityCaptured : MessageToUI {
++		public City city;
++		public Player from;
++
++		public MsgCityCaptured(City city, Player from) {
++			this.city = city;
++			this.from = from;
++		}
++	}
++
+ 	public class MsgCityCreated : MessageToUI {
+ 		public City city;
+ 

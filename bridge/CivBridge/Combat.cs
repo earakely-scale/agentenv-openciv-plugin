@@ -4,7 +4,8 @@ using C7GameData;
 namespace CivBridge;
 
 // Attack and bombard (docs/protocol.md). Combat is the engine's own: an attack is a move into a tile held by a civ
-// at war with the human, and bombard is MapUnit.Bombard. Cities that fall are razed, as the engine does.
+// at war with the human, and bombard is MapUnit.Bombard. A city that falls is taken, or destroyed at size 1
+// (CityInteractions.CaptureCity, patches/0011).
 sealed partial class Session {
 	sealed record AttackTarget(Tile Tile, MapUnit Defender, City City, Player Owner);
 
@@ -71,11 +72,15 @@ sealed partial class Session {
 		int before = battleCount;
 		bool alive = await u.Move(u.location.DirectionTo(target), true);
 		DrainUi();
+		ids.Sync(gd, human);   // a city taken gets the seat's id now
 		JsonObject battle = BattleOf(u, before);
 		bool killed = e.Defender != null && !gd.mapUnits.Contains(e.Defender);
 		bool razed = e.City != null && !gd.cities.Contains(e.City);
+		bool captured = e.City != null && !razed && e.City.owner == human;
 		string hp = alive ? $"; {label} has {u.hitPointsRemaining}/{u.maxHitPoints} hp" : "";
-		string fell = razed ? $" {e.City.name} fell and was razed (this engine destroys the cities it takes)." : "";
+		string fell = razed ? $" {e.City.name} fell and was destroyed (a city of size 1 is not taken, it is razed)."
+			: captured ? $" {e.City.name} is yours now ({ids.Of(e.City)}, size {e.City.residents.Count}): it lost a citizen, its palace and small wonders, and what it was building."
+			: "";
 		if (foe == null) return ($"{label} entered {At(target)}.{fell}{hp}.", battle);
 		string outcome = !alive ? $"lost: {label} was destroyed" : killed ? $"won: {foe} was destroyed" : "ended with a retreat";
 		if (SeatOf(e.Owner) is Seat victim) {

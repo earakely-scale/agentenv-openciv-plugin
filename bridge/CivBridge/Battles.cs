@@ -33,7 +33,8 @@ sealed partial class Session : ICombatObserver {
 		public string Winner;
 		public City City;
 		public (int X, int Y, string Name)? CityAt;
-		public bool Razed, RazePending;
+		/// <summary>A city that fell to the winner: taken (Captured), or destroyed (Razed: a city of size 1).</summary>
+		public bool Razed, Captured, FallPending;
 		public HashSet<Player> Seen = new(ReferenceEqualityComparer.Instance);
 	}
 
@@ -75,20 +76,21 @@ sealed partial class Session : ICombatObserver {
 		// Rounds go on until a side has no hit points left or retreats; a bombardment stops after its shots.
 		b.Winner = defender.hitPointsRemaining <= 0 ? "attacker"
 			: b.Bombard || attacker.hitPointsRemaining <= 0 ? "defender" : "retreat";
-		// A winning attacker moves into the city at once when no defender is left, and razes it (MapUnit.Move, then
-		// OnEnterTile); barbarians take gold instead. Whether it did shows the next time the bridge looks, before any
-		// other battle or command.
-		b.RazePending = !b.Bombard && b.Winner == "attacker" && b.City != null && !attacker.owner.isBarbarians;
+		// A winning attacker moves into the city at once when no defender is left and takes it, or destroys it at size
+		// 1 (MapUnit.Move, then OnEnterTile: patches/0011); barbarians take gold instead. Whether it did shows the next
+		// time the bridge looks, before any other battle or command.
+		b.FallPending = !b.Bombard && b.Winner == "attacker" && b.City != null && !attacker.owner.isBarbarians;
 	}
 
 	Battle Fighting(MapUnit attacker, MapUnit defender) =>
 		fighting.LastOrDefault(b => b.Attacker.Unit == attacker && b.Defender.Unit == defender);
 
-	/// <summary>Settles the razes pending since the last look and forgets battles older than the last turn.</summary>
+	/// <summary>Settles the cities' falls pending since the last look and forgets battles older than the last turn.</summary>
 	void SettleBattles() {
-		foreach (Battle b in battles.Where(b => b.RazePending)) {
+		foreach (Battle b in battles.Where(b => b.FallPending)) {
 			b.Razed = !gd.cities.Contains(b.City);
-			b.RazePending = false;
+			b.Captured = !b.Razed && b.City.owner == b.Attacker.Owner;
+			b.FallPending = false;
 		}
 		battles.RemoveAll(b => b.Turn < gd.turn - 1 && !fighting.Contains(b));
 	}
@@ -122,6 +124,7 @@ sealed partial class Session : ICombatObserver {
 			["rounds"] = Json.Strings(b.Rounds),
 			["winner"] = b.Winner,
 			["city"] = b.CityAt is var (x, y, name) ? new JsonObject { ["x"] = x, ["y"] = y, ["name"] = name } : null,
+			["captured"] = b.Captured,
 			["razed"] = b.Razed,
 		};
 		if (allIds) o["seen"] = Json.Array(b.Seen.Where(index.ContainsKey).Select(p => index[p]).Order(), i => (JsonNode)i);
@@ -160,7 +163,7 @@ sealed partial class Session : ICombatObserver {
 			var b = new Battle {
 				Id = (int)o["id"], Turn = (int)o["turn"], Bombard = (string)o["kind"] == "bombard",
 				Attacker = SideOf(o["attacker"]), Defender = SideOf(o["defender"]),
-				Winner = (string)o["winner"], Razed = (bool)o["razed"],
+				Winner = (string)o["winner"], Razed = (bool)o["razed"], Captured = (bool?)o["captured"] ?? false,
 				CityAt = o["city"] is JsonObject c ? ((int)c["x"], (int)c["y"], (string)c["name"]) : null,
 			};
 			b.Rounds.AddRange(o["rounds"]!.AsArray().Select(r => (string)r));

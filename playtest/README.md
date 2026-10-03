@@ -146,8 +146,8 @@ Options:
 
 Every seat researches, chooses its government, fortifies a garrison, explores, puts workers on
 `auto_work`, sometimes buys, fixes disorder with `set_rates` and writes a `plan`. A failing call never
-stops a seat, and a turn always ends. The engine razes the cities it takes, so conquests show up as
-cities razed, not captured.
+stops a seat, and a turn always ends. A city taken changes hands (one of size 1 is destroyed), so
+conquests show up as cities captured.
 
 **Output directory:**
 - `record/`: the bridge's `turn-*.json.gz` snapshots.

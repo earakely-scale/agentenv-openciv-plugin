@@ -70,7 +70,7 @@ Args: none (plays the request's seat, like every command). Everything the seat k
               "defender": {...},                                    // the same
               "rounds": ["a", "d", "a"],                            // who won each round, in order
               "winner": "attacker" | "defender" | "retreat",
-              "city": {"x", "y", "name"} | null, "razed": false}]}
+              "city": {"x", "y", "name"} | null, "captured": false, "razed": false}]}
 ```
 
 Terrain and overlay names are the engine's lower-case keys, as in the world snapshot; a resource shows only once the
@@ -97,7 +97,8 @@ reader of the old nine columns keeps working. What the OpenCiv3 client's art nee
   attacker won the round (the defender loses a hit point), `"d"` the defender did; `hp_before - hp_after` is the
   rounds the other side won, but for a `retreat`, whose last round's loser withdrew (the defender when it is
   `"a"`, the attacker when `"d"`). `id` is the seat's own unit's; `x`, `y` are where the units stood. `city` is
-  the city on the defender's tile, and `razed` says the winner destroyed it. A `bombard` is the bombarder's
+  the city on the defender's tile; `captured` says the winner took it and `razed` that it destroyed it (a city of
+  size 1). A `bombard` is the bombarder's
   shots at a unit: `"a"` a hit, `"d"` a miss. The seat's own `attack` or `bombard` order answers with the same
   record as the act's `result.battle`.
 

@@ -152,8 +152,8 @@ each new turn as it arrives:
 - **Agents:** one panel per agent, each with its own view, its stats, and whether it is still playing the turn.
 - **Summary:** standings, who led when, rank by turn, the expansion race and the key moments, so far.
 - **Client view:** with `--client`, the real OpenCiv3 client's view of the game from any agent's seat.
-- **Timeline:** play, scrub or step through every turn played so far. Wars, razed cities and lead changes are marked.
-  Links keep the view, e.g. `/live#focus=Greece&client=Greece`.
+- **Timeline:** play, scrub or step through every turn played so far. Wars, captured and razed cities and lead changes
+  are marked. Links keep the view, e.g. `/live#focus=Greece&client=Greece`.
 
 ```bash
 agent-env openciv3 watch --open    # from the checkout: prints each running game's live view and opens the newest
@@ -404,10 +404,10 @@ call to make instead. Full contract: [docs/tools.md](docs/tools.md).
 
 **What the game covers.** Agents found and place cities and choose what they build and research; set the science and
 luxury rates and buy production; move, automate, fortify, attack and bombard; change government; and declare war or
-make peace. They cannot trade techs or gold, cities that fall are razed rather than captured, and the score
-(10 × cities + 3 × citizens + 1 × tiles + 4 × techs) rewards growth. The engine still makes some choices itself (what
-a city builds after finishing something, the next tech); those picks are reported and block the turn until the agent
-changes or accepts them. [docs/full-game.md](docs/full-game.md) lists what a full game still lacks.
+make peace; a city that falls in war is captured (one of size 1 is destroyed). They cannot trade techs or gold, and
+the score (10 × cities + 3 × citizens + 1 × tiles + 4 × techs) rewards growth. The engine still makes some choices
+itself (what a city builds after finishing something, the next tech); those picks are reported and block the turn
+until the agent changes or accepts them. [docs/full-game.md](docs/full-game.md) lists what a full game still lacks.
 
 ## The player agents
 
@@ -612,7 +612,7 @@ This repository is licensed under the Apache License 2.0 ([LICENSE](LICENSE), [N
   with the patches in `patches/` applied: a defeated player no longer hangs the turn loop, war declarations use the
   game's seeded RNG, budget and AI-turn errors are contained, buildings that need another building and small wonders
   become buildable, the AI funds its science, supports its units, changes government and makes peace, research
-  cost follows the difficulty, and battles tell an observer each round as they are fought.
+  cost follows the difficulty, battles tell an observer each round as they are fought, and a city taken changes hands.
 - The image also contains Blast (Apache-2.0), Serilog (Apache-2.0), MoonSharp (BSD-3-Clause), ini-parser (MIT), the
   .NET runtime (MIT) and a static FFmpeg build (GPL-3.0-or-later); it carries their licences in
   `/opt/civbridge/licenses/`. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

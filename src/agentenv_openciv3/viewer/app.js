@@ -16,7 +16,7 @@ const KIND = {   // label, rank (lower first), hot (red), on the timeline
   civ_destroyed: ["eliminated", 0, true, true], city_captured: ["captured", 1, true, true],
   city_destroyed: ["razed", 1, true, true], war_declared: ["war", 1, true, true], peace_signed: ["peace", 2, false, true],
   lead_change: ["lead", 2, false, true], victory: ["victory", 0, false, true], government_changed: ["government", 3],
-  city_founded: ["founded", 4], unit_lost: ["unit lost", 5, true], gold_stolen: ["gold stolen", 5, true],
+  city_founded: ["founded", 4], city_lost: ["city lost", 1, true], unit_lost: ["unit lost", 5, true], gold_stolen: ["gold stolen", 5, true],
   disorder: ["disorder", 5, true], disorder_started: ["disorder", 5, true], city_starved: ["starved", 5],
   contact: ["contact", 6], tech_learned: ["tech", 7], unit_promoted: ["promoted", 8], defenseless: ["defenseless", 6],
   attacked: ["attacked", 4, true], bombarded: ["bombarded", 5, true], engine_restarted: ["engine", 8],

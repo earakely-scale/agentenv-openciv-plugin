@@ -28,7 +28,7 @@ revolution (change government), diplomacy (the civilizations you know, war and p
 plan (notes that every brief shows back).
 
 The game advances only when you end your turn; the other civilizations and the barbarians move in
-between. Cities that fall in war are razed, not captured.
+between. A city that falls in war is captured: it loses a citizen, and one of size 1 is destroyed instead.
 
 ## Resume prompt
 

@@ -10,11 +10,11 @@ from .bridge import BridgeError
 
 URGENT = {"threat", "unit_lost", "war_declared", "city_destroyed", "disorder", "disorder_started", "city_starved",
           "settle_failed", "goto_blocked", "gold_stolen", "defenseless", "riot_risk", "engine_restarted",
-          "peace_offered"}
+          "peace_offered", "city_lost", "city_captured"}
 # Kept first when a turn has more events than fit; threats go last, they repeat the most.
 FIRST = {"city_founded", "unit_lost", "city_destroyed", "civ_destroyed", "war_declared", "disorder", "disorder_started",
          "gold_stolen", "defenseless", "tech_learned", "city_starved", "settle_failed", "goto_blocked",
-         "engine_restarted", "peace_offered", "peace_signed", "government_picked"}
+         "engine_restarted", "peace_offered", "peace_signed", "government_picked", "city_lost", "city_captured"}
 CITY_TARGETS = ((1, 1), (15, 2), (30, 3), (45, 4), (60, 5), (80, 6), (100, 7))
 TECHS_LEARNED_TARGETS = ((20, 2), (40, 4), (60, 6), (80, 8), (100, 10))
 TERRAIN = {"grassland": "g", "plains": "p", "desert": "d", "tundra": "t", "floodplain": "f", "hills": "h",
