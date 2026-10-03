@@ -33,7 +33,9 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PBP, COLOR = "pbp", "color"
-CASTERS = {  # speaker: name, text-to-speech voice, how that voice sounds
+SEATS = {PBP: "play_by_play", COLOR: "analyst"}   # the speakers as a task's broadcast names them
+MODEL, TTS_MODEL = "anthropic/claude-haiku-4-5", "openai/gpt-4o-mini-tts"
+CASTERS = {  # speaker: name, text-to-speech voice, how that voice sounds; the defaults a task's broadcast may change
     PBP: ("Max", "ash", "An esports play-by-play caster calling a live strategy match. High energy, quick and punchy, "
                         "smiling; build excitement on the big moments (wars, captured cities, lead changes) and land "
                         "the names and numbers crisply. Never shouting."),
@@ -211,12 +213,15 @@ class Match:
 class Caster:
     """Writes and voices the casters' lines a beat at a time, and keeps them for the stream page."""
 
-    def __init__(self, data_url: str, base_url: str, api_key: str, *, model: str, tts_model: str,
-                 title: str | None = None, clock: Callable[[], float] = time.time):
+    def __init__(self, data_url: str, base_url: str, api_key: str, *, model: str = MODEL, tts_model: str = TTS_MODEL,
+                 casters: dict[str, tuple[str, str, str]] = CASTERS, title: str | None = None,
+                 clock: Callable[[], float] = time.time):
         self.data_url = data_url.split("?")[0].rstrip("/")
         self.base_url = base_url.rstrip("/").removesuffix("/v1")
         self.api_key = api_key
         self.model, self.tts_model, self.title = model, tts_model, title
+        self.casters = casters
+        self.system = renamed(SYSTEM, casters)
         self.clock = clock
         self.lock = threading.Lock()
         self.lines: list[dict] = []
@@ -240,6 +245,11 @@ class Caster:
         self.topics_used: dict[str, int] = {}
         self.beats = 0
         self.last_kind: str | None = None
+
+    @property
+    def names(self) -> tuple[str, str]:
+        """The play-by-play caster's name and the analyst's."""
+        return self.casters[PBP][0], self.casters[COLOR][0]
 
     def log(self, message: str) -> None:
         print(message.replace(self.api_key, "<cast key>") if self.api_key else message, flush=True)
@@ -374,23 +384,25 @@ class Caster:
         news = sorted((x for x in self.pending if x.kind in EVENTS and self.newsworthy(x)),
                       key=lambda x: (EVENTS.index(x.kind), -x.turn))
         events = news[:3] + [x for x in news[3:] if any((x.kind, x.turn) == (e.kind, e.turn) for e in news[:3])][:3]
+        pbp, color = self.names
         if events:
             return Beat("event", "Call these moments from the board, the biggest first:\n"
                         + "\n".join(f"- {x.text}" for x in events)
-                        + "\nMax calls it with energy; Ada answers with what it means, one number from the DATA.",
+                        + f"\n{pbp} calls it with energy; {color} answers with what it means, one number from the "
+                          "DATA.",
                         PBP, 2 if len(events) == 1 else 3, events)
         if messages := [x for x in self.pending if x.kind == "message"][-3:]:
             return Beat("message", "New diplomacy between the players, sent where everyone can see it:\n"
                         + "\n".join(f"- {x.text}" for x in messages)
-                        + "\nMax reads it out, quoting it unless it is rude; Ada reads between the lines: do the "
-                          "sender's wars, army or plan in the DATA back it up?",
+                        + f"\n{pbp} reads it out, quoting it unless it is rude; {color} reads between the lines: do "
+                          "the sender's wars, army or plan in the DATA back it up?",
                         PBP, 2 if len(messages) == 1 else 3, messages)
         notes = self.notes_to_read()
         if notes and self.last_kind != "message":
             return Beat("message", "The players' own notes on the turn they just played:\n"
                         + "\n".join(f"- {x.text}" for x in notes)
-                        + "\nMax relays one in his own words; Ada checks it against the board: do the numbers back "
-                          "it up?", PBP, 2, notes)
+                        + f"\n{pbp} relays one, paraphrased; {color} checks it against the board: do the numbers "
+                          "back it up?", PBP, 2, notes)
         return self.color()
 
     def newsworthy(self, moment: Moment) -> bool:
@@ -418,16 +430,19 @@ class Caster:
         models = sum(bool(p.get("label")) for p in m.civs)
         limit = m.meta.get("turn_limit")
         joined = f" We join at turn {m.turn}, with the game under way." if m.turn > 3 else ""
-        return Beat("intro", f"Open the broadcast. Max welcomes everyone{title}; between them, Max and Ada name every "
-                             f"player with its civ: {roster}. Ada sets the stakes: {models} AI models"
+        pbp, color = self.names
+        return Beat("intro", f"Open the broadcast. {pbp} welcomes everyone{title}; between them, {pbp} and {color} "
+                             f"name every player with its civ: {roster}. {color} sets the stakes: {models} AI models"
                              + (f", {limit} turns" if limit else "")
                              + ", and they can message each other, so expect alliances, threats and betrayals. The "
                              f"last line throws to the action.{joined} Make it big: this is the opening.", PBP, 3)
 
     def outro(self) -> Beat:
-        return Beat("outro", f"The game is over: {self.result()}. Max calls the result with the final score; Ada says "
-                             "why, with one number, and names one standout from the rest of the table; Max thanks "
-                             "the viewers and signs off for both of you. These are the last lines of the broadcast.",
+        pbp, color = self.names
+        return Beat("outro", f"The game is over: {self.result()}. {pbp} calls the result with the final score; {color} "
+                             f"says why, with one number, and names one standout from the rest of the table; {pbp} "
+                             "thanks the viewers and signs off for both of you. These are the last lines of the "
+                             "broadcast.",
                     PBP, 3)
 
     def result(self) -> str:
@@ -450,8 +465,10 @@ class Caster:
                 "plans": bool(self.plans()), "bottom": len(m.civs) >= 3, "race": len(m.civs) >= 2,
                 "rivals": len(m.civs) >= 2}
         topic = min((t for t in TOPICS if fits.get(t, True)), key=lambda t: self.topics_used.get(t, -1))
+        pbp, color = self.names
         return Beat("color", f"Nothing new to call this moment, so the desk fills with analysis. The angle: "
-                             f"{TOPICS[topic]}. Ada opens with a sharp observation and a number; Max reacts.", COLOR, 2,
+                             f"{TOPICS[topic]}. {color} opens with a sharp observation and a number; {pbp} reacts.",
+                    COLOR, 2,
                     topic=topic)
 
     # ---- writing and voicing a beat ----
@@ -482,14 +499,14 @@ class Caster:
         """The beat's lines, from the LLM; None if the call failed."""
         with self.lock:
             recent = "\n".join(f"{line['name']}: {line['text']}" for line in self.lines[-MEMORY:])
-        first = CASTERS[beat.first][0]
+        first = self.casters[beat.first][0]
         prompt = (f"DATA\n{self.summary()}\n\nRECENT LINES (oldest first)\n{recent or '(none: this is the opening)'}"
                   f"\n\nNOW\n{beat.task}\nWrite {beat.count} lines, {first} first, speakers alternating.")
         try:
             reply = json.loads(self.post("/v1/chat/completions", {
-                "model": self.model, "max_tokens": 400, "temperature": 0.9,
-                "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]}, 45))
-            lines = parse_lines(reply["choices"][0]["message"]["content"], self.match)
+                "model": self.model, "max_tokens": 400,
+                "messages": [{"role": "system", "content": self.system}, {"role": "user", "content": prompt}]}, 45))
+            lines = parse_lines(reply["choices"][0]["message"]["content"], self.match, self.casters)
         except (OSError, ValueError, KeyError, IndexError, TypeError, http.client.HTTPException) as e:
             self.log(f"caster: the {beat.kind} beat failed, retrying in {RETRY_SECONDS} s: {failure(e)}")
             return None
@@ -497,7 +514,7 @@ class Caster:
 
     def voice(self, line: dict) -> bytes | None:
         """The line spoken, as a WAV file; None if the speech call failed."""
-        _, voice, style = CASTERS[line["speaker"]]
+        _, voice, style = self.casters[line["speaker"]]
         try:
             wav = leveled(fixed_wav(self.post("/v1/audio/speech", {
                 "model": self.tts_model, "voice": voice, "input": line["text"], "instructions": style,
@@ -522,11 +539,11 @@ class Caster:
                 if wav:
                     self.audio[ident] = wav
                     self.audio.pop(ident - AUDIO_KEPT, None)
-                self.lines.append({"id": ident, "speaker": line["speaker"], "name": CASTERS[line["speaker"]][0],
+                self.lines.append({"id": ident, "speaker": line["speaker"], "name": self.casters[line["speaker"]][0],
                                    "text": line["text"], "audio": f"audio/{ident}.wav" if wav else None,
                                    "seconds": round(seconds, 2), "turn": self.match.turn, "focus": line["focus"],
                                    "kind": beat.kind})
-                self.log(f"[{beat.kind} T{self.match.turn}] {CASTERS[line['speaker']][0]}: {line['text']}")
+                self.log(f"[{beat.kind} T{self.match.turn}] {self.casters[line['speaker']][0]}: {line['text']}")
 
     # ---- the DATA the casters read ----
 
@@ -637,30 +654,46 @@ class Caster:
         return leader, since
 
 
-def parse_lines(content: str, match: Match) -> list[dict]:
+def casters_of(config: dict) -> dict[str, tuple[str, str, str]]:
+    """The two casters as a task's broadcast sets them up (`play_by_play` and `analyst`, each {name, voice, style}),
+    with the default for whatever it leaves out."""
+    return {speaker: tuple((config.get(seat) or {}).get(key, default)
+                           for key, default in zip(("name", "voice", "style"), CASTERS[speaker], strict=True))
+            for speaker, seat in SEATS.items()}
+
+
+def renamed(text: str, casters: dict[str, tuple[str, str, str]]) -> str:
+    """`text`, written for Max and Ada, with the casters' own names."""
+    names = {CASTERS[s][0]: casters[s][0] for s in CASTERS}
+    return re.sub(r"\b(Max|Ada)\b", lambda m: names[m[1]], text)
+
+
+def parse_lines(content: str, match: Match, casters: dict[str, tuple[str, str, str]] = CASTERS) -> list[dict]:
     """The lines in an LLM reply (JSON, maybe in a code fence), cleaned up for speech."""
     found = re.search(r"\{.*\}", content, re.S)
     if found is None:
         raise ValueError(f"no JSON in the reply: {content[:120]!r}")
-    speakers = {name.lower(): speaker for speaker, (name, _, _) in CASTERS.items()} | {s: s for s in CASTERS}
+    speakers = {name.lower(): speaker for speaker, (name, _, _) in casters.items()} | {s: s for s in casters}
+    names = tuple(name for name, _, _ in casters.values())
     lines = []
     for item in json.loads(found[0]).get("lines") or ():
         speaker = speakers.get(str(item.get("speaker")).lower()) if isinstance(item, dict) else None
-        if speaker and (text := spoken(item.get("text"))):
-            own, other = (CASTERS[s][0] for s in (speaker, PBP if speaker == COLOR else COLOR))
-            text = re.sub(rf"\b{own}\b", other, text)   # "a fine move, Ada" from Ada herself was meant for Max
+        if speaker and (text := spoken(item.get("text"), names)):
+            own, other = (casters[s][0] for s in (speaker, PBP if speaker == COLOR else COLOR))
+            text = re.sub(rf"\b{re.escape(own)}\b", other, text)   # "a fine move, Ada" from Ada was meant for Max
             lines.append({"speaker": speaker, "text": text, "focus": match.civ_named(item.get("focus"))})
     if not lines:
         raise ValueError(f"no lines in the reply: {content[:120]!r}")
     return lines
 
 
-def spoken(text) -> str:
+def spoken(text, names: tuple[str, ...] = ("Max", "Ada")) -> str:
     """A line as it is said: no stage directions or speaker prefix, "bleep" for a blocked or masked word (a voice
     could read "s***" as the word), at most MAX_WORDS words (whole sentences)."""
     text = MASKED.sub("bleep", str(text or ""))   # before its stars read as a stage direction
     text = BLOCKED.sub("bleep", re.sub(r"\*[^*]*\*|\[[^\]]*\]", "", text))
-    text = " ".join(re.sub(r"^\s*(Max|Ada)\s*:\s*", "", text).split())
+    prefix = "|".join(re.escape(name) for name in names)
+    text = " ".join(re.sub(rf"^\s*(?:{prefix})\s*:\s*", "", text).split())
     if len(text.split()) <= MAX_WORDS:
         return text
     kept: list[str] = []
@@ -772,8 +805,10 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--data", required=True, help="the env's live view, e.g. http://127.0.0.1:41589/live")
     p.add_argument("--port", type=int, default=8790)
-    p.add_argument("--model", default="anthropic/claude-haiku-4-5", help="the model that writes the lines")
-    p.add_argument("--tts-model", default="openai/gpt-4o-mini-tts", help="the model that speaks them")
+    p.add_argument("--config", type=json.loads, default={},
+                   help='the casters as a task\'s broadcast sets them up, JSON: {"model": the model that writes the '
+                        'lines, "tts_model": the one that speaks them, "play_by_play" and "analyst": {"name", "voice", '
+                        '"style"}}; what it leaves out keeps its default')
     p.add_argument("--title", help="the broadcast's title, for the intro")
     args = p.parse_args()
     base_url, api_key = os.environ.get("CAST_BASE_URL", ""), os.environ.get("CAST_API_KEY", "")
@@ -781,12 +816,14 @@ def main() -> int:
         print("caster: set CAST_BASE_URL (the endpoint, e.g. https://your-litellm-proxy) and CAST_API_KEY",
               file=sys.stderr)
         return 2
-    caster = Caster(args.data, base_url, api_key, model=args.model, tts_model=args.tts_model, title=args.title)
+    config = args.config
+    caster = Caster(args.data, base_url, api_key, model=config.get("model", MODEL),
+                    tts_model=config.get("tts_model", TTS_MODEL), casters=casters_of(config), title=args.title)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler(caster))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     caster.log(f"Casting {caster.data_url} on http://127.0.0.1:{args.port}/cast.json: "
-               f"{' and '.join(name for name, _, _ in CASTERS.values())}, written by {args.model}, "
-               f"voiced by {args.tts_model}")
+               f"{' and '.join(name for name, _, _ in caster.casters.values())}, written by {caster.model}, "
+               f"voiced by {caster.tts_model}")
     caster.run()
     return 0
 

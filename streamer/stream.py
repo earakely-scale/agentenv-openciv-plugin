@@ -1,7 +1,7 @@
 """Streams an OpenCiv3 env's live view to an RTMP server such as Twitch, or records it, or both: Chromium shows the
 page's stream layout (`?stream`) full screen on a virtual display and plays its sound into a PulseAudio null sink, and
-ffmpeg encodes the display and the sink to STREAM_URL and, with --record, to a Matroska file. With --cast, two AI
-casters (caster.py) talk over the game: the page plays their voices and shows them as captions. It waits for the env
+ffmpeg encodes the display and the sink to STREAM_URL and, with --record, to a Matroska file. With --cast-config, two
+AI casters (caster.py) talk over the game: the page plays their voices and shows them as captions. It waits for the env
 to answer, and stops `--linger` seconds after the game ends, or once the env has been gone for a minute. STREAM_URL
 holds the stream key and CAST_API_KEY the model endpoint's key: nothing it prints shows either."""
 
@@ -109,9 +109,9 @@ def main() -> int:
     p.add_argument("--bitrate", default="4500k")
     p.add_argument("--linger", type=float, default=60)
     p.add_argument("--client-view", action="store_true", help="show the spotlit agent's real-client view full size")
-    p.add_argument("--cast", action="store_true", help="two AI casters talk over the game (CAST_BASE_URL, "
-                                                        "CAST_API_KEY: an OpenAI-compatible endpoint)")
-    p.add_argument("--cast-model", default="anthropic/claude-haiku-4-5", help="the model that writes their lines")
+    p.add_argument("--cast-config", metavar="JSON",
+                   help="two AI casters talk over the game, set up as the JSON says ({} for their defaults; caster.py "
+                        "--config); CAST_BASE_URL and CAST_API_KEY name an OpenAI-compatible endpoint")
     p.add_argument("--title", help="the broadcast's title, on screen and in the casters' intro")
     p.add_argument("--record", metavar="DIR", help="also write the stream to DIR/stream-<UTC time>.mkv")
     args = p.parse_args()
@@ -133,7 +133,7 @@ def main() -> int:
     procs = [start_pulseaudio(env),
              subprocess.Popen(["Xvfb", DISPLAY, "-screen", "0", f"{width}x{height}x24", "-nolisten", "tcp"])]
     time.sleep(2)
-    cast_port = free_port() if args.cast else None
+    cast_port = free_port() if args.cast_config is not None else None
     page = page_url(args.url, client_view=args.client_view, cast_port=cast_port, title=args.title)
     procs.append(subprocess.Popen(
         ["chromium", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--no-first-run", "--noerrdialogs",
@@ -146,17 +146,17 @@ def main() -> int:
     ffmpeg = subprocess.Popen(ffmpeg_command(args.size, args.fps, args.bitrate, target, record),
                               env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     threading.Thread(target=relay, args=(ffmpeg.stderr, secrets), daemon=True).start()
-    if args.cast:   # after ffmpeg, so the recording has the intro
+    if cast_port:   # after ffmpeg, so the recording has the intro
         caster = subprocess.Popen(
             [sys.executable, str(CASTER), "--data", args.url.split("?")[0], "--port", str(cast_port),
-             "--model", args.cast_model, *(["--title", args.title] if args.title else [])],
+             "--config", args.cast_config, *(["--title", args.title] if args.title else [])],
             env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         threading.Thread(target=relay, args=(caster.stdout, secrets), daemon=True).start()
         procs.append(caster)
     procs.append(ffmpeg)
     where = " and ".join([*(["to the RTMP server"] if target else []), *([f"to {record}"] if record else [])])
     print(f"Streaming {args.url} at {args.size}, {args.fps} fps, {args.bitrate} {where}"
-          + (", with the casters" if args.cast else ""), flush=True)
+          + (", with the casters" if cast_port else ""), flush=True)
 
     game_over_since = gone_since = None
     try:

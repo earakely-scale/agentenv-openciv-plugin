@@ -1,7 +1,10 @@
+import http.server
 import importlib.util
+import json
 import os
 import shlex
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -201,34 +204,71 @@ def test_stream_sends_the_newest_game_under_way_without_showing_the_key(tmp_path
     assert log.read_text().splitlines()[1] == "rtmp://live.twitch.tv/app/live_123_secret?bandwidthtest=true"
 
 
-def test_stream_records_offline_with_the_casters_without_showing_any_key(tmp_path, monkeypatch):
+def test_stream_records_offline_with_the_tasks_casters_without_showing_any_key(tmp_path, monkeypatch):
     _config(monkeypatch)   # no stream key: offline needs none
     log = tmp_path / "docker.log"
     fake_docker(tmp_path, monkeypatch, '  "image inspect") ;;\n'
                                        f'  "run --rm") echo "$@" > {log}; '
                                        f'echo "[$STREAM_URL] $CAST_BASE_URL $CAST_API_KEY" >> {log} ;;\n')
+    casters = {"model": "openai/gpt-5.6-luna", "analyst": {"name": "Iris", "voice": "coral"}}
+    monkeypatch.setattr(cli, "_broadcast", lambda url: {"title": "Battle of the Labs", "casters": casters})
     monkeypatch.setattr(cli.sys, "platform", "darwin")
     rec = tmp_path / "rec" / "show"
-    result = CliRunner().invoke(openciv3, ["stream", "--url", "http://127.0.0.1:41589/live", "--cast", "--offline",
-                                           "--record", str(rec), "--title", "Battle of the Labs"])
+    stream = ["stream", "--url", "http://127.0.0.1:41589/live", "--offline", "--record", str(rec)]
+    result = CliRunner().invoke(openciv3, stream)
     assert result.exit_code == 0, result.output
     assert rec.is_dir() and f"into {rec}, with the casters" in result.output
     args, env = log.read_text().splitlines()
     assert args.startswith(f"run --rm --shm-size 1g -v {rec.resolve()}:/rec -e STREAM_URL -e CAST_BASE_URL "
                            f"-e CAST_API_KEY {STREAMER_IMAGE} --url http://host.docker.internal:41589/live")
-    assert args.endswith("--linger 60 --cast --cast-model anthropic/claude-haiku-4-5 --title Battle of the Labs "
-                         "--record /rec")
+    assert args.endswith(f"--linger 60 --cast-config {json.dumps(casters)} --title Battle of the Labs --record /rec")
     assert env == "[] http://host.docker.internal:4000 sk-model-key-456"   # values in the environment only
     assert "sk-model-key-456" not in result.output + args
 
+    assert CliRunner().invoke(openciv3, [*stream, "--no-cast", "--title", "Mine"]).exit_code == 0
+    args, env = log.read_text().splitlines()
+    assert args.endswith("--linger 60 --title Mine --record /rec") and env == "[]  "
+
+    monkeypatch.setattr(cli, "_broadcast", lambda url: {})   # a task without a broadcast: no casters unless asked
     monkeypatch.setattr(cli.sys, "platform", "linux")   # the container writes the recording as you
-    result = CliRunner().invoke(openciv3, ["stream", "--url", "http://127.0.0.1:41589/live", "--offline",
-                                           "--record", str(rec)])
+    result = CliRunner().invoke(openciv3, stream)
     assert result.exit_code == 0, result.output
     args, env = log.read_text().splitlines()
     assert (f"--network host -v {rec.resolve()}:/rec --user {os.getuid()}:{os.getgid()} -e HOME=/tmp -e STREAM_URL "
             f"{STREAMER_IMAGE} --url http://127.0.0.1:41589/live") in args
-    assert env == "[]  " and "--cast" not in args
+    assert env == "[]  " and "--cast" not in args and "--title" not in args
+    assert CliRunner().invoke(openciv3, [*stream, "--cast"]).exit_code == 0
+    assert log.read_text().splitlines()[0].endswith("--linger 60 --cast-config {} --record /rec")
+
+
+def test_stream_reads_the_broadcast_from_the_game(monkeypatch):
+    live = {"turn": 3, "broadcast": {"title": "Showmatch", "casters": {}}}
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _serving({"/live/data.json": {"live": live}}))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/live"
+        assert cli._broadcast(url) == {"title": "Showmatch", "casters": {}}
+        assert server.paths == [f"/live/data.json?since={cli.NO_TURNS}"]
+        live["broadcast"] = None   # a game without one, or an env that predates broadcasts
+        assert cli._broadcast(url) == {}
+    finally:
+        server.shutdown()
+    assert cli._broadcast(url) == {}   # gone
+
+
+def _serving(docs: dict[str, dict]) -> type[http.server.BaseHTTPRequestHandler]:
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.server.paths = [*getattr(self.server, "paths", []), self.path]
+            body = json.dumps(docs[self.path.split("?")[0]]).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+    return Handler
 
 
 def test_stream_builds_a_new_streamer_image_when_streamer_changes(tmp_path, monkeypatch):
@@ -258,13 +298,17 @@ def test_stream_builds_a_new_streamer_image_when_streamer_changes(tmp_path, monk
     assert result.exit_code == 2 and "no checkout of agentenv-openciv-plugin with streamer/ found" in result.output
 
 
-def test_stream_explains_what_offline_and_cast_need(tmp_path, monkeypatch):
+def test_stream_explains_what_offline_and_the_casters_need(tmp_path, monkeypatch):
     _config(monkeypatch, model=False)
+    fake_docker(tmp_path, monkeypatch, '  "image inspect") ;;\n')
+    monkeypatch.setattr(cli, "_broadcast", lambda url: {"casters": {}})
     result = CliRunner().invoke(openciv3, ["stream", "--offline"])
     assert result.exit_code == 2 and "--offline only records: add --record DIR" in result.output
-    result = CliRunner().invoke(openciv3, ["stream", "--cast", "--offline", "--record", str(tmp_path)])
+    result = CliRunner().invoke(openciv3, ["stream", "--url", "http://127.0.0.1:41589/live", "--offline",
+                                           "--record", str(tmp_path)])
     assert result.exit_code == 1
-    assert "--cast needs agent-env's model endpoint: No model endpoint configured" in result.output
+    assert "the casters need agent-env's model endpoint: No model endpoint configured" in result.output
+    assert result.output.rstrip().endswith("or stream without them: --no-cast")
 
 
 def _streamer():

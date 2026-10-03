@@ -91,6 +91,7 @@ returns. Before the first game, `game` is null, `turns` is empty, and so are `se
 ```jsonc
 {"turn": 57, "game_over": false, "victory": null, "client": true, "recording": true,
  "min_turn_seconds": 15,                                          // the broadcast pace: no turn ends sooner; 0: none
+ "broadcast": {"title": "OpenCiv3 Showmatch", "casters": {}},     // the task's (tools.md, The broadcast); null: none
  "messages": [{"from": "Rome", "to": ["Greece"], "text": "Join me against Carthage.",
                "seconds": 12.4}],                                 // this turn's, oldest first; "to": "all" for everyone
  "seats": [{"civ": "Rome", "label": "opus", "ended": false,      // has ended the turn
@@ -117,7 +118,7 @@ choosing what to show. Parameters, after `stream`:
 |---|---|
 | `client` | Spotlights show the agent's real-client view full size, not in the corner |
 | `cast=URL` | The casters' service (`streamer/caster.py`, e.g. `http://127.0.0.1:8790`): their lines are voiced and captioned |
-| `title=TEXT` | The broadcast's name, in the top bar and on the title card |
+| `title=TEXT` | The broadcast's name, in the top bar and on the title card; without it the title card shows the task's (`live.broadcast.title`) |
 
 On screen: the map and the side panel (standings, the spotlit agent's card with its newest note, plan and turn, the
 diplomacy feed, the score chart while no agent is spotlit, and the events), a lower-third caption while a caster

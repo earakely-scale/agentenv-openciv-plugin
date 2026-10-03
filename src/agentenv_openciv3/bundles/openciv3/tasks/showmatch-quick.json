@@ -1,0 +1,143 @@
+[
+  {
+    "id": "deploy",
+    "type": "deploy_env",
+    "env_id": "openciv3",
+    "ttl_seconds": 3600
+  },
+  {
+    "id": "agent-opus",
+    "type": "deploy_agent",
+    "agent_name": "opus",
+    "a2a_agent_id": "openciv3-claude",
+    "env_ids": [
+      "openciv3"
+    ],
+    "ttl_seconds": 3600,
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "agent-sol",
+    "type": "deploy_agent",
+    "agent_name": "sol",
+    "a2a_agent_id": "openciv3-codex",
+    "env_ids": [
+      "openciv3"
+    ],
+    "ttl_seconds": 3600,
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "agent-kimi",
+    "type": "deploy_agent",
+    "agent_name": "kimi",
+    "a2a_agent_id": "openciv3-claude",
+    "env_ids": [
+      "openciv3"
+    ],
+    "ttl_seconds": 3600,
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "match",
+    "type": "openciv3_match",
+    "env_id": "openciv3",
+    "turns": 10,
+    "size": "Tiny",
+    "civs": {
+      "opus": "Rome",
+      "sol": "America",
+      "kimi": "China"
+    },
+    "min_turn_seconds": 15,
+    "broadcast": {
+      "title": "OpenCiv3 Showmatch: Opus 5.5 vs GPT-6 Sol vs Kimi K3",
+      "casters": {
+        "model": "anthropic/claude-sonnet-5-5",
+        "tts_model": "openai/gpt-4o-mini-tts",
+        "play_by_play": {
+          "name": "Max",
+          "voice": "ash"
+        },
+        "analyst": {
+          "name": "Ada",
+          "voice": "sage"
+        }
+      }
+    },
+    "depends_on": [
+      "agent-opus",
+      "agent-sol",
+      "agent-kimi"
+    ]
+  },
+  {
+    "id": "opus",
+    "type": "prompt_agent",
+    "agent_name": "opus",
+    "model": "anthropic/claude-opus-5-5",
+    "prompt_id": "opus",
+    "prompt": "You lead a civilization in a game of OpenCiv3, an open-source Civilization III remake, against two other AI models, and the game is broadcast live: two commentators call it for an audience. Play to win: the highest score at the turn limit, or be the last civilization an agent plays. The get_turn_brief tool shows your civilization, your rivals, the match's rules and what needs orders; you act only through the openciv3 tools. Nobody will answer questions, so never ask or wait for confirmation. Talk to the other leaders with the message tool: propose alliances, strike deals, warn and threaten, negotiate peace. Everyone watching reads your messages, so stay in character as your civilization's leader. Each time you end a turn, give end_turn a note for the audience: one line on what you did and why. Keep playing until the end_turn tool reports GAME OVER, then reply with your final result.",
+    "timeout_seconds": 1800,
+    "fail_task_on_error": false,
+    "depends_on": [
+      "match"
+    ]
+  },
+  {
+    "id": "sol",
+    "type": "prompt_agent",
+    "agent_name": "sol",
+    "model": "openai/gpt-6-sol",
+    "prompt_id": "sol",
+    "prompt": "You lead a civilization in a game of OpenCiv3, an open-source Civilization III remake, against two other AI models, and the game is broadcast live: two commentators call it for an audience. Play to win: the highest score at the turn limit, or be the last civilization an agent plays. The get_turn_brief tool shows your civilization, your rivals, the match's rules and what needs orders; you act only through the openciv3 tools. Nobody will answer questions, so never ask or wait for confirmation. Talk to the other leaders with the message tool: propose alliances, strike deals, warn and threaten, negotiate peace. Everyone watching reads your messages, so stay in character as your civilization's leader. Each time you end a turn, give end_turn a note for the audience: one line on what you did and why. Keep playing until the end_turn tool reports GAME OVER, then reply with your final result.",
+    "timeout_seconds": 1800,
+    "fail_task_on_error": false,
+    "depends_on": [
+      "match"
+    ]
+  },
+  {
+    "id": "kimi",
+    "type": "prompt_agent",
+    "agent_name": "kimi",
+    "model": "bedrock/global.moonshotai.kimi-k3",
+    "prompt_id": "kimi",
+    "prompt": "You lead a civilization in a game of OpenCiv3, an open-source Civilization III remake, against two other AI models, and the game is broadcast live: two commentators call it for an audience. Play to win: the highest score at the turn limit, or be the last civilization an agent plays. The get_turn_brief tool shows your civilization, your rivals, the match's rules and what needs orders; you act only through the openciv3 tools. Nobody will answer questions, so never ask or wait for confirmation. Talk to the other leaders with the message tool: propose alliances, strike deals, warn and threaten, negotiate peace. Everyone watching reads your messages, so stay in character as your civilization's leader. Each time you end a turn, give end_turn a note for the audience: one line on what you did and why. Keep playing until the end_turn tool reports GAME OVER, then reply with your final result.",
+    "timeout_seconds": 1800,
+    "fail_task_on_error": false,
+    "depends_on": [
+      "match"
+    ]
+  },
+  {
+    "id": "grade",
+    "type": "env_outcome_verifier",
+    "env_id": "openciv3",
+    "file_artifact_id": "victor-verifier",
+    "verifier_id": "victor",
+    "score_aggregator": "weighted_average",
+    "depends_on": [
+      "opus",
+      "sol",
+      "kimi"
+    ]
+  },
+  {
+    "id": "recording",
+    "type": "save_env_recording",
+    "env_id": "openciv3",
+    "timeout_seconds": 1200,
+    "depends_on": [
+      "opus",
+      "sol",
+      "kimi"
+    ]
+  }
+]

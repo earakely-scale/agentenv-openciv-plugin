@@ -17,6 +17,7 @@ from agent_env.task_step.registry import get_task_step_registry
 from agentenv_protocol import AgentEnvEnvironment, DataPart, client, environment_card, extension, get_data
 from agentenv_protocol.types import WELL_KNOWN_PATH
 
+from agentenv_openciv3 import broadcast
 from agentenv_openciv3.steps import (
     NEW_GAME_EXTENSION,
     RECORDING_EXTENSION,
@@ -302,6 +303,27 @@ def test_a_paced_match_round_trips(local_stores):
     assert cls.from_dict({"id": "m", "type": "openciv3_match", "env_id": "e", "turns": 1}).min_turn_seconds == 0
 
 
+async def test_a_match_names_its_broadcast_for_the_env(local_stores):
+    env = FakeGame()
+    show = {"title": "Showmatch", "casters": {"model": "openai/gpt-5.6-luna", "analyst": {"name": "Iris"}}}
+    async with deployed(env) as record:
+        for value in (show, None):
+            await OpenCiv3MatchTaskStep(id="match", version=None, env_id="openciv3", turns=10,
+                                        broadcast=value).execute(run_context(record, "opus", "sol"))
+    assert [g.get("broadcast") for g in env.games] == [show, None]
+
+
+def test_a_broadcast_match_round_trips_and_a_bad_broadcast_fails_when_the_task_loads(local_stores):
+    cls = get_task_step_registry()["openciv3_match"]
+    data = {"id": "match", "type": "openciv3_match", "env_id": "openciv3", "turns": 10,
+            "broadcast": {"title": "Showmatch", "casters": True}}
+    again = cls.from_dict(cls.from_dict(data).to_dict())
+    assert again.to_dict() == cls.from_dict(data).to_dict() and again.broadcast == data["broadcast"]
+    assert cls.from_dict({"id": "m", "type": "openciv3_match", "env_id": "e", "turns": 1}).broadcast is None
+    with pytest.raises(ValueError, match="broadcast casters must be true, false or an object"):
+        cls.from_dict({**data, "broadcast": {"casters": "loud"}})
+
+
 def test_a_match_with_humans_round_trips(local_stores):
     cls = get_task_step_registry()["openciv3_match"]
     for humans in ({"you": "Rome"}, ["you", "friend"]):
@@ -376,7 +398,8 @@ def test_await_game_is_registered_under_its_type_and_round_trips(local_stores):
 
 
 @pytest.mark.parametrize("task", ["smoke", "play", "full-game", "three-agents", "three-agents-quick", "frontier",
-                                  "frontier-quick", "human-vs-ai", "human-vs-agents"])
+                                  "frontier-quick", "showmatch", "showmatch-quick", "livestream", "human-vs-ai",
+                                  "human-vs-agents"])
 def test_every_bundle_task_records_after_the_game_alongside_grading(local_stores, task):
     steps = json.loads(files("agentenv_openciv3.bundles").joinpath(f"openciv3/tasks/{task}.json").read_text())
     by_type = {s["type"]: s for s in steps}
@@ -429,7 +452,33 @@ def test_frontier_seats_nine_models_on_a_standard_map(local_stores):
     assert all(s["prompt"] == players[0]["prompt"] and s["depends_on"] == ["match"] for s in players)
 
 
-@pytest.mark.parametrize("full_name", ["three-agents", "frontier"])
+@pytest.mark.parametrize(("task", "turns", "size", "pace", "sessions"), [
+    ("showmatch", 50, "Tiny", 15, None), ("livestream", 140, "Small", 45, {"OPENCIV3_SESSION_TURNS": "40"})])
+def test_the_broadcast_tasks_seat_three_labs_paced_and_cast_for_a_stream(local_stores, task, turns, size, pace,
+                                                                         sessions):
+    steps = json.loads(files("agentenv_openciv3.bundles").joinpath(f"openciv3/tasks/{task}.json").read_text())
+    registry = get_task_step_registry()
+    for s in steps:
+        assert registry[s["type"]].from_dict(s).to_dict()["id"] == s["id"]
+    match = registry["openciv3_match"].from_dict(next(s for s in steps if s["type"] == "openciv3_match"))
+    assert (match.turns, match.size, match.min_turn_seconds) == (turns, size, pace)
+    assert match.civs == {"opus": "Rome", "sol": "America", "kimi": "China"}
+    assert broadcast.settings(match.broadcast)["casters"] == {
+        "model": "anthropic/claude-sonnet-5-5", "tts_model": "openai/gpt-4o-mini-tts",
+        "play_by_play": {"name": "Max", "voice": "ash"}, "analyst": {"name": "Ada", "voice": "sage"}}
+    assert match.broadcast["title"].endswith("Opus 5.5 vs GPT-6 Sol vs Kimi K3")
+    agents = {s["agent_name"]: s for s in steps if s["type"] == "deploy_agent"}
+    assert {n: a["a2a_agent_id"] for n, a in agents.items()} == {
+        "opus": "openciv3-claude", "sol": "openciv3-codex", "kimi": "openciv3-claude"}
+    assert all(a.get("env_vars") == sessions for a in agents.values())
+    players = [s for s in steps if s["type"] == "prompt_agent"]
+    assert {s["agent_name"]: s["model"] for s in players} == {
+        "opus": "anthropic/claude-opus-5-5", "sol": "openai/gpt-6-sol", "kimi": "bedrock/global.moonshotai.kimi-k3"}
+    assert all(s["prompt"] == players[0]["prompt"] and s["depends_on"] == ["match"] for s in players)
+    assert all(w in players[0]["prompt"] for w in ("broadcast live", "message tool", "end_turn a note", "GAME OVER"))
+
+
+@pytest.mark.parametrize("full_name", ["three-agents", "frontier", "showmatch"])
 def test_a_quick_task_is_the_same_match_in_ten_turns(local_stores, full_name):
     tasks = files("agentenv_openciv3.bundles").joinpath("openciv3/tasks")
     full = json.loads(tasks.joinpath(f"{full_name}.json").read_text())

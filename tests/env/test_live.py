@@ -64,7 +64,7 @@ async def test_data_json_sends_the_turns_after_since_and_the_turn_being_played(e
     first = await data(env)
     assert first["game"] is None and first["turns"] == [] and first["live"] == {
         "turn": None, "game_over": False, "victory": None, "client": False, "recording": True, "min_turn_seconds": 0,
-        "messages": [], "seats": []}
+        "broadcast": None, "messages": [], "seats": []}
 
     await tools("unit_order", unit="u1", order="found_city")
     await tools.error("unit_order", unit="u2", order="explore")

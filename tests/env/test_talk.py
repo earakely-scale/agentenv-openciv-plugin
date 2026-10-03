@@ -1,6 +1,6 @@
 """What the agents say, to each other and to the people watching (docs/tools.md): the message tool, end_turn's note,
-the plan on the broadcast, and the broadcast pace (min_turn_seconds), with the fake bridge (whose seats share one
-scripted game)."""
+the plan on the broadcast, the broadcast pace (min_turn_seconds) and the broadcast's title and casters, with the fake
+bridge (whose seats share one scripted game)."""
 
 import asyncio
 import base64
@@ -13,7 +13,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.lowlevel.server import request_ctx
 from mcp.shared.context import RequestContext
 
-from agentenv_openciv3 import actionlog, server
+from agentenv_openciv3 import actionlog, broadcast, server
 
 pytestmark = pytest.mark.anyio
 
@@ -277,3 +277,46 @@ async def test_an_engine_restart_while_the_last_seat_waits_for_the_pace_has_ever
     assert all(again in err for err in await asyncio.gather(*waiting))
     assert env.turn == 1 and not any(s.ready or s.pacing for s in env.seats)
     assert all(t.startswith("TURN T1 → T2") for t in await end_turn(leaders))
+
+
+async def test_a_new_game_sets_the_broadcast_the_live_data_carries(env):
+    assert (await live_data(env))["live"]["broadcast"] is None   # no new game yet
+    casters = {"model": "openai/gpt-5.6-luna", "analyst": {"name": " Iris ", "voice": "coral"}}
+    await env.new_game(**MATCH, broadcast={"title": " Battle of the Labs ", "casters": casters})
+    assert (await live_data(env, since=99))["live"]["broadcast"] == {
+        "title": "Battle of the Labs", "casters": {"model": "openai/gpt-5.6-luna",
+                                                   "analyst": {"name": "Iris", "voice": "coral"}}}
+    await env.new_game(**MATCH, broadcast={"casters": True})
+    assert (await live_data(env))["live"]["broadcast"] == {"title": None, "casters": {}}
+    await env.new_game(**MATCH)   # off unless the new game asks again
+    assert (await live_data(env))["live"]["broadcast"] == {"title": None, "casters": None}
+    with pytest.raises(ValueError, match="broadcast casters need two different names"):
+        await env.new_game(broadcast={"casters": {"play_by_play": {"name": "Max"}, "analyst": {"name": "max"}}})
+
+
+@pytest.mark.parametrize(("value", "error"), [
+    ("on", "broadcast must be an object with title and casters"),
+    ({"casters": True, "voice": "ash"}, r"broadcast has unknown keys \['voice'\]"),
+    ({"title": ""}, "broadcast title must be text of 1-80 characters"),
+    ({"title": "x" * 81}, "broadcast title must be text of 1-80 characters"),
+    ({"casters": "yes"}, "broadcast casters must be true, false or an object"),
+    ({"casters": {"voice": "ash"}}, r"broadcast casters have unknown keys \['voice'\]"),
+    ({"casters": {"model": " "}}, "broadcast casters model must be a model name"),
+    ({"casters": {"analyst": {"name": "Iris", "pitch": "low"}}}, "broadcast casters analyst must be an object of"),
+    ({"casters": {"play_by_play": {"voice": 3}}}, "broadcast casters play_by_play must be an object of"),
+    ({"casters": {"analyst": {"name": "<b>Iris</b>"}}}, "broadcast casters analyst name must be 1-20 letters"),
+])
+def test_broadcast_settings_reject_what_the_stream_cannot_use(value, error):
+    with pytest.raises(ValueError, match=error):
+        broadcast.settings(value)
+
+
+def test_broadcast_settings_turn_the_casters_on_or_off():
+    assert broadcast.settings(None) is None
+    assert broadcast.settings({}) == {"title": None, "casters": None}
+    assert broadcast.settings({"casters": False}) == broadcast.settings({"casters": None}) == {
+        "title": None, "casters": None}
+    assert broadcast.settings({"title": "Showmatch", "casters": {"tts_model": "openai/gpt-4o-mini-tts",
+                                                                 "play_by_play": {"name": "Rex O'Neil"}}}) == {
+        "title": "Showmatch", "casters": {"tts_model": "openai/gpt-4o-mini-tts",
+                                          "play_by_play": {"name": "Rex O'Neil"}}}

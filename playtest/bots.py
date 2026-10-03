@@ -1327,6 +1327,8 @@ class Match:
                 args |= {"humans": list(self.humans), "human_turn_seconds": self.args.human_turn_seconds}
             if self.args.min_turn_seconds:
                 args["min_turn_seconds"] = self.args.min_turn_seconds
+            if self.args.broadcast:
+                args["broadcast"] = json.loads(self.args.broadcast)
             game = await env_client.invoke_extension(self.base, card, NEW_GAME, args, 600)
             self.play = {civ: self.base + path for civ, path in (game.get("play") or {}).items()}
             self.turn_limit, self.width = game["turn_limit"], game["map"]["width"] if game["map"].get("wrap_x") else 0
@@ -1510,6 +1512,8 @@ def main() -> int:
     p.add_argument("--ai-opponents", type=int, default=0, help="engine-AI civs besides the seats (default 0)")
     p.add_argument("--min-turn-seconds", type=int, default=0,
                    help="the broadcast pace: no turn ends sooner than this after it began (default 0)")
+    p.add_argument("--broadcast", help='the match\'s broadcast as JSON, e.g. \'{"title": "Test", "casters": true}\' '
+                                       "(docs/tools.md)")
     p.add_argument("--port", type=int, default=0, help="env port (default: a free one)")
     p.add_argument("--bridge", help="CIVBRIDGE_CMD (default: a copy of build/bridge in the output dir)")
     p.add_argument("--no-saves", dest="saves", action="store_false", help="don't keep the engine's per-turn saves")

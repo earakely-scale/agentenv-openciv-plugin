@@ -34,6 +34,7 @@ PLAY_LINK = re.compile(r"\bPLAY (?P<civ>.+?) \((?P<label>.*)\):?(?: game \S+)? \
 NEW_GAME_LINE = re.compile(r"\bNEW GAME \S+")
 STREAMER_IMAGE = "openciv3-streamer"
 STREAM_KEY = "OPENCIV3_STREAM_KEY"
+NO_TURNS = 1_000_000   # a data.json `since` past any game: the reply carries only `live`
 
 
 @click.group()
@@ -130,7 +131,7 @@ def setup(env_id: str, source: Path | None, build_platform: str | None, image: s
             _register_player(root, build_platform, player_id)
         click.echo(f"The bundle's agent tasks deploy the default agent: set [agents] default_a2a_agent_id = "
                    f'"{PLAYER_ID}" in .agentenv/config.toml, and the model endpoint in [model] (base_url, api_key). '
-                   "The frontier tasks name each player's agent.")
+                   "The frontier, showmatch and livestream tasks name each player's agent.")
 
 
 def _register_player(root: Path, build_platform: str, player_id: str) -> None:
@@ -309,6 +310,15 @@ def _playing(url: str) -> bool:
         return False
 
 
+def _broadcast(url: str) -> dict:
+    """The broadcast settings of the game behind a live view (openciv3_match's `broadcast`): {} when it has none."""
+    try:
+        with urllib.request.urlopen(f"{url}/data.json?since={NO_TURNS}", timeout=10) as r:
+            return (json.load(r).get("live") or {}).get("broadcast") or {}
+    except (OSError, ValueError):
+        return {}
+
+
 @openciv3.command()
 @click.option("--url", help="The live view to stream. Default: the newest OpenCiv3 env in Docker whose game is under "
                             "way; the command waits for one to start.")
@@ -323,12 +333,11 @@ def _playing(url: str) -> bool:
 @click.option("--linger", default=60, show_default=True, help="Seconds to keep streaming the final standings.")
 @click.option("--client-view", is_flag=True,
               help="Show the real OpenCiv3 client's view of each agent full size (the env needs setup --client).")
-@click.option("--cast", is_flag=True,
-              help="Two AI casters talk over the game, voiced and captioned. They use agent-env's model endpoint "
-                   "([model] base_url and api_key in .agentenv/config.toml).")
-@click.option("--cast-model", default="anthropic/claude-haiku-4-5", show_default=True,
-              help="The model that writes the casters' lines.")
-@click.option("--title", help="The broadcast's title, on screen and in the casters' intro.")
+@click.option("--cast/--no-cast", default=None,
+              help="Two AI casters talk over the game, voiced and captioned, with the models and voices the task's "
+                   "openciv3_match broadcast names. Default: as the task says; --cast turns them on for a task that "
+                   "has none, --no-cast off. They use agent-env's model endpoint ([model] in .agentenv/config.toml).")
+@click.option("--title", help="The broadcast's title, on screen and in the casters' intro. Default: the task's.")
 @click.option("--record", "record_dir", type=click.Path(file_okay=False, path_type=Path),
               help="Also write the stream to DIR/stream-<UTC time>.mkv.")
 @click.option("--offline", is_flag=True, help="Only record (with --record): nothing goes to Twitch.")
@@ -338,7 +347,7 @@ def _playing(url: str) -> bool:
               help="Checkout whose streamer/ to run, built into an image on first use. Default: the one an editable "
                    "install runs from, or the cwd.")
 def stream(url: str | None, server: str, key_secret: str, size: str, fps: int, bitrate: str, linger: int,
-           client_view: bool, cast: bool, cast_model: str, title: str | None, record_dir: Path | None, offline: bool,
+           client_view: bool, cast: bool | None, title: str | None, record_dir: Path | None, offline: bool,
            bandwidth_test: bool, source: Path | None):
     """Stream a game's live view to Twitch, or any RTMP server, while the agents play it, and optionally record it. A
     headless browser in Docker shows the page and ffmpeg sends it; the stream starts with the game and ends after
@@ -354,11 +363,6 @@ def stream(url: str | None, server: str, key_secret: str, size: str, fps: int, b
                                        f"a line '{key_secret}: <key>' in the secrets file .agentenv/config.toml names, "
                                        f"or export {key_secret}; or record only with --offline --record DIR")
         env["STREAM_URL"] = f"{server.rstrip('/')}/{key}" + ("?bandwidthtest=true" if bandwidth_test else "")
-    if cast:
-        try:
-            env["CAST_BASE_URL"], env["CAST_API_KEY"] = config.get_litellm_base_url(), config.get_litellm_api_key()
-        except ConfigError as e:
-            raise click.ClickException(f"--cast needs agent-env's model endpoint: {e}") from e
     image, context = _streamer_image(source)
     if subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode:
         click.echo(f"Building {image} from {context}")
@@ -368,9 +372,18 @@ def stream(url: str | None, server: str, key_secret: str, size: str, fps: int, b
         click.echo("Waiting for an OpenCiv3 game to start (agent-env run openciv3 --task ...)")
         while (url := next((u for u, _ in _live_views() if _playing(u)), None)) is None:
             time.sleep(5)
+    show = _broadcast(url)
+    casters = show.get("casters") if cast is None else (show.get("casters") or {}) if cast else None
+    title = title or show.get("title")
+    if casters is not None:
+        try:
+            env["CAST_BASE_URL"], env["CAST_API_KEY"] = config.get_litellm_base_url(), config.get_litellm_api_key()
+        except ConfigError as e:
+            raise click.ClickException(f"the casters need agent-env's model endpoint: {e}; or stream without them: "
+                                       "--no-cast") from e
     if sys.platform == "darwin":   # Docker Desktop: the container reaches this machine at host.docker.internal
         network, page = [], _from_container(url)
-        if cast:
+        if casters is not None:
             env["CAST_BASE_URL"] = _from_container(env["CAST_BASE_URL"])
     else:
         network, page = ["--network", "host"], url
@@ -383,11 +396,13 @@ def stream(url: str | None, server: str, key_secret: str, size: str, fps: int, b
     test = " as a bandwidth test (not live; see Twitch Inspector)" if bandwidth_test else ""
     where = [] if offline else [f"to {server.rstrip('/')}/<stream key>{test}"]
     where += [f"into {record_dir}"] if record_dir is not None else []
-    click.echo(f"Streaming {url} {' and '.join(where)}{', with the casters' if cast else ''}; Ctrl-C ends the stream")
+    with_casters = ", with the casters" if casters is not None else ""
+    click.echo(f"Streaming {url} {' and '.join(where)}{with_casters}; Ctrl-C ends the stream")
     cmd = ["docker", "run", "--rm", "--shm-size", "1g", *network, *mount,
            *[arg for name in env for arg in ("-e", name)], image,
            "--url", page, "--size", size, "--fps", str(fps), "--bitrate", bitrate, "--linger", str(linger),
-           *(["--client-view"] if client_view else []), *(["--cast", "--cast-model", cast_model] if cast else []),
+           *(["--client-view"] if client_view else []),
+           *(["--cast-config", json.dumps(casters)] if casters is not None else []),
            *(["--title", title] if title else []), *(["--record", "/rec"] if record_dir is not None else [])]
     code = subprocess.run(cmd, env={**os.environ, **env}).returncode
     if code:

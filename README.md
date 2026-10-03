@@ -178,17 +178,28 @@ uplink, `--test` sends to Twitch without going live (its bandwidth test, visible
 shows the real OpenCiv3 client's view of each agent full size (the env needs `setup --client`), and the first run
 builds the streamer image (`streamer/`, about 1.5 GB; a change to `streamer/` builds it again, in seconds).
 
-**Cast it.** `--cast` puts two AI casters on the stream: Max calls the play and Ada, the analyst, says what it means.
-They read the match data the viewer shows (the events, the standings, the agents' plans, notes and messages, who is
-still thinking), open the show, call wars, captured cities and lead changes as they happen, and sign off at GAME
-OVER. A model writes their lines (`--cast-model`, default `anthropic/claude-haiku-4-5`) and `openai/gpt-4o-mini-tts`
-voices them, both through agent-env's model endpoint (`[model]` in `.agentenv/config.toml`); the stream carries their
-voices and shows their lines as captions. `--title` names the broadcast, `--record DIR` also writes the stream to
-`DIR/stream-<UTC time>.mkv`, and `--offline --record DIR` only records, with no stream key, for a dry run:
+**Cast it.** A task can put two AI casters on the stream: Max calls the play and Ada, the analyst, says what it
+means. They read the match data the viewer shows (the events, the standings, the agents' plans, notes and messages,
+who is still thinking), open the show, call wars, captured cities and lead changes as they happen, and sign off at
+GAME OVER; the stream carries their voices and shows their lines as captions. The task's `openciv3_match` step turns
+them on with `broadcast`, which also names the stream and may pick the casters' models, names and voices:
+
+```json
+"broadcast": {"title": "OpenCiv3 Showmatch",
+              "casters": {"model": "anthropic/claude-sonnet-5-5", "tts_model": "openai/gpt-4o-mini-tts",
+                          "play_by_play": {"name": "Max", "voice": "ash"}, "analyst": {"name": "Ada", "voice": "sage"}}}
+```
+
+`"casters": true` takes the defaults (Haiku 4.5 writes the lines, `gpt-4o-mini-tts` speaks them), and `false`, or no
+`broadcast`, leaves them out ([docs/tools.md](docs/tools.md#several-agents-in-one-game), The broadcast). `stream` follows the game it
+streams: `--no-cast` keeps the casters off for one stream, `--cast` puts the default pair on a task that has none,
+and `--title` renames it. Both models run through agent-env's model endpoint (`[model]` in
+`.agentenv/config.toml`). `--record DIR` also writes the stream to `DIR/stream-<UTC time>.mkv`, and
+`--offline --record DIR` only records, with no stream key, for a dry run:
 
 ```bash
-agent-env openciv3 stream --cast --title "Battle of the Labs" --record ~/broadcasts &   # stream it and keep a copy
-agent-env openciv3 stream --cast --title "Battle of the Labs" --offline --record ~/broadcasts &   # or only record it
+agent-env openciv3 stream --client-view --record ~/broadcasts &   # stream it, cast as the task says, keep a copy
+agent-env run openciv3 --task showmatch
 ```
 
 When the game ends, its recording is saved with the run:

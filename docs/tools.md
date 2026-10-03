@@ -67,6 +67,23 @@ A game started with `seats` (new-game extension) is played by several agents, on
   it. That seat counts as having ended the turn in the live view, and its wait is no silence: the env never ends
   its turn for it. A blocked `end_turn` doesn't wait; neither do games with one seat, autoplay, or a turn the env
   ends for a silent seat.
+- **The broadcast:** new-game `broadcast` is the stream's title and whether two AI casters talk over it, set by the
+  task (`openciv3_match`'s `broadcast`) and off when a new game leaves it out. `agent-env openciv3 stream` reads it
+  from the live data (`live.broadcast`) and follows it; the env only keeps it and never calls a model.
+
+  ```jsonc
+  {"title": "OpenCiv3 Showmatch",                  // 1-80 characters: the title card and the casters' intro
+   "casters": {"model": "anthropic/claude-sonnet-5-5",        // writes their lines (default anthropic/claude-haiku-4-5)
+               "tts_model": "openai/gpt-4o-mini-tts",          // speaks them (the default)
+               "play_by_play": {"name": "Max", "voice": "ash", "style": "…"},   // each key optional: the defaults
+               "analyst": {"name": "Ada", "voice": "sage", "style": "…"}}}
+  ```
+
+  `casters` is `false` (the default: no casters), `true` (Max and Ada as above, with their default styles), or an
+  object that changes any of these. `voice` is one of the speech model's voices (`gpt-4o-mini-tts`: `alloy`, `ash`,
+  `ballad`, `coral`, `echo`, `fable`, `nova`, `onyx`, `sage`, `shimmer`, `verse`), `style` tells it how the voice
+  sounds, and a name is 1-20 letters, spaces or `.'-`, different from the other caster's. Both models are called
+  through agent-env's model endpoint (`[model]`) by the streamer, never by the env.
 - **Human seats:** a seat in new-game `humans` is played by a person in the browser (`GET /play`, with the seat's
   token from the result's `play`), through the same tool wrapper, action log and turn as an agent's seat. A tool call
   that would play a human seat fails with `human_seat`: its header names it, or names no seat while the first civ is
@@ -171,8 +188,8 @@ authoritative record of what the agent did.
   `actions`, `rank`, `share` and `auto_ended_turns`; `standings` entries carry `seat`.
 - Extensions (REST, for harnesses and `apply_server_config`):
   - `urn:openciv3:new-game/v1`: scenario args, plus `seats` (more civs played by agents), `labels`
-    (`{civ: label}` for recordings and reports), `humans` and `human_turn_seconds` ([play.md](play.md)), and
-    `min_turn_seconds` (the broadcast pace, above).
+    (`{civ: label}` for recordings and reports), `humans` and `human_turn_seconds` ([play.md](play.md)),
+    `min_turn_seconds` (the broadcast pace, above) and `broadcast` (the title and casters, above).
   - `urn:openciv3:autoplay/v1`: `turns`, `policy` (`null`, `found_capital`, `engine_ai`).
 
 ## Round 2 additions (from the post-playtest audit)

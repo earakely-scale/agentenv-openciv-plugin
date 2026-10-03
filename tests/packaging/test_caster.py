@@ -6,6 +6,7 @@ import codecs
 import importlib.util
 import json
 import math
+import re
 import sys
 import threading
 import urllib.error
@@ -68,6 +69,8 @@ class Fake:
         self.live: dict = {"turn": None, "game_over": False, "victory": None, "seats": []}
         self.data_down = False
         self.prompts: list[str] = []
+        self.chats: list[dict] = []
+        self.analyst = "Ada"
         self.auth: list[str] = []
         self.speech: list[dict] = []
         self.chat_failures = self.speech_failures = 0
@@ -86,10 +89,11 @@ class Fake:
     def chat(self, body: dict) -> str:
         prompt = body["messages"][1]["content"]
         self.prompts.append(prompt)
+        self.chats.append(body)
         if self.content is not None:
             return self.content
         count = int(prompt.rsplit("Write ", 1)[1].split()[0])
-        first = caster.COLOR if "Ada first" in prompt else caster.PBP
+        first = caster.COLOR if f"{self.analyst} first" in prompt else caster.PBP
         other = caster.PBP if first == caster.COLOR else caster.COLOR
         lines = [{"speaker": first if i % 2 == 0 else other, "text": f"Line {len(self.prompts)}.{i}: Rome leads.",
                   "focus": "claude-opus" if i == 0 else "Atlantis"} for i in range(count)]
@@ -220,6 +224,38 @@ def test_the_casters_open_call_the_events_and_sign_off(fake):
         until_quiet(c, clock)
         c.tick()
     assert len(c.lines) == said   # it stops talking
+
+
+def test_the_task_names_the_casters_their_voices_and_models(fake):
+    clock = Clock()
+    config = {"model": "openai/gpt-5.6-luna", "tts_model": "openai/tts-2", "play_by_play": {"name": "Rex"},
+              "analyst": {"name": "Iris", "voice": "coral", "style": "A dry, unhurried analyst."}}
+    casters = caster.casters_of(config)
+    assert casters == {"pbp": ("Rex", "ash", caster.CASTERS["pbp"][2]),
+                       "color": ("Iris", "coral", "A dry, unhurried analyst.")}
+    assert caster.casters_of({}) == caster.CASTERS
+    fake.analyst = "Iris"
+    c = caster.Caster(f"{fake.url}/live", fake.url, KEY, model="openai/gpt-5.6-luna", tts_model="openai/tts-2",
+                      casters=casters, clock=clock)
+    fake.start([entry(1)], turn=1)
+    c.tick()
+    until_quiet(c, clock)
+    c.tick()
+    assert [(line["speaker"], line["name"]) for line in c.lines] == [
+        ("pbp", "Rex"), ("color", "Iris"), ("pbp", "Rex"), ("color", "Iris"), ("pbp", "Rex")]
+    system = fake.chats[0]["messages"][0]["content"]
+    assert "- Rex, play-by-play" in system and "- Iris, colour analyst" in system
+    assert 'Rex says "Iris", Iris says "Rex"' in system and not re.search(r"\b(Max|Ada)\b", system)
+    assert "Rex welcomes everyone" in fake.prompts[0] and "Iris opens with a sharp observation" in fake.prompts[1]
+    assert {b["model"] for b in fake.chats} == {"openai/gpt-5.6-luna"}
+    assert not any("temperature" in b for b in fake.chats)   # some models take only their own
+    assert {s["model"] for s in fake.speech} == {"openai/tts-2"}
+    assert sorted((s["voice"], s["instructions"]) for s in fake.speech)[0] == ("ash", caster.CASTERS["pbp"][2])
+    assert {s["instructions"] for s in fake.speech if s["voice"] == "coral"} == {"A dry, unhurried analyst."}
+    reply = json.dumps({"lines": [{"speaker": "Iris", "text": "Iris: Rome leads, Iris.", "focus": None},
+                                  {"speaker": "Max", "text": "Not a caster here."}]})
+    assert [(line["speaker"], line["text"]) for line in caster.parse_lines(reply, c.match, casters)] == [
+        ("color", "Rome leads, Rex.")]
 
 
 def test_the_casters_pace_themselves_to_their_audio(fake):

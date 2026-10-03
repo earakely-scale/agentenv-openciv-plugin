@@ -16,8 +16,9 @@
 #   --client         also install the real OpenCiv3 client, for recordings of the real game's view. Its art carries
 #                    no licence, so don't push that image to a public registry.
 #   --run TASK       set up the player agents (as --agent) and play the bundle's TASK instead of the smoke game:
-#                    three-agents-quick, three-agents, frontier-quick or frontier (the frontier tasks play OpenAI,
-#                    Google, xAI and Moonshot models too, so they need a LiteLLM --base-url that serves them)
+#                    three-agents-quick, three-agents, frontier-quick, frontier, showmatch-quick, showmatch or
+#                    livestream (the frontier, showmatch and livestream tasks play OpenAI, Google, xAI and Moonshot
+#                    models too, so they need a LiteLLM --base-url that serves them)
 #   --no-smoke       skip the smoke game at the end
 #
 # With --agent the model key (an Anthropic API key, a `claude setup-token` token or a LiteLLM key) comes from
@@ -122,7 +123,7 @@ if [ "$agent" = 1 ]; then
 		} >"$config"
 		echo "Wrote $config"
 	fi
-	case $run in frontier*)
+	case $run in frontier* | showmatch* | livestream)
 		if grep -q 'api.anthropic.com' "$config"; then
 			echo "$run plays OpenAI, Google, xAI and Moonshot models; give the --base-url of a LiteLLM proxy that serves" >&2
 			echo "them (and edit [model] base_url in $config if it already exists)." >&2
@@ -154,6 +155,7 @@ if [ "$agent" = 1 ]; then
 	echo "  agent-env run openciv3 --task play                  # the default agent plays 50 turns"
 	echo "  agent-env run openciv3 --task three-agents          # Opus, Sonnet and Haiku play one 300-turn match"
 	echo "  agent-env run openciv3 --task frontier              # nine models from five labs play one 200-turn match"
+	echo "  agent-env run openciv3 --task showmatch             # Opus, GPT-6 Sol and Kimi: 50 turns, cast for a stream"
 	echo "  agent-env openciv3 watch --open                     # watch a running game live"
 else
 	echo "  scripts/install.sh --agent                          # add the player agents, to have models play"

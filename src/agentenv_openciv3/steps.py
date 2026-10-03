@@ -18,6 +18,8 @@ from agent_env.task_step.context import TaskStepContext
 from agent_env.task_step.task_step import TaskStep
 from agentenv_protocol import client
 
+from . import broadcast as broadcasting
+
 log = logging.getLogger(__name__)
 
 RECORDING_EXTENSION = "urn:openciv3:recording/v1"
@@ -25,7 +27,7 @@ NEW_GAME_EXTENSION = "urn:openciv3:new-game/v1"
 DEFAULT_CIVS = ["Rome", "Greece", "Egypt", "Babylon", "Germany", "Russia", "China", "America", "Japan", "France",
                 "India", "Persia"]
 MATCH_OPTIONS = ("civs", "agents", "seed", "size", "difficulty", "barbarians", "ai_opponents", "landform", "ocean",
-                 "timeout_seconds", "humans", "human_turn_seconds", "min_turn_seconds")
+                 "timeout_seconds", "humans", "human_turn_seconds", "min_turn_seconds", "broadcast")
 
 
 def _deployed_env(context: TaskStepContext, env_id: str) -> DeployedEnv:
@@ -47,7 +49,8 @@ def _extension_card(deployed: DeployedEnv, uri: str) -> dict:
 class OpenCiv3MatchTaskStep(TaskStep):
     """Start a game with one seat per deployed agent and one per human player; the env knows each seat by its name,
     the seat's label. A human plays in the browser, through the play link the step logs (docs/play.md).
-    ``min_turn_seconds`` paces a match for a broadcast: no turn ends sooner (docs/tools.md)."""
+    ``min_turn_seconds`` paces a match for a broadcast: no turn ends sooner; ``broadcast`` names the stream and turns
+    its voiced casters on or off, with their models and voices (docs/tools.md, Broadcast)."""
 
     type: ClassVar[str] = "openciv3_match"
     entity_refs = (EntityRef.env("env_id"),)
@@ -57,7 +60,8 @@ class OpenCiv3MatchTaskStep(TaskStep):
                  barbarians: str = "Roaming", ai_opponents: int = 0, landform: str | None = None,
                  ocean: int | None = None, timeout_seconds: int = 120,
                  humans: dict[str, str] | list[str] | None = None, human_turn_seconds: int = 900,
-                 min_turn_seconds: int = 0, depends_on: list | None = None, fail_task_on_error: bool = True):
+                 min_turn_seconds: int = 0, broadcast: dict | None = None, depends_on: list | None = None,
+                 fail_task_on_error: bool = True):
         super().__init__(id, version, depends_on=depends_on, fail_task_on_error=fail_task_on_error)
         self.env_id = env_id
         self.turns = turns
@@ -74,6 +78,8 @@ class OpenCiv3MatchTaskStep(TaskStep):
         self.humans = (dict(humans) if isinstance(humans, dict) else list(humans)) if humans is not None else None
         self.human_turn_seconds = human_turn_seconds
         self.min_turn_seconds = min_turn_seconds
+        broadcasting.settings(broadcast)
+        self.broadcast = broadcast
 
     def to_dict(self) -> dict:
         return {**super().to_dict(), "env_id": self.env_id, "turns": self.turns,
@@ -117,7 +123,8 @@ class OpenCiv3MatchTaskStep(TaskStep):
                 **{k: v for k, v in [("landform", self.landform), ("ocean", self.ocean)] if v is not None},
                 **({"humans": [s["civ"] for s in humans], "human_turn_seconds": self.human_turn_seconds}
                    if humans else {}),
-                **({"min_turn_seconds": self.min_turn_seconds} if self.min_turn_seconds > 0 else {})}
+                **({"min_turn_seconds": self.min_turn_seconds} if self.min_turn_seconds > 0 else {}),
+                **({"broadcast": self.broadcast} if self.broadcast is not None else {})}
         result = await client.invoke_extension(deployed.environment_url, card, NEW_GAME_EXTENSION, args,
                                                timeout=self.timeout_seconds)
         base_url = deployed.mcp_url.removesuffix("/mcp")

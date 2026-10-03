@@ -45,7 +45,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 
-from . import client, live, matchdata, moderation, recording, render, viewer, webart
+from . import broadcast, client, live, matchdata, moderation, recording, render, viewer, webart
 from .actionlog import ActionLog
 from .baselines import POLICIES, Baselines
 from .bridge import DEAD, Bridge, BridgeError
@@ -53,10 +53,10 @@ from .bridge import DEAD, Bridge, BridgeError
 log = logging.getLogger(__name__)
 
 SCENARIO_KEYS = ("seed", "civ", "opponents", "size", "difficulty", "barbarians", "landform", "ocean", "turn_limit",
-                 "seats", "labels", "humans", "human_turn_seconds", "min_turn_seconds")
+                 "seats", "labels", "humans", "human_turn_seconds", "min_turn_seconds", "broadcast")
 SCENARIO_INTS = {"seed": (0, None), "opponents": (1, 11), "ocean": (0, 100), "turn_limit": (1, 1000),
                  "human_turn_seconds": (0, None), "min_turn_seconds": (0, 600)}
-ENV_ONLY = ("humans", "human_turn_seconds", "min_turn_seconds")    # the env's own scenario keys, not new_game args
+ENV_ONLY = ("humans", "human_turn_seconds", "min_turn_seconds", "broadcast")   # the env's own keys, not new_game args
 ENV_SCENARIO = (("size", "OPENCIV_SIZE", str), ("opponents", "OPENCIV_OPPONENTS", int),
                 ("difficulty", "OPENCIV_DIFFICULTY", str), ("barbarians", "OPENCIV_BARBARIANS", str))
 AUTOPLAY_POLICIES = Literal["null", "found_capital", "engine_ai", "settler_bot"]
@@ -107,6 +107,9 @@ def merge_scenario(base: dict, update: dict) -> dict:
         if key == "labels":
             if not isinstance(value, dict) or not all(isinstance(v, str) for v in (*value, *value.values())):
                 raise ValueError(f"scenario labels must map civ names to labels, got {value!r}")
+            continue
+        if key == "broadcast":
+            update[key] = broadcast.settings(value)
             continue
         if key not in SCENARIO_INTS:
             if not isinstance(value, str):
@@ -1171,18 +1174,20 @@ class OpenCiv3Env(AgentEnvEnvironment):
                            "link in the result's `play` (none when omitted); human_turn_seconds: how long a human "
                            "seat may idle while others wait before the env ends its turn (0: never); "
                            "min_turn_seconds: with several seats, the shortest a turn lasts (0-600, default 0), so "
-                           "people can follow a broadcast: the last seat to end a turn waits until then.")
+                           "people can follow a broadcast: the last seat to end a turn waits until then; broadcast: "
+                           "the stream's title and voiced casters ({title, casters: false | true | {model, tts_model, "
+                           "play_by_play, analyst}}, off when omitted), which `agent-env openciv3 stream` follows.")
     async def new_game(self, seed: int | None = None, civ: str | None = None, opponents: int | None = None,
                        size: str | None = None, difficulty: str | None = None, barbarians: str | None = None,
                        landform: str | None = None, ocean: int | None = None, turn_limit: int | None = None,
                        seats: list[str] | None = None, labels: dict[str, str] | None = None,
                        humans: list[str] | None = None, human_turn_seconds: int = HUMAN_TURN_SECONDS,
-                       min_turn_seconds: int = 0) -> dict:
+                       min_turn_seconds: int = 0, broadcast: dict | None = None) -> dict:
         self.harness["extension_calls"] += 1
         args = {"seed": seed, "civ": civ, "opponents": opponents, "size": size, "difficulty": difficulty,
                 "barbarians": barbarians, "landform": landform, "ocean": ocean, "turn_limit": turn_limit,
                 "seats": seats, "labels": labels, "humans": humans or [], "human_turn_seconds": human_turn_seconds,
-                "min_turn_seconds": min_turn_seconds}
+                "min_turn_seconds": min_turn_seconds, "broadcast": {} if broadcast is None else broadcast}
         async with self.lock:
             await self._new_game(merge_scenario(self.scenario, args))
             return {**self.game, "scenario": self.scenario,
@@ -1340,17 +1345,17 @@ class OpenCiv3Env(AgentEnvEnvironment):
     def _live_now(self) -> dict:
         """The turn being played (docs/viewer.md, `live`): who has ended it, for how long each has played it, each
         seat's calls, actions, note and plan so far, and the messages of the turn."""
-        pace = self.scenario.get("min_turn_seconds", 0)
+        pace, show = self.scenario.get("min_turn_seconds", 0), self.scenario.get("broadcast")
         if self.game is None:
             return {"turn": None, "game_over": False, "victory": None, "client": self.client,
-                    "recording": self.record, "min_turn_seconds": pace, "messages": [], "seats": []}
+                    "recording": self.record, "min_turn_seconds": pace, "broadcast": show, "messages": [], "seats": []}
         now, turn = time.monotonic(), self.turn
         states = [s.last_state for s in self.seats if s.last_state]
         victory = next((st["victory"] for st in states if st.get("victory")), None)
         return {
             "turn": turn, "game_over": victory is not None or any(st.get("game_over") for st in states),
             "victory": victory, "client": self.client, "recording": self.record, "min_turn_seconds": pace,
-            "messages": [{k: m[k] for k in ("from", "to", "text", "seconds")} for m in self.messages
+            "broadcast": show, "messages": [{k: m[k] for k in ("from", "to", "text", "seconds")} for m in self.messages
                          if m["turn"] == turn],
             "seats": [{"civ": s.civ, "label": s.label, "human": s.human, "ended": s.ready or s.pacing or s.over,
                        "seconds": round(max(0.0, (s.ended_at if (s.ready or s.pacing) and s.ended_at else now)

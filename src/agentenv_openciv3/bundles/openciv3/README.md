@@ -60,6 +60,14 @@ in parallel: the outcome verifier and `save_env_recording`.
   names the player agent for its model with `a2a_agent_id`: Codex plays the GPT models, Gemini CLI plays Gemini,
   and Claude Code plays the rest (Grok and Kimi through a LiteLLM proxy). Each agent starts a fresh session every
   40 turns. `frontier-quick` is the same match in 10 turns.
+- `showmatch` and `livestream` are matches made to be streamed: Opus 5.5 (Claude Code, Rome), GPT-6 Sol (Codex,
+  America) and Kimi K3 (Claude Code, China), told that the game is broadcast, to talk to each other with the
+  `message` tool and to leave a note for the audience with every `end_turn`. `showmatch` plays 50 turns on a Tiny map
+  in about 20 minutes; `livestream` plays 140 turns on a Small map in about 2 hours, each agent starting a fresh
+  session every 40 turns. The `openciv3_match` step paces them (`min_turn_seconds`: 15 and 45, so viewers can follow
+  every turn) and sets the `broadcast`: the stream's title and two AI casters, Max and Ada, whose lines Sonnet 5.5
+  writes and `gpt-4o-mini-tts` voices. `agent-env openciv3 stream` follows that setting; a task without `broadcast`
+  streams with no casters. `showmatch-quick` is the showmatch in 10 turns.
 - `human-vs-ai` and `human-vs-agents` seat you: you play Rome in the browser, on a Small map for 100 turns, against
   3 AI civilizations (`human-vs-ai`) or against Opus (Claude Code, Greece) and GPT-5.6 Sol (Codex, America)
   (`human-vs-agents`). The `openciv3_match` step's `humans` names each person and their civ, and the step logs one

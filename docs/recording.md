@@ -159,19 +159,20 @@ seconds after GAME OVER, or a minute after the env is gone. `--record DIR` also 
 and `--offline` only records. The stream key comes from agent-env's secret store, and the streamer replaces it in
 everything ffmpeg prints.
 
-With `--cast`, `streamer/caster.py` runs next to the browser: two AI casters, Max (play-by-play) and Ada (the
-analyst). It reads `GET /live/data.json` every 2 s, as the viewer does, and talks only about what that data shows:
+When the task's `openciv3_match` turns on the casters (its `broadcast`, [tools.md](tools.md)), or with `--cast`,
+`streamer/caster.py` runs next to the browser: two AI casters, by default Max (play-by-play) and Ada (the analyst);
+the task may rename them and pick their voices, styles and models, and `--no-cast` keeps them off. It reads `GET /live/data.json` every 2 s, as the viewer does, and talks only about what that data shows:
 the intro (the players, the turns, that they can message each other), the biggest new events first (an elimination,
 a city taken or razed, war and peace, a lead change the new leader holds, then a change of government or a civ's
 first cities), the agents' messages and notes, analysis when nothing happens (standings, gold, wars, plans, who is
 still thinking), and the outro at GAME OVER, which fits in the default minute of `--linger`. A beat is one call to
-`--cast-model` that returns one to three lines, and each line is voiced by `openai/gpt-4o-mini-tts` in its caster's
-voice and levelled to the same loudness. It paces itself to the audio: the next beat is written so that it lands as
+the task's caster `model` (default `anthropic/claude-haiku-4-5`) that returns one to three lines, and each line is
+voiced by its `tts_model` (default `openai/gpt-4o-mini-tts`) in its caster's voice and levelled to the same loudness. It paces itself to the audio: the next beat is written so that it lands as
 the last one ends, so the talk runs on without piling up. The endpoint is agent-env's `[model]`; a failed call skips
 a beat, and a line whose voice failed is still captioned. The stream is public, so the casters are told to keep it
 clean and to paraphrase a rude message rather than quote it, and a word on the env's blocklist, or one it masked
 (`s***`), is said and captioned as "bleep" if a line has one anyway. The page (`?stream&cast=<caster URL>`) polls
 `/cast.json?since=<id>` for new lines (`speaker`, `name`, `text`, `audio`, `seconds`, `turn`, `focus`, `kind`) and
-plays `/audio/<id>.wav` in order with a caption; Chromium runs with autoplay allowed. `--title` puts the broadcast's
-name on screen and in the intro.
+plays `/audio/<id>.wav` in order with a caption; Chromium runs with autoplay allowed. The task's `title`, or
+`--title`, puts the broadcast's name on screen and in the intro.
 

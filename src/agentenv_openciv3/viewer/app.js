@@ -1655,7 +1655,7 @@ function titleCard() {
   const seats = M.seats.length ? M.seats : M.civs, people = seats.filter(p => p.human).length, agents = seats.length - people;
   const n = k => NUMBERS[k] || String(k);
   const who = `${n(agents)} AI model${agents === 1 ? "" : "s"}${people ? ` and ${n(people).toLowerCase()} ${people === 1 ? "person" : "people"}` : ""}`;
-  return `<div class="titlecard"><h1>${esc(TITLE || "OpenCiv3")}</h1>
+  return `<div class="titlecard"><h1>${esc(TITLE || M.live?.broadcast?.title || "OpenCiv3")}</h1>
     <p>${who} share${seats.length === 1 ? "s" : ""} one world for ${M.limit} turns.${seats.length > 1 ? " They can message each other." : ""}</p>
     <div class="lineup" style="--n:${seats.length}">${seats.map((p, k) => `<div class="seat" style="--a:${p.color};--k:${k}"><b>${lab(p)}</b>
       <span>${esc(p.civ)}${p.human ? ", played by a person" : ""}</span></div>`).join("")}</div></div>`;
