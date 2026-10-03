@@ -151,8 +151,25 @@ Routes: [docs/tools.md](tools.md#watching-a-game-live); the data and the `live` 
 hints, and the newest turn always shown. It alternates the map with the agents' panels, shows the summary once the
 game is over, and, with the client, keeps one agent's client view in a corner, a different agent every half minute.
 `agent-env openciv3 stream` shows that layout in Chromium on a virtual display
-(`streamer/`) and sends it with ffmpeg (H.264 at 4.5 Mbit/s, a keyframe every 2 s, silent AAC audio) to Twitch or
-any RTMP server. It streams the newest env whose game is under way, waiting for one to start, and ends the stream
-`--linger` seconds after GAME OVER, or a minute after the env is gone. The stream key comes from agent-env's secret
-store, and the streamer replaces it in everything ffmpeg prints.
+(`streamer/`) and sends it with ffmpeg (H.264 at 4.5 Mbit/s, a keyframe every 2 s) to Twitch or any RTMP server. The
+sound is whatever the page plays, captured from a PulseAudio null sink as 128 kbit/s AAC: silence, unless the casters
+talk. It streams the newest env whose game is under way, waiting for one to start, and ends the stream `--linger`
+seconds after GAME OVER, or a minute after the env is gone. `--record DIR` also writes the stream to
+`DIR/stream-<UTC time>.mkv`, from the same encode (ffmpeg's tee muxer: the file keeps going if the RTMP side fails),
+and `--offline` only records. The stream key comes from agent-env's secret store, and the streamer replaces it in
+everything ffmpeg prints.
+
+With `--cast`, `streamer/caster.py` runs next to the browser: two AI casters, Max (play-by-play) and Ada (the
+analyst). It reads `GET /live/data.json` every 2 s, as the viewer does, and talks only about what that data shows:
+the intro (the players, the turns, that they can message each other), the biggest new events first (an elimination,
+a city taken or razed, war and peace, a lead change the new leader holds, then a change of government or a civ's
+first cities), the agents' messages and notes, analysis when nothing happens (standings, gold, wars, plans, who is
+still thinking), and the outro at GAME OVER, which fits in the default minute of `--linger`. A beat is one call to
+`--cast-model` that returns one to three lines, and each line is voiced by `openai/gpt-4o-mini-tts` in its caster's
+voice and levelled to the same loudness. It paces itself to the audio: the next beat is written so that it lands as
+the last one ends, so the talk runs on without piling up. The endpoint is agent-env's `[model]`; a failed call skips
+a beat, and a line whose voice failed is still captioned. The page (`?stream&cast=<caster URL>`) polls
+`/cast.json?since=<id>` for new lines (`speaker`, `name`, `text`, `audio`, `seconds`, `turn`, `focus`, `kind`) and
+plays `/audio/<id>.wav` in order with a caption; Chromium runs with autoplay allowed. `--title` puts the broadcast's
+name on screen and in the intro.
 

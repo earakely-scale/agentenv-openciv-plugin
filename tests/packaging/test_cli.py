@@ -1,4 +1,5 @@
 import importlib.util
+import os
 import shlex
 import sys
 from pathlib import Path
@@ -6,6 +7,7 @@ from types import SimpleNamespace
 
 import click
 from agent_env.artifact import FileArtifact
+from agent_env.config import ConfigError
 from click.testing import CliRunner
 
 from agentenv_openciv3 import cli
@@ -156,19 +158,28 @@ def test_play_explains_no_env_and_no_human_seats(tmp_path, monkeypatch):
     assert "no human seats: the game in agent-local has no human players" in result.output
 
 
-def _secrets(monkeypatch, **secrets):
-    store = SimpleNamespace(get=secrets.get)
-    monkeypatch.setattr(cli, "get_config", lambda: SimpleNamespace(get_secret_store=lambda: store))
+def _config(monkeypatch, *, model: bool = True, **secrets):
+    """agent-env's config as the stream command reads it: the secret store and, with `model`, the model endpoint."""
+    def endpoint(value):
+        def get():
+            if not model:
+                raise ConfigError("No model endpoint configured: set [model] base_url in .agentenv/config.toml")
+            return value
+        return get
+    config = SimpleNamespace(get_secret_store=lambda: SimpleNamespace(get=secrets.get),
+                             get_litellm_base_url=endpoint("http://localhost:4000"),
+                             get_litellm_api_key=endpoint("sk-model-key-456"))
+    monkeypatch.setattr(cli, "get_config", lambda: config)
 
 
 def test_stream_needs_a_stream_key(monkeypatch):
-    _secrets(monkeypatch)
+    _config(monkeypatch)
     result = CliRunner().invoke(openciv3, ["stream"])
     assert result.exit_code == 1 and "store your Twitch stream key as the secret OPENCIV3_STREAM_KEY" in result.output
 
 
 def test_stream_sends_the_newest_game_under_way_without_showing_the_key(tmp_path, monkeypatch):
-    _secrets(monkeypatch, OPENCIV3_STREAM_KEY="live_123_secret")
+    _config(monkeypatch, OPENCIV3_STREAM_KEY="live_123_secret")
     (tmp_path / "ps.txt").write_text("mcp-server-openciv3\t127.0.0.1:41000->18765/tcp\tagent-local-old\n"
                                      "mcp-server-openciv3\t127.0.0.1:42000->18765/tcp\tagent-local-new\n")
     log = tmp_path / "docker.log"
@@ -181,7 +192,7 @@ def test_stream_sends_the_newest_game_under_way_without_showing_the_key(tmp_path
     assert result.exit_code == 0, result.output
     assert "live_123_secret" not in result.output
     args, url = log.read_text().splitlines()
-    assert "--network host -e STREAM_URL openciv3-streamer --url http://127.0.0.1:42000/live" in args
+    assert "--network host -e STREAM_URL openciv3-streamer:2 --url http://127.0.0.1:42000/live" in args
     assert "live_123_secret" not in args and args.endswith("--linger 30")
     assert url == "rtmp://live.twitch.tv/app/live_123_secret"
     assert CliRunner().invoke(openciv3, ["stream", "--test", "--client-view"]).exit_code == 0
@@ -189,12 +200,77 @@ def test_stream_sends_the_newest_game_under_way_without_showing_the_key(tmp_path
     assert log.read_text().splitlines()[1] == "rtmp://live.twitch.tv/app/live_123_secret?bandwidthtest=true"
 
 
-def test_the_streamer_hides_the_key_and_ends_after_the_game():
+def test_stream_records_offline_with_the_casters_without_showing_any_key(tmp_path, monkeypatch):
+    _config(monkeypatch)   # no stream key: offline needs none
+    log = tmp_path / "docker.log"
+    fake_docker(tmp_path, monkeypatch, '  "image inspect") ;;\n'
+                                       f'  "run --rm") echo "$@" > {log}; '
+                                       f'echo "[$STREAM_URL] $CAST_BASE_URL $CAST_API_KEY" >> {log} ;;\n')
+    monkeypatch.setattr(cli.sys, "platform", "darwin")
+    rec = tmp_path / "rec" / "show"
+    result = CliRunner().invoke(openciv3, ["stream", "--url", "http://127.0.0.1:41589/live", "--cast", "--offline",
+                                           "--record", str(rec), "--title", "Battle of the Labs"])
+    assert result.exit_code == 0, result.output
+    assert rec.is_dir() and f"into {rec}, with the casters" in result.output
+    args, env = log.read_text().splitlines()
+    assert args.startswith(f"run --rm --shm-size 1g -v {rec.resolve()}:/rec -e STREAM_URL -e CAST_BASE_URL "
+                           "-e CAST_API_KEY openciv3-streamer:2 --url http://host.docker.internal:41589/live")
+    assert args.endswith("--linger 60 --cast --cast-model anthropic/claude-haiku-4-5 --title Battle of the Labs "
+                         "--record /rec")
+    assert env == "[] http://host.docker.internal:4000 sk-model-key-456"   # values in the environment only
+    assert "sk-model-key-456" not in result.output + args
+
+    monkeypatch.setattr(cli.sys, "platform", "linux")   # the container writes the recording as you
+    result = CliRunner().invoke(openciv3, ["stream", "--url", "http://127.0.0.1:41589/live", "--offline",
+                                           "--record", str(rec)])
+    assert result.exit_code == 0, result.output
+    args, env = log.read_text().splitlines()
+    assert (f"--network host -v {rec.resolve()}:/rec --user {os.getuid()}:{os.getgid()} -e HOME=/tmp -e STREAM_URL "
+            "openciv3-streamer:2 --url http://127.0.0.1:41589/live") in args
+    assert env == "[]  " and "--cast" not in args
+
+
+def test_stream_explains_what_offline_and_cast_need(tmp_path, monkeypatch):
+    _config(monkeypatch, model=False)
+    result = CliRunner().invoke(openciv3, ["stream", "--offline"])
+    assert result.exit_code == 2 and "--offline only records: add --record DIR" in result.output
+    result = CliRunner().invoke(openciv3, ["stream", "--cast", "--offline", "--record", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "--cast needs agent-env's model endpoint: No model endpoint configured" in result.output
+
+
+def _streamer():
     spec = importlib.util.spec_from_file_location("streamer", STREAMER)
     streamer = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(streamer)
-    assert streamer.redacted("Error writing to rtmp://x/app/live_9?bandwidthtest=true: broken pipe", "live_9") == (
+    return streamer
+
+
+def test_the_streamer_hides_the_keys_and_ends_after_the_game():
+    streamer = _streamer()
+    secrets = {"live_9": "stream key", "sk-cast-1": "cast key", "": "nothing"}
+    assert streamer.redacted("Error writing to rtmp://x/app/live_9?bandwidthtest=true: broken pipe", secrets) == (
         "Error writing to rtmp://x/app/<stream key>?bandwidthtest=true: broken pipe")
+    assert streamer.redacted("caster: HTTP 401 bad key sk-cast-1", secrets) == "caster: HTTP 401 bad key <cast key>"
     assert not streamer.stop_at(None, None, 60, 1000)
     assert not streamer.stop_at(950, None, 60, 1000) and streamer.stop_at(940, None, 60, 1000)
     assert not streamer.stop_at(None, 945, 60, 1000) and streamer.stop_at(None, 940, 60, 1000)
+
+
+def test_the_streamer_page_asks_for_the_casters_and_the_title():
+    streamer = _streamer()
+    assert streamer.page_url("http://h:1/live") == "http://h:1/live?stream"
+    assert streamer.page_url("http://h:1/live?seat=Rome", client_view=True, cast=True, title="Battle of the Labs") == (
+        "http://h:1/live?seat=Rome&stream&client&cast=http://127.0.0.1:8790&title=Battle%20of%20the%20Labs")
+
+
+def test_the_streamer_encodes_once_for_the_stream_and_the_recording():
+    streamer = _streamer()
+    both = streamer.ffmpeg_command("1280x720", 30, "3000k", "rtmp://x/app/key", "/rec/stream.mkv")
+    assert ["-f", "pulse", "-i", "broadcast.monitor"] == both[both.index("pulse") - 1:both.index("pulse") + 3]
+    assert both[-5:] == ["-flags", "+global_header", "-f", "tee",
+                         "[f=flv:onfail=ignore]rtmp://x/app/key|[f=matroska]/rec/stream.mkv"]
+    assert ["-c:a", "aac", "-b:a", "128k"] == both[both.index("-c:a"):both.index("-c:a") + 4]
+    assert streamer.ffmpeg_command("1280x720", 30, "3000k", "rtmp://x/app/key", None)[-3:] == [
+        "-f", "flv", "rtmp://x/app/key"]
+    assert streamer.ffmpeg_command("1280x720", 30, "3000k", "", "/rec/s.mkv")[-3:] == ["-f", "matroska", "/rec/s.mkv"]

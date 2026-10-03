@@ -8,13 +8,14 @@ import shlex
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
 import click
 from agent_env.a2a_agent import A2AAgent
 from agent_env.artifact import DockerImageArtifact, FileArtifact
-from agent_env.config import get_config
+from agent_env.config import ConfigError, get_config
 from agent_env.env import MCPServerEnv
 
 ENVIRONMENT_NAME = "openciv3"
@@ -30,7 +31,7 @@ ENV_PORT = re.compile(r":(\d+)->18765/tcp")
 # `PLAY <civ> (<label>) game <id> /play#token=<token>`.
 PLAY_LINK = re.compile(r"\bPLAY (?P<civ>.+?) \((?P<label>.*)\):?(?: game \S+)? \S*?(?P<path>/play#token=\w+)")
 NEW_GAME_LINE = re.compile(r"\bNEW GAME \S+")
-STREAMER_IMAGE = "openciv3-streamer"
+STREAMER_IMAGE = "openciv3-streamer:2"   # the tag changes with streamer/, so an older image is rebuilt
 STREAM_KEY = "OPENCIV3_STREAM_KEY"
 
 
@@ -307,19 +308,41 @@ def _playing(url: str) -> bool:
 @click.option("--linger", default=60, show_default=True, help="Seconds to keep streaming the final standings.")
 @click.option("--client-view", is_flag=True,
               help="Show the real OpenCiv3 client's view of each agent full size (the env needs setup --client).")
+@click.option("--cast", is_flag=True,
+              help="Two AI casters talk over the game, voiced and captioned. They use agent-env's model endpoint "
+                   "([model] base_url and api_key in .agentenv/config.toml).")
+@click.option("--cast-model", default="anthropic/claude-haiku-4-5", show_default=True,
+              help="The model that writes the casters' lines.")
+@click.option("--title", help="The broadcast's title, on screen and in the casters' intro.")
+@click.option("--record", "record_dir", type=click.Path(file_okay=False, path_type=Path),
+              help="Also write the stream to DIR/stream-<UTC time>.mkv.")
+@click.option("--offline", is_flag=True, help="Only record (with --record): nothing goes to Twitch.")
 @click.option("--test", "bandwidth_test", is_flag=True,
               help="Send to Twitch without going live (its bandwidth test): the stream shows only in Twitch Inspector.")
 @click.option("--source", type=click.Path(exists=True, file_okay=False, path_type=Path),
               help="Checkout to build the streamer image from when it isn't built yet.")
 def stream(url: str | None, server: str, key_secret: str, size: str, fps: int, bitrate: str, linger: int,
-           client_view: bool, bandwidth_test: bool, source: Path | None):
-    """Stream a game's live view to Twitch, or any RTMP server, while the agents play it. A headless browser in Docker
-    shows the page and ffmpeg sends it; the stream starts with the game and ends after GAME OVER."""
-    key = get_config().get_secret_store().get(key_secret)
-    if not key:
-        raise click.ClickException(f"no stream key: store your Twitch stream key as the secret {key_secret}, e.g. a "
-                                   f"line '{key_secret}: <key>' in the secrets file .agentenv/config.toml names, or "
-                                   f"export {key_secret}")
+           client_view: bool, cast: bool, cast_model: str, title: str | None, record_dir: Path | None, offline: bool,
+           bandwidth_test: bool, source: Path | None):
+    """Stream a game's live view to Twitch, or any RTMP server, while the agents play it, and optionally record it. A
+    headless browser in Docker shows the page and ffmpeg sends it; the stream starts with the game and ends after
+    GAME OVER."""
+    if offline and record_dir is None:
+        raise click.UsageError("--offline only records: add --record DIR")
+    config = get_config()
+    env = {"STREAM_URL": ""}
+    if not offline:
+        key = config.get_secret_store().get(key_secret)
+        if not key:
+            raise click.ClickException(f"no stream key: store your Twitch stream key as the secret {key_secret}, e.g. "
+                                       f"a line '{key_secret}: <key>' in the secrets file .agentenv/config.toml names, "
+                                       f"or export {key_secret}; or record only with --offline --record DIR")
+        env["STREAM_URL"] = f"{server.rstrip('/')}/{key}" + ("?bandwidthtest=true" if bandwidth_test else "")
+    if cast:
+        try:
+            env["CAST_BASE_URL"], env["CAST_API_KEY"] = config.get_litellm_base_url(), config.get_litellm_api_key()
+        except ConfigError as e:
+            raise click.ClickException(f"--cast needs agent-env's model endpoint: {e}") from e
     if subprocess.run(["docker", "image", "inspect", STREAMER_IMAGE], capture_output=True).returncode:
         context = _checkout(source) / "streamer"
         click.echo(f"Building {STREAMER_IMAGE} from {context}")
@@ -329,16 +352,35 @@ def stream(url: str | None, server: str, key_secret: str, size: str, fps: int, b
         click.echo("Waiting for an OpenCiv3 game to start (agent-env run openciv3 --task ...)")
         while (url := next((u for u, _ in _live_views() if _playing(u)), None)) is None:
             time.sleep(5)
-    if sys.platform == "darwin":
-        network, page = [], url.replace("127.0.0.1", "host.docker.internal")
+    if sys.platform == "darwin":   # Docker Desktop: the container reaches this machine at host.docker.internal
+        network, page = [], _from_container(url)
+        if cast:
+            env["CAST_BASE_URL"] = _from_container(env["CAST_BASE_URL"])
     else:
         network, page = ["--network", "host"], url
-    target = f"{server.rstrip('/')}/{key}" + ("?bandwidthtest=true" if bandwidth_test else "")
+    mount = []
+    if record_dir is not None:
+        record_dir.mkdir(parents=True, exist_ok=True)
+        mount = ["-v", f"{record_dir.resolve()}:/rec"]
+        if sys.platform != "darwin":   # write the recording as you, into a directory only you may write
+            mount += ["--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/tmp"]
     test = " as a bandwidth test (not live; see Twitch Inspector)" if bandwidth_test else ""
-    click.echo(f"Streaming {url} to {server.rstrip('/')}/<stream key>{test}; Ctrl-C ends the stream")
-    cmd = ["docker", "run", "--rm", "--shm-size", "1g", *network, "-e", "STREAM_URL", STREAMER_IMAGE,
+    where = [] if offline else [f"to {server.rstrip('/')}/<stream key>{test}"]
+    where += [f"into {record_dir}"] if record_dir is not None else []
+    click.echo(f"Streaming {url} {' and '.join(where)}{', with the casters' if cast else ''}; Ctrl-C ends the stream")
+    cmd = ["docker", "run", "--rm", "--shm-size", "1g", *network, *mount,
+           *[arg for name in env for arg in ("-e", name)], STREAMER_IMAGE,
            "--url", page, "--size", size, "--fps", str(fps), "--bitrate", bitrate, "--linger", str(linger),
-           *(["--client-view"] if client_view else [])]
-    code = subprocess.run(cmd, env={**os.environ, "STREAM_URL": target}).returncode
+           *(["--client-view"] if client_view else []), *(["--cast", "--cast-model", cast_model] if cast else []),
+           *(["--title", title] if title else []), *(["--record", "/rec"] if record_dir is not None else [])]
+    code = subprocess.run(cmd, env={**os.environ, **env}).returncode
     if code:
         raise click.ClickException(f"the stream ended with an error ({code})")
+
+
+def _from_container(url: str) -> str:
+    """`url` as a Docker Desktop container reaches it: this machine's loopback is host.docker.internal there."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.hostname not in ("127.0.0.1", "localhost"):
+        return url
+    return parts._replace(netloc=parts.netloc.replace(parts.hostname, "host.docker.internal", 1)).geturl()

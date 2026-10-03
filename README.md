@@ -178,6 +178,19 @@ uplink, `--test` sends to Twitch without going live (its bandwidth test, visible
 shows the real OpenCiv3 client's view of each agent full size (the env needs `setup --client`), and the first run
 builds the streamer image (`streamer/`, about 1.5 GB).
 
+**Cast it.** `--cast` puts two AI casters on the stream: Max calls the play and Ada, the analyst, says what it means.
+They read the match data the viewer shows (the events, the standings, the agents' plans, notes and messages, who is
+still thinking), open the show, call wars, captured cities and lead changes as they happen, and sign off at GAME
+OVER. A model writes their lines (`--cast-model`, default `anthropic/claude-haiku-4-5`) and `openai/gpt-4o-mini-tts`
+voices them, both through agent-env's model endpoint (`[model]` in `.agentenv/config.toml`); the stream carries their
+voices and shows their lines as captions. `--title` names the broadcast, `--record DIR` also writes it to
+`DIR/stream-<UTC time>.mkv`, and `--offline --record DIR` only records, with no stream key, for a dry run:
+
+```bash
+agent-env openciv3 stream --cast --title "Battle of the Labs" &
+agent-env openciv3 stream --cast --offline --record ~/broadcasts &   # the same show, into a file
+```
+
 When the game ends, its recording is saved with the run:
 
 - an MP4 of the map, standings, agents' actions and key moments, turn by turn;
@@ -497,7 +510,7 @@ patches/                the patches applied to OpenCiv3's engine
 playtest/               a harness that drives Claude Code against a local env, for batches of games
 client/                 the real OpenCiv3 client's renderer, for recordings (optional)
 scripts/                install.sh, build-bridge.sh
-streamer/               the image `agent-env openciv3 stream` runs: Chromium, Xvfb and ffmpeg, sending the live view
+streamer/               the image `agent-env openciv3 stream` runs: Chromium, Xvfb, PulseAudio, ffmpeg and the AI casters
 tests/                  bridge, env, agents and packaging tests
 vendor/OpenCiv3         OpenCiv3, as a git submodule
 docs/                   tools, protocol, recording, results, full-game notes
