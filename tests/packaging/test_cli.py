@@ -212,6 +212,7 @@ def test_stream_records_offline_with_the_tasks_casters_without_showing_any_key(t
                                        f'echo "[$STREAM_URL] $CAST_BASE_URL $CAST_API_KEY" >> {log} ;;\n')
     casters = {"model": "openai/gpt-5.6-luna", "analyst": {"name": "Iris", "voice": "coral"}}
     monkeypatch.setattr(cli, "_broadcast", lambda url: {"title": "Battle of the Labs", "casters": casters})
+    monkeypatch.setattr(cli, "_playing", lambda url: True)
     monkeypatch.setattr(cli.sys, "platform", "darwin")
     rec = tmp_path / "rec" / "show"
     stream = ["stream", "--url", "http://127.0.0.1:41589/live", "--offline", "--record", str(rec)]
@@ -241,19 +242,23 @@ def test_stream_records_offline_with_the_tasks_casters_without_showing_any_key(t
     assert log.read_text().splitlines()[0].endswith("--linger 60 --cast-config {} --record /rec")
 
 
-def test_stream_reads_the_broadcast_from_the_game(monkeypatch):
-    live = {"turn": 3, "broadcast": {"title": "Showmatch", "casters": {}}}
+def test_stream_waits_for_the_tasks_game_and_reads_its_broadcast(monkeypatch):
+    live = {"turn": 0, "game_over": False, "broadcast": None}   # the env's own game, before the match replaces it
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _serving({"/live/data.json": {"live": live}}))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         url = f"http://127.0.0.1:{server.server_port}/live"
-        assert cli._broadcast(url) == {"title": "Showmatch", "casters": {}}
-        assert server.paths == [f"/live/data.json?since={cli.NO_TURNS}"]
-        live["broadcast"] = None   # a game without one, or an env that predates broadcasts
-        assert cli._broadcast(url) == {}
+        assert not cli._playing(url) and cli._broadcast(url) == {}
+        assert server.paths[0] == f"/live/data.json?since={cli.NO_TURNS}"
+        live["broadcast"] = {"title": "Showmatch", "casters": {}}   # the match's game, at its start
+        assert cli._playing(url) and cli._broadcast(url) == {"title": "Showmatch", "casters": {}}
+        live.update(broadcast={"title": None, "casters": None}, game_over=True)
+        assert not cli._playing(url)
+        live.update(broadcast=None, game_over=False, turn=2)   # a game no match set up, or an older env's: under way
+        assert cli._playing(url) and cli._broadcast(url) == {}
     finally:
         server.shutdown()
-    assert cli._broadcast(url) == {}   # gone
+    assert not cli._playing(url) and cli._broadcast(url) == {}   # gone
 
 
 def _serving(docs: dict[str, dict]) -> type[http.server.BaseHTTPRequestHandler]:
@@ -281,6 +286,7 @@ def test_stream_builds_a_new_streamer_image_when_streamer_changes(tmp_path, monk
     fake_docker(tmp_path, monkeypatch, '  "image inspect") exit 1 ;;\n'
                                        f'  "build -t") echo "$@" >> {log} ;;\n'
                                        f'  "run --rm") echo "$@" >> {log} ;;\n')
+    monkeypatch.setattr(cli, "_playing", lambda url: True)
     stream = ["stream", "--url", "http://127.0.0.1:41589/live", "--offline", "--record", str(tmp_path / "rec"),
               "--source", str(checkout)]
     first = CliRunner().invoke(openciv3, stream)
@@ -302,6 +308,7 @@ def test_stream_explains_what_offline_and_the_casters_need(tmp_path, monkeypatch
     _config(monkeypatch, model=False)
     fake_docker(tmp_path, monkeypatch, '  "image inspect") ;;\n')
     monkeypatch.setattr(cli, "_broadcast", lambda url: {"casters": {}})
+    monkeypatch.setattr(cli, "_playing", lambda url: True)
     result = CliRunner().invoke(openciv3, ["stream", "--offline"])
     assert result.exit_code == 2 and "--offline only records: add --record DIR" in result.output
     result = CliRunner().invoke(openciv3, ["stream", "--url", "http://127.0.0.1:41589/live", "--offline",

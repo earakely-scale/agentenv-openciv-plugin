@@ -301,22 +301,28 @@ def _play_links(log: str) -> list[tuple[str, str, str]]:
     return links[::-1]
 
 
-def _playing(url: str) -> bool:
-    """Whether the env behind a live view answers and its game is under way."""
+def _live(url: str) -> dict | None:
+    """The turn being played in the env behind a live view (data.json's `live`); None while the env doesn't answer."""
     try:
-        with urllib.request.urlopen(f"{url}/state.json", timeout=5) as r:
-            return not json.load(r).get("game_over")
+        with urllib.request.urlopen(f"{url}/data.json?since={NO_TURNS}", timeout=10) as r:
+            return json.load(r).get("live") or {}
     except (OSError, ValueError):
+        return None
+
+
+def _playing(url: str) -> bool:
+    """Whether the env behind a live view has a game under way: one a task's match set up (its broadcast is known,
+    even when it has none), or one past its first turns. A deployed env's own game waits at the start until the
+    match replaces it, so streaming that one would miss the match's broadcast settings."""
+    live = _live(url)
+    if not live or live.get("game_over"):
         return False
+    return live.get("broadcast") is not None or (live.get("turn") or 0) >= 2
 
 
 def _broadcast(url: str) -> dict:
     """The broadcast settings of the game behind a live view (openciv3_match's `broadcast`): {} when it has none."""
-    try:
-        with urllib.request.urlopen(f"{url}/data.json?since={NO_TURNS}", timeout=10) as r:
-            return (json.load(r).get("live") or {}).get("broadcast") or {}
-    except (OSError, ValueError):
-        return {}
+    return (_live(url) or {}).get("broadcast") or {}
 
 
 @openciv3.command()
@@ -371,6 +377,10 @@ def stream(url: str | None, server: str, key_secret: str, size: str, fps: int, b
     if url is None:
         click.echo("Waiting for an OpenCiv3 game to start (agent-env run openciv3 --task ...)")
         while (url := next((u for u, _ in _live_views() if _playing(u)), None)) is None:
+            time.sleep(5)
+    elif not _playing(url):
+        click.echo(f"Waiting for the game at {url} to start")
+        while not _playing(url):
             time.sleep(5)
     show = _broadcast(url)
     casters = show.get("casters") if cast is None else (show.get("casters") or {}) if cast else None
