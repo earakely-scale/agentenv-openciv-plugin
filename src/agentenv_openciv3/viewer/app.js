@@ -1231,6 +1231,20 @@ function keys() {
 
 // ======================================================================== startup and live polling
 
+// A link pasted into the open page (only its #hash changed) takes it to the same view.
+addEventListener("hashchange", () => {
+  if (!M.ready) return;
+  const before = {view: S.view, ti: S.ti, focus: S.focus, pov: S.pov, client: S.client.open};
+  S.view = "map"; S.focus = null; S.pov = null; S.client = {open: false, seat: null, big: false};
+  readHash();
+  $("#pov").value = S.pov == null ? "" : String(S.pov);
+  renderPovNote();
+  if (S.view !== before.view) setView(S.view);
+  setTurn(S.ti);
+  setFocus(S.focus, {fly: S.focus != null && S.focus !== before.focus});
+  renderClient();
+});
+
 function start() {
   P = new Painter(M);
   S.ti = M.last;
