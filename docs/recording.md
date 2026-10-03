@@ -121,3 +121,10 @@ each earlier snapshot), and asks the real client for the newest save only, so a 
 falling behind. With `OPENCIV_RECORD=0` there are no snapshots, and the page says so.
 Routes and the state's shape: [docs/tools.md](tools.md#watching-a-game-live).
 
+`/live?stream` lays the page out for a 1920×1080 screen: the map frame fills the height, the panel's text is larger,
+and the view buttons are hidden. `agent-env openciv3 stream` shows that layout in Chromium on a virtual display
+(`streamer/`) and sends it with ffmpeg (H.264 at 4.5 Mbit/s, a keyframe every 2 s, silent AAC audio) to Twitch or
+any RTMP server. It streams the newest env whose game is under way, waiting for one to start, and ends the stream
+`--linger` seconds after GAME OVER, or a minute after the env is gone. The stream key comes from agent-env's secret
+store, and the streamer replaces it in everything ffmpeg prints.
+

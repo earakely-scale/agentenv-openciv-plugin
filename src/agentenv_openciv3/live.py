@@ -137,6 +137,12 @@ tr.me{background:#2e3746;font-weight:600} tr.out td{color:#8c94a2}
 ul{list-style:none;padding:0;margin:0} li{padding:1px 0} .bad,.urgent{color:#f08060} .none{color:#8c94a2}
 #banner{margin:12px 0 0;padding:10px 12px;border-radius:6px;background:#2e3746;font-weight:600}
 #banner.win{background:#4d4120;color:#ffe08a}
+body.stream{font-size:21px;overflow:hidden} body.stream main{height:100vh;box-sizing:border-box;padding:28px;gap:28px}
+body.stream #stage{height:100%;display:flex;align-items:center;justify-content:center}
+body.stream #stage img{width:100%;height:100%;object-fit:contain}
+body.stream aside{width:600px;height:100%;overflow:hidden} body.stream h1{font-size:44px}
+body.stream h2{font-size:17px;margin-top:24px} body.stream .controls,body.stream #note{display:none}
+body.stream .sw{width:16px;height:16px} body.stream td{padding:4px 6px}
 </style></head><body><main>
 <div id="stage"><div id="waiting">Waiting for the game to start…</div>
 <img id="map" alt="the map" hidden><img id="client" alt="the OpenCiv3 client's view" hidden></div>
@@ -154,6 +160,7 @@ const list = (items, cls, text) => items.length ? items.map(i => `<li class="${c
   : '<li class="none">none</li>';
 const named = (civ, label) => label ? `${civ} (${label})` : civ;
 const VIEWS = ["spectator", "agent", "client"];
+document.body.classList.toggle("stream", new URLSearchParams(location.search).has("stream"));
 let s = null, view = VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : "spectator";
 let mapUrl = null, clientAt = null, clientBusy = false;
 

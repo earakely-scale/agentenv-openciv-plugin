@@ -148,6 +148,22 @@ agent-env openciv3 watch --open    # from the checkout: prints each running game
 On a remote machine, `agent-env openciv3 watch` prints the URL (`http://127.0.0.1:<port>/live`); forward that port,
 e.g. `ssh -L <port>:127.0.0.1:<port> <host>`, and open the same URL locally.
 
+**Stream it to Twitch.** `agent-env openciv3 stream` sends the live view to Twitch while a game plays: a headless
+browser in Docker shows the page's full-screen layout (`/live?stream`), and ffmpeg sends it at 1080p and 30 fps. It
+waits for a game to start and ends the stream a minute after GAME OVER, so it can run beside any task, on your machine
+or a server:
+
+```bash
+read -rs KEY && printf 'OPENCIV3_STREAM_KEY: %s\n' "$KEY" >> ~/.config/agentenv/secrets.yaml   # once: paste the key
+agent-env openciv3 stream &               # waits for a game, streams it, and stops after GAME OVER
+agent-env run openciv3 --task frontier
+```
+
+The key is read from agent-env's secret store (the secrets file the checkout's config names, or an environment
+variable `OPENCIV3_STREAM_KEY`) and never appears in a command line or in the output. `--server` sends to any other
+RTMP server (YouTube's is `rtmp://a.rtmp.youtube.com/live2`), `--size 1280x720 --bitrate 3000k` suits a slower
+uplink, and the first run builds the streamer image (`streamer/`, about 1.5 GB).
+
 When the game ends, its recording is saved with the run: an MP4 of the map, scores and actions turn by turn, a
 self-contained HTML replay with a turn slider, and with `--client` the real client's view. `agent-env openciv3
 recordings` lists them and copies them out ([docs/recording.md](docs/recording.md)).
@@ -430,6 +446,7 @@ patches/                the patches applied to OpenCiv3's engine
 playtest/               a harness that drives Claude Code against a local env, for batches of games
 client/                 the real OpenCiv3 client's renderer, for recordings (optional)
 scripts/                install.sh, build-bridge.sh
+streamer/               the image `agent-env openciv3 stream` runs: Chromium, Xvfb and ffmpeg, sending the live view
 tests/                  bridge, env, agents and packaging tests
 vendor/OpenCiv3         OpenCiv3, as a git submodule
 docs/                   tools, protocol, recording, results, full-game notes

@@ -46,7 +46,7 @@ them from your changes.
 | A task | `src/agentenv_openciv3/bundles/openciv3/tasks/` | `tests/packaging/test_steps.py`; the bundle's README and the README's task table |
 | A task step or verifier | `src/agentenv_openciv3/steps.py`, `bundles/openciv3/artifacts/` | `tests/packaging/test_steps.py`, `test_verifier.py` |
 | A player agent | `agents/<cli>-player/` (an `agent.py` on `agents/common/openciv3_player.py`, and a Dockerfile built from `agents/`), registered in `PLAYERS` in `src/agentenv_openciv3/cli.py` | `tests/agent/`, with a fake of the CLI like `fake_codex.py` |
-| Recordings or the live view | `src/agentenv_openciv3/recording.py`, `live.py`, `client.py` | `tests/env/test_http.py`, `test_recording.py`; [docs/recording.md](docs/recording.md) |
+| Recordings, the live view or streaming | `src/agentenv_openciv3/recording.py`, `live.py`, `client.py`; `streamer/` | `tests/env/test_http.py`, `test_recording.py`; [docs/recording.md](docs/recording.md) |
 
 ## Conventions
 
