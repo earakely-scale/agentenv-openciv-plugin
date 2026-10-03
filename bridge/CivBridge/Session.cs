@@ -21,7 +21,8 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 
 	/// <summary>Events that end an end_turn(until_attention) run even when no blocker appears.</summary>
 	static readonly HashSet<string> AttentionEvents =
-		["disorder_started", "riot_risk", "unit_lost", "city_destroyed", "gold_stolen", "war_declared", "defenseless", "threat",
+		["disorder_started", "riot_risk", "unit_lost", "city_destroyed", "city_lost", "city_captured", "gold_stolen", "war_declared",
+		 "defenseless", "threat",
 		 "peace_offered", "government_picked"];
 
 	GameMode mode;
@@ -351,7 +352,7 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 					new MsgDiplomacyCompleted().send();
 					EngineStorage.ProcessNextMessageToEngine();
 					break;
-				case MsgWarDeclaration or MsgCityDestroyed or MsgCivilizationDestroyed:
+				case MsgWarDeclaration or MsgCityDestroyed or MsgCityCaptured or MsgCivilizationDestroyed:
 				case MsgShowMilitaryAdvisorPopup { happy: false }:
 					uiMessages.Add((m, advancing ? null : seat));
 					break;
@@ -365,7 +366,8 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 	List<JsonObject> UiEvents(List<(MessageToUI Message, Seat Actor)> raised) {
 		var events = new List<JsonObject>();
 		foreach (var (m, actor) in raised) {
-			if (actor == seat) continue;
+			// A city taken is told even when the seat took it: engine-AI play and standing orders take cities too.
+			if (actor == seat && m is not MsgCityCaptured) continue;
 			switch (m) {
 				case MsgShowTradeOffer o when o.humanPlayer == human:
 					events.Add(Event("peace_offered", $"{o.aiPlayer.civilization.name} offered peace"
@@ -374,6 +376,15 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 					break;
 				case MsgWarDeclaration w when Knows(w.aggressor) || Knows(w.opponent):
 					events.Add(Event("war_declared", $"{w.aggressor.civilization.name} declared war on {w.opponent.civilization.name}."));
+					break;
+				case MsgCityCaptured c when c.from == human:
+					events.Add(Event("city_lost", $"{c.city.name} was taken by {c.city.owner.civilization.name}; it is size {c.city.residents.Count} now.", c.city.location));
+					break;
+				case MsgCityCaptured c when c.city.owner == human:
+					events.Add(Event("city_captured", $"You took {c.city.name} ({ids.Of(c.city)}) from {c.from.civilization.name}; it is size {c.city.residents.Count} now.", c.city.location));
+					break;
+				case MsgCityCaptured c when human.tileKnowledge.isTileKnown(c.city.location):
+					events.Add(Event("city_captured", $"{c.city.owner.civilization.name} took {c.city.name} from {c.from.civilization.name}.", c.city.location));
 					break;
 				case MsgCityDestroyed d when d.city.owner == human || human.tileKnowledge.isTileKnown(d.city.location):
 					events.Add(Event("city_destroyed", $"{d.city.name} ({d.city.owner.civilization.name}) was destroyed.", d.city.location));

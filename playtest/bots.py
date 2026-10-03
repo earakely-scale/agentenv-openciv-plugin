@@ -116,8 +116,8 @@ MAX_CALLS_PER_TURN = 90
 MAX_ATTACKS_PER_TURN = 10
 MESSAGES_PER_TURN = 2           # of the env's 3
 # What a turn's note leads with: the most notable kind of move.
-NOTABLE = {"war": 6, "razed": 6, "peace": 5, "attack": 4, "revolution": 4, "found": 3, "settle": 3, "march": 3,
-           "buy": 2, "research": 1, "build": 1, "explore": 1}
+NOTABLE = {"war": 6, "captured": 6, "razed": 6, "peace": 5, "attack": 4, "revolution": 4, "found": 3, "settle": 3,
+           "march": 3, "buy": 2, "research": 1, "build": 1, "explore": 1}
 QUIET_NOTES = {"expansionist": "settlers on their way, every city growing",
                "builder": "cities growing, buildings coming", "aggressive": "the army gathers"}
 THREATS = ["{target}, your borders are thin and your cities are rich. Send tribute, or {me} marches before T{turn}.",
@@ -944,7 +944,11 @@ class Bot:
                 self.did.append(("attack", f"attacked {what}"))
                 self.log(f"{u.id} {u.type} attacked {what} at ({t['x']},{t['y']}) ({round(t['chance'] * 100)}%): "
                          f"{text.splitlines()[0][:160]}", notable=bool(t["city"]) or "razed" in text)
-                if "razed" in text or "fell" in text:
+                if "is yours now" in text:      # taken (patches/0011)
+                    self.foreign.pop((t["x"], t["y"]), None)
+                    self.did.append(("captured", f"took {t['city']} from {t['owner']}"))
+                    self.log(f"CAPTURED {t['city']} of {t['owner']} — {text.splitlines()[0][:200]}", notable=True)
+                elif "razed" in text or "fell" in text:
                     self.foreign.pop((t["x"], t["y"]), None)
                     self.did.append(("razed", f"razed {t['city']} of {t['owner']}"))
                     self.log(f"RAZED {t['city']} of {t['owner']} — {text.splitlines()[0][:200]}", notable=True)

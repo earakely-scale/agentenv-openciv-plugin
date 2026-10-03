@@ -71,8 +71,8 @@ UNIT_STATS = {"Settler": (1, 3), "Worker": (1, 3), "Warrior": (1, 3)}  # moves, 
 GOVERNMENTS = ["Monarchy"]
 PEACE_PRICE = 50
 MAX_RATE, BORN_CONTENT, POLICE_LIMIT = 6, 2, 2
-ATTENTION = {"disorder_started", "riot_risk", "unit_lost", "city_destroyed", "gold_stolen", "war_declared",
-             "defenseless", "threat"}
+ATTENTION = {"disorder_started", "riot_risk", "unit_lost", "city_destroyed", "city_lost", "city_captured",
+             "gold_stolen", "war_declared", "defenseless", "threat"}
 
 
 class Refused(Exception):
@@ -561,7 +561,8 @@ class Game:
                                    "hp_max": UNIT_STATS["Warrior"][1]},
                       "defender": {"owner": len(civs) - 1, "type": "Warrior", "x": target[0], "y": target[1],
                                    "id": None, "hp_before": 3, "hp_after": 0, "hp_max": 3},
-                      "rounds": ["a", "d", "a", "a"], "winner": "attacker", "city": None, "razed": False}
+                      "rounds": ["a", "d", "a", "a"], "winner": "attacker", "city": None, "captured": False,
+                      "razed": False}
             u["hp"] -= 1
             self.battles.append(battle)
             return {"message": f"{u['id']} Warrior attacked the Barbarians Warrior at ({target[0]},{target[1]}) "

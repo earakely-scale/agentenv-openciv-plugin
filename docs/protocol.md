@@ -173,7 +173,7 @@ it is one cheap pass over the map: no yields or city-site checks). Result:
               "defender": {"owner": 1, "type": "Warrior", "x": 12, "y": 10, "id": "u2",
                            "hp_before": 3, "hp_after": 2, "hp_max": 3},
               "rounds": ["a", "d", "d"], "winner": "defender",
-              "city": {"x": 12, "y": 10, "name": "Rome"}, "razed": false}]}
+              "city": {"x": 12, "y": 10, "name": "Rome"}, "captured": false, "razed": false}]}
 ```
 
 - `tiles` has one row per tile the seat knows, and none for the rest: `[x, y, terrain, overlay, river, owner,
@@ -230,8 +230,9 @@ it is one cheap pass over the map: no yields or city-site checks). Result:
     `retreat` (the last round's loser withdrew instead of losing its last hit point: the defender, to the tile
     behind it, when that round is `"a"`; the attacker when it is `"d"`). So for an attack each side's
     `hp_before - hp_after` is the number of rounds the other side won, less the retreat round;
-  - `city`: `{"x", "y", "name"}` of the city on the defender's tile, or null; `razed`: the winning attacker
-    moved in and the engine destroyed the city (barbarians take gold instead).
+  - `city`: `{"x", "y", "name"}` of the city on the defender's tile, or null; `captured`: the winning attacker
+    moved in and took the city (patch 0011); `razed`: it moved in and the city, of size 1, was destroyed
+    (barbarians take gold instead and do neither).
 
   The engine fights with animations off, so it sends no animation messages; patch 0010 has `MapUnit.Fight` and
   `MapUnit.BombardUnits` tell the bridge each round as they draw it. Recording a battle changes nothing in it.
@@ -258,7 +259,7 @@ Args: `unit` (id), `order`, and `x`, `y` where the order needs a target.
 | `hold` | — | Skip this unit for this turn. |
 | `disband` | — | Remove the unit. |
 | `build_road`, `build_mine`, `irrigate`, `clear_forest` | — | Worker job on the current tile. |
-| `attack` | x, y | Attack the adjacent tile: the top defender of a civ at war with you (barbarians always are), or move into an undefended enemy city, which the engine razes. |
+| `attack` | x, y | Attack the adjacent tile: the top defender of a civ at war with you (barbarians always are), or move into an undefended enemy city, which is captured: it loses a citizen, its palace, small wonders and what it was building, and one of size 1 is destroyed (patch 0011). |
 | `bombard` | x, y | Bombard a tile in range (`bombard` units): an enemy unit, city or improvement, at war. |
 
 `attack_targets` on a unit: `[{"x", "y", "dir", "owner", "defender": "Spearman 3/3 hp"|null, "city": name|null,
@@ -343,7 +344,8 @@ Args: `skip_idle` (default false), `until_attention` (default false), `max_turns
 Event kinds: `city_founded`, `city_grew`, `city_starved`, `built` (unit/building completed),
 `tech_learned`, `unit_lost`, `unit_promoted`, `settle_failed`, `goto_blocked`, `explore_done`,
 `job_done`, `contact` (met a civ), `war_declared`, `threat` (a foreign or barbarian unit within 3
-tiles of a city or a settler), `city_destroyed`, `civ_destroyed`, `disorder`. Each event is
+tiles of a city or a settler), `city_destroyed`, `city_captured` (the seat took a city, or a civ it knows
+took one in sight), `city_lost` (one of the seat's cities was taken), `civ_destroyed`, `disorder`. Each event is
 `{"turn", "kind", "text"}`, plus `"x", "y"` when it has a location.
 
 ### `autoplay`
@@ -454,6 +456,12 @@ submodule itself stays untouched):
    battle's rounds begin (in `MapUnit.Fight`, after any defensive bombard, and in `MapUnit.BombardUnits`), who
    won each round or shot as the engine draws it, and when the rounds end. The bridge records `known_map`'s
    `battles` with it; the observer draws nothing from `GameData.rng` and changes nothing, so games replay as before.
+11. `0011-cities-are-captured.patch`: a combat unit that enters an enemy city takes it
+   (`CityInteractions.CaptureCity`) instead of destroying it, as in Civ III. The city loses a citizen (one of size 1
+   is destroyed), its palace, small wonders, stored food and shields; great wonders and other buildings stay, the
+   loser's units in it are lost, its citizens keep their nationality and are put back to work, its borders follow
+   the new owner's culture, and the new owner's AI picks what it builds. `MsgCityCaptured` tells the UI. The loser
+   is left without a capital (the engine has no palace relocation). Barbarians still take gold.
 
 Measured over full 540-turn Standard games with 7 AIs at Regent (seeds 1-3), patches 0005-0009 take:
 - mean AI techs at T540 from 32 to 43-45, and civs with an Industrial-era tech from 0 to 3-7;
@@ -496,7 +504,7 @@ Implemented. These extend the sections above; folding them in is still to do.
   - `gold_stolen` (barbarians or capture took gold; amount);
   - `defenseless` (a city with no defender while a hostile unit is within 3 tiles).
 - **`threat` is narrower.** It only covers hostile units (at war, or barbarian), and only once per unit until it leaves and returns. Peaceful passers-by are never threats.
-- **`until_attention` stops on more.** It stops on any blocker, and also on `disorder_started`, `riot_risk`, `unit_lost`, `city_destroyed`, `gold_stolen`, `war_declared`, `defenseless` and `threat`.
+- **`until_attention` stops on more.** It stops on any blocker, and also on `disorder_started`, `riot_risk`, `unit_lost`, `city_destroyed`, `city_lost`, `city_captured`, `gold_stolen`, `war_declared`, `defenseless` and `threat`.
 
 ### Sites and messages
 - **`city_sites`** also returns `nearby`: every legal site within 4 tiles of the unit, with its score, so agents never have to guess coordinates.

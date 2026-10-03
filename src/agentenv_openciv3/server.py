@@ -845,7 +845,8 @@ class OpenCiv3Env(AgentEnvEnvironment):
         """Order one of your units. Standing orders keep working on later turns without further calls, so prefer
         them: settle for settlers, explore for one scout, auto_work for workers; keep a military unit in every city.
         A standing order that cannot progress is reported as an event and the unit becomes idle again. A unit next to
-        an enemy lists its attack targets with an estimated chance to win; a city that falls is razed."""
+        an enemy lists its attack targets with an estimated chance to win; a city that falls is captured (one of size 1
+        is destroyed)."""
         args = {"unit": unit, "order": order, "x": x, "y": y}
 
         async def body():

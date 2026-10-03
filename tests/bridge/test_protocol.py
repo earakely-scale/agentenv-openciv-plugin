@@ -658,7 +658,8 @@ def test_attack_an_adjacent_enemy_with_its_win_chance(launch):
     assert (res["unit"] is None) == (battle["winner"] == "defender")
     assert res["unit"] is None or res["unit"]["hp"] >= a["hp_after"]  # a winner may be promoted, one hp more
     assert battle["city"] == (None if target["city"] is None else {"x": d["x"], "y": d["y"], "name": target["city"]})
-    assert battle["razed"] == ("fell and was razed" in res["message"])
+    assert battle["razed"] == ("fell and was destroyed" in res["message"])
+    assert battle["captured"] == ("is yours now" in res["message"])
 
 
 def test_battles_the_seat_saw_this_turn_and_the_last(launch):
@@ -689,6 +690,170 @@ def test_battles_the_seat_saw_this_turn_and_the_last(launch):
         if me not in (x["attacker"]["owner"], x["defender"]["owner"]):
             known = {(t[0], t[1]) for t in km["tiles"]}
             assert {(x[side]["x"], x[side]["y"]) for side in ("attacker", "defender")} & known
+
+
+def check_cities_and_borders(world: dict) -> None:
+    """Every city has citizens and sits on a tile its owner owns; a civ owns tiles only while it has a city."""
+    owner_at = {(t[0], t[1]): t[4] for t in world["tiles"]}
+    with_cities = {c["owner"] for c in world["cities"]}
+    for c in world["cities"]:
+        assert c["size"] >= 1, c
+        assert owner_at[(c["x"], c["y"])] == c["owner"], f"{c['name']}'s tile is not its owner's"
+    assert {o for o in owner_at.values() if o >= 0} <= with_cities, "a civ with no city owns tiles"
+    capitals = [c["owner"] for c in world["cities"] if c["capital"]]
+    assert len(capitals) == len(set(capitals)), "a civ has two capitals"
+
+
+def test_cities_change_hands(launch, tmp_path):
+    """The engine AI plays every civ, at war with raging barbarians. A city taken (patches/0011) changes hands with a
+    citizen fewer, its capital status and palace gone, its borders its new owner's, and the seats are told; one of
+    size 1 is destroyed instead. Checked each turn, until the seat has taken a city."""
+    b = launch("--autosave", str(tmp_path / "a"))
+    b.call("new_game", seed=SEED, opponents=5, barbarians="Raging", turn_limit=400)
+    prev = b.call("world")
+    taken = []
+    for _ in range(240):
+        b.call("autoplay", turns=1, policy="engine_ai")
+        world, state = b.call("world"), b.call("state")
+        check_cities_and_borders(world)
+        me = next(p["index"] for p in world["players"] if p["is_human"])
+        before = {c["name"]: c for c in prev["cities"]}
+        kinds = {e["kind"] for e in state["last_events"]}
+        for c in world["cities"]:
+            was = before.get(c["name"])
+            if was is None or was["owner"] == c["owner"]:
+                continue
+            taken.append((world["turn"], c["name"], was["owner"], c["owner"]))
+            assert not c["capital"], f"{c['name']} is still a capital"
+            assert 1 <= c["size"] <= was["size"], (was, c)   # a citizen fewer (it may have grown back since)
+            if c["owner"] == me:
+                mine = next(x for x in state["cities"] if x["name"] == c["name"])
+                info = b.call("city", city=mine["id"])
+                assert "Palace" not in info["buildings"] and not info["capital"]
+                assert info["producing"] is not None
+                assert "city_captured" in kinds
+            if was["owner"] == me:
+                assert "city_lost" in kinds and all(x["name"] != c["name"] for x in state["cities"])
+        check_known_map(b.call("known_map"), world, state)
+        prev = world
+        if any(t[3] == me for t in taken) and len(taken) >= 2:
+            break
+    else:
+        pytest.fail(f"cities taken by T{world['turn']}: {taken}")
+
+    # The game, saved after the captures, loads as it was.
+    restored = launch()
+    restored.call("load", path=str(tmp_path / "a" / "autosave.json"))
+    assert restored.call("world")["cities"] == b.call("world")["cities"]
+
+
+def city_next_to_a_soldier(launch, tmp_path, size: int, capital: bool) -> tuple[Bridge, dict, dict, dict]:
+    """A saved game edited so that one of the seat's soldiers stands next to an enemy city of `size` (its capital or
+    not) with no defender in it, only an enemy Worker; loaded, at war with the city's owner. Returns the bridge, the
+    soldier (state), the city (world) and the save's game."""
+    b = launch("--autosave", str(tmp_path / "a"))
+    b.call("new_game", seed=SEED, opponents=3, turn_limit=400)
+    b.call("autoplay", turns=40, policy="engine_ai")
+    b.call("end_turn", skip_idle=True)
+    save = json.loads((tmp_path / "a" / "autosave.json").read_text())
+    g = save["game"]
+    me_player = next(p for p in g["players"] if p["human"])
+    me, met = me_player["id"], set(me_player["playerRelationships"])
+    land = {(t["x"], t["y"]) for t in g["map"]["tiles"] if t["baseTerrain"] not in ("coast", "sea", "ocean")}
+
+    def at(o: dict) -> tuple[int, int]:
+        loc = o.get("location") or o["currentLocation"]
+        return loc["x"], loc["y"]
+
+    occupied = {at(u) for u in g["units"]} | {at(c) for c in g["cities"]}
+    free = land - occupied
+
+    def free_next_to(c: dict) -> list[tuple[int, int]]:
+        x, y = at(c)
+        return [(x + dx, y + dy) for dx, dy in ((1, 1), (-1, 1), (1, -1), (-1, -1)) if (x + dx, y + dy) in free]
+
+    city = next(c for c in g["cities"] if c["owner"] in met and c["capital"] == capital and free_next_to(c))
+    cx, cy = at(city)
+    spot = free_next_to(city)[0]
+    soldier = next(u for u in g["units"]
+                   if u["owner"] == me and u["prototype"] in ("Warrior", "Archer", "Spearman", "Horseman"))
+    soldier["currentLocation"] = {"x": spot[0], "y": spot[1]}
+    soldier["movePointsRemaining"] = 1
+    worker = next(u for u in g["units"] if u["prototype"] == "Worker")
+    g["units"] = [u for u in g["units"] if not (u["owner"] == city["owner"] and at(u) == (cx, cy))]
+    g["units"].append({**worker, "id": "Worker-999", "owner": city["owner"], "currentLocation": {"x": cx, "y": cy},
+                       "previousLocation": {"x": cx, "y": cy}, "isAutomated": False})
+    while len(city["residents"]) > size:
+        city["residents"].pop()
+    while len(city["residents"]) < size:
+        city["residents"].append({**city["residents"][0], "tileWorked": {"x": cx, "y": cy}})
+    edited = tmp_path / "edited.json"
+    edited.write_text(json.dumps(save))
+    b = launch()
+    b.call("load", path=str(edited))
+    world = b.call("world")
+    owner = next(c for c in world["cities"] if (c["x"], c["y"]) == (cx, cy))["owner"]
+    b.call("declare_war", civ=world["players"][owner]["civ"])
+    state = b.call("state")
+    me_unit = next(u for u in state["units"] if (u["x"], u["y"]) == spot)
+    return b, me_unit, next(c for c in world["cities"] if (c["x"], c["y"]) == (cx, cy)), g
+
+
+def test_taking_a_city_keeps_it(launch, tmp_path):
+    """patches/0011: a soldier walks into an undefended enemy capital of size 3. The seat holds it at size 2, with
+    no palace, empty production and food boxes and something new to build; the enemy Worker in it is gone, the old
+    owner has no capital, and the borders around it are the seat's."""
+    b, soldier, city, _ = city_next_to_a_soldier(launch, tmp_path, size=3, capital=True)
+    before = b.call("world")
+    loser = city["owner"]
+    res = b.call("unit_order", unit=soldier["id"], order="attack", x=city["x"], y=city["y"])
+    assert "is yours now" in res["message"]
+    # The Worker left in the city is its last "defender": the soldier beats it, then walks in.
+    assert res["battle"] is None or (res["battle"]["winner"], res["battle"]["captured"]) == ("attacker", True)
+    world, state = b.call("world"), b.call("state")
+    check_cities_and_borders(world)
+    me = next(p["index"] for p in world["players"] if p["is_human"])
+    now = next(c for c in world["cities"] if c["name"] == city["name"])
+    assert (now["owner"], now["size"], now["capital"]) == (me, 2, False)
+    assert not any(c["capital"] for c in world["cities"] if c["owner"] == loser), "the old owner kept a capital"
+    assert sum(c["capital"] for c in world["cities"] if c["owner"] == me) == 1, "the seat's own capital stays the one"
+    assert not [u for u in world["units"] if (u["x"], u["y"]) == (city["x"], city["y"]) and u["owner"] != me]
+    mine = next(c for c in state["cities"] if c["name"] == city["name"])
+    assert mine["id"] in res["message"]
+    info = b.call("city", city=mine["id"])
+    assert "Palace" not in info["buildings"] and not info["capital"]
+    assert (info["production_stored"], info["food_stored"]) == (0, 0) and info["producing"]
+    assert len(info["citizens"]) == 2 and info["worked"][0][:2] == [city["x"], city["y"]]
+    owner_at = {(t[0], t[1]): t[4] for t in world["tiles"]}
+    assert all(owner_at[(x, y)] == me for x, y, *_ in info["worked"])
+    assert len(world["cities"]) == len(before["cities"])
+    # The game goes on: the next turn plays, and the city is still a city.
+    b.call("end_turn", skip_idle=True)
+    check_cities_and_borders(b.call("world"))
+
+
+def test_taking_a_city_of_size_1_destroys_it(launch, tmp_path):
+    b, soldier, city, _ = city_next_to_a_soldier(launch, tmp_path, size=1, capital=False)
+    before = b.call("world")
+    res = b.call("unit_order", unit=soldier["id"], order="attack", x=city["x"], y=city["y"])
+    assert "fell and was destroyed" in res["message"]
+    world = b.call("world")
+    check_cities_and_borders(world)
+    assert city["name"] not in {c["name"] for c in world["cities"]}
+    assert len(world["cities"]) == len(before["cities"]) - 1
+
+
+def test_a_game_with_captures_replays_the_same(launch):
+    """Taking a city draws from the game's own random numbers only: the same seed plays the same game."""
+    worlds = []
+    for _ in range(2):
+        b = launch()
+        b.call("new_game", seed=SEED, opponents=5, barbarians="Raging", turn_limit=400)
+        b.call("autoplay", turns=150, policy="engine_ai")
+        w = b.call("world")
+        worlds.append({k: w[k] for k in ("turn", "players", "cities", "units", "tiles")})
+        b.close()
+    assert worlds[0] == worlds[1]
 
 
 def test_saves_keeps_every_turn_as_a_loadable_save(launch, tmp_path):
@@ -890,7 +1055,7 @@ def neighbours(km: dict, a: dict, b: dict) -> bool:
 def check_battle(x: dict, me: int, km: dict) -> None:
     """A known_map battle (docs/protocol.md) against itself: the hit points each side lost are the rounds the other
     won, the winner is the side left standing, and only the seat's own units carry ids."""
-    assert list(x) == ["id", "turn", "kind", "attacker", "defender", "rounds", "winner", "city", "razed"]
+    assert list(x) == ["id", "turn", "kind", "attacker", "defender", "rounds", "winner", "city", "captured", "razed"]
     assert isinstance(x["id"], int) and x["id"] > 0 and x["turn"] in (km["turn"] - 1, km["turn"])
     assert x["kind"] in ("attack", "bombard") and x["rounds"] and set(x["rounds"]) <= {"a", "d"}
     a, d = x["attacker"], x["defender"]
@@ -919,7 +1084,9 @@ def check_battle(x: dict, me: int, km: dict) -> None:
         assert x["winner"] == ("attacker" if d["hp_after"] == 0 else "defender")
     if x["city"] is not None:
         assert set(x["city"]) == {"x", "y", "name"} and (x["city"]["x"], x["city"]["y"]) == (d["x"], d["y"])
-    assert not x["razed"] or (x["winner"] == "attacker" and x["city"] is not None and x["kind"] == "attack")
+    fell = x["razed"] or x["captured"]
+    assert not (x["razed"] and x["captured"])
+    assert not fell or (x["winner"] == "attacker" and x["city"] is not None and x["kind"] == "attack")
 
 
 def test_known_map_draws_what_the_seat_knows(launch):

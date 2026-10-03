@@ -21,7 +21,7 @@ summarises a research pass of 2026-10-01:
 - **The engine gives the game no shape after the ancient era.**
   - There is no victory condition, and a game ends only at the turn limit or when the agent is defeated.
   - The AI never changes government, and every civ ends in Despotism with 25 to 35 of 83 techs.
-  - Entering an enemy city destroys it instead of capturing it.
+  - Entering an enemy city destroyed it instead of capturing it (fixed by patch 0011).
   - AI wars never end in peace.
 - **The agent cannot attack, change government or negotiate.** A passive player gets razed late in the
   game: the scripted bot with science at 100% lost 10 cities between T315 and T334 to Longbowmen and
@@ -60,7 +60,7 @@ rotated at a 100K context cap.
 | Victory | conquest, domination, space, UN, culture, score | none |
 | Government | revolutions | Despotism only: no command for the agent, no code for the AI |
 | War and peace | both | the AI declares war and never makes peace; the agent has neither |
-| City capture | yes | entering a city destroys it |
+| City capture | yes | yes (patch 0011): the city loses a citizen, its palace and small wonders; one of size 1 is destroyed |
 | Late eras | Industrial and Modern | nobody reaches them. Bank, University and Cathedral are never buildable, because of a prerequisite check (`Building.cs:145`) |
 
 ## What is missing
@@ -78,7 +78,12 @@ rotated at a 100K context cap.
      most AIs end in Republic or Democracy.
    - Still slow: buildings have no economic effect in this engine (a Library adds no science), which is a
      rules change left for later (M).
-3. **No city capture** (L). In the meantime, conquest has to mean razing.
+3. **No city capture: fixed** by patch 0011.
+   - A city taken changes hands as in Civ III: it loses a citizen, its palace, small wonders, stored food and
+     shields; one of size 1 is destroyed. Great wonders and other buildings stay, and borders follow the new owner.
+   - In 540-turn Standard games at Regent (seeds 1-6), 46 to 73 cities change hands per game, where 12 to 27
+     were destroyed.
+   - Still missing: a civ that loses its capital does not get a new palace.
 4. **Diplomacy only went one way: fixed** by patch 0009.
    - An AI now asks a price for peace (`Player.PeacePriceFor`) and makes peace with other AIs.
    - It offers the player peace, and remembers a broken treaty.
