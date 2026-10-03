@@ -71,9 +71,10 @@ viewer's data (`matchdata.MatchData`, [viewer.md](viewer.md)). A frame for turn 
   latest game action (an AI civ's government instead), and whom it is at war with.
 - **Territory:** each civ's share of the claimed tiles.
 - **Key moments:** eliminations, captures, razings, wars, peace, lead changes, governments, foundings and techs,
-  ranked by weight and age; eliminations, captures, razings and wars stand out in red.
-- **The score chart:** every civ over the turns so far (the y scale follows them), lead changes on the axis, and
-  the baselines' scores when the env plays them.
+  ranked by weight and age; eliminations, captures, razings and wars stand out in red. A lead change counts once the
+  new leader has held the lead every turn since, for up to 5 turns, so a close race's flips don't crowd it out.
+- **The score chart:** every civ over the turns so far (both scales follow them), the lead changes that held on the
+  axis, and the baselines' scores when the env plays them.
 
 Rendering lives in `agentenv_openciv3.recording` and uses Pillow only, so the playtest harness and
 tests can call it directly on a directory of snapshots.

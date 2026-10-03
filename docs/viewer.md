@@ -60,6 +60,9 @@ the turns it hasn't seen; a recording embeds the whole document.
   `tech_learned`, `government_changed`, `war_declared`, `peace_signed`, `lead_change`. Bridge events are kept for
   the kinds the snapshots can't show (`unit_lost`, `gold_stolen`, `disorder`, …); per-seat chatter (`city_grew`,
   `job_done`, `built`, `threat`) is dropped.
+- **Lead changes** are every change of the top score (a tie keeps the old leader). The viewer and the video show one
+  once the new leader has held the lead every turn since, for up to 5 turns, judged with nothing after the turn shown;
+  while the top score is tied, no one leads.
 
 ## 3. Live routes (the env, next to `/mcp`)
 
