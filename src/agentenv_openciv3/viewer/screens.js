@@ -378,13 +378,34 @@ const CI = {good: [129, 5, 22, 22], empty_shield: [253, 5, 22, 22], wasted: [160
 const grid = (cells, cols, size, x0, y0) => cells.map((k, i) => sprAt("yield_icons", CI[k], x0 + (i % cols) * size, y0 + Math.floor(i / cols) * size, size, size)).join("");
 const repeat = (k, n) => Array(Math.max(0, n | 0)).fill(k);
 
+// A unit's own sprite (its idle pose, facing south-east, in the seat's colour) as a small image, cached; null while
+// its art loads (the list redraws when it has).
+const thumbs = new Map();
+function unitThumb(type) {
+  if (thumbs.has(type)) return thumbs.get(type);
+  const ua = S.art.unit(type, () => {   // loaded: swap the placeholders shown meanwhile
+    const url = unitThumb(type);
+    if (url) for (const el of $$(`#dialog [data-thumb="${CSS.escape(type)}"]`)) el.style.cssText += `;background:url('${url}') center/contain no-repeat`;
+  });
+  if (!ua) return null;
+  const cell = S.art.unitCell(ua, "default", "SE", 0, rgb(S.world.color(S.world.me)));
+  const c = document.createElement("canvas"); c.width = c.height = 48;
+  const k = Math.min(48 / cell.width, 48 / cell.height, 1);
+  c.getContext("2d").drawImage(cell, (48 - cell.width * k) / 2, (48 - cell.height * k) / 2, cell.width * k, cell.height * k);
+  const url = c.toDataURL();
+  thumbs.set(type, url);
+  return url;
+}
+
 // The production list's icon and text for an option: a unit's from units_32.png and "Warrior 1.1.1"; a building's
 // from buildings-small.png.
 function optionArt(o, era) {
   const m = S.art.m, u = m.unit_info?.[o.name], b = m.building_icons?.[o.name];
   if (o.kind === "unit" && u) {
-    const i = (u.icon_era || {})[era] ?? u.icon;
-    return {icon: spr("units_32", [1 + 33 * (i % 14), 1 + 33 * Math.floor(i / 14), 32, 32], 0, 0), text: `${o.name} ${u.a}${u.b > 0 ? `(${u.b})` : ""}.${u.d}.${u.m}`};
+    const text = `${o.name} ${u.a}${u.b > 0 ? `(${u.b})` : ""}.${u.d}.${u.m}`, thumb = unitThumb(o.name);
+    if (thumb) return {icon: `<i class="cs-sp" style="left:0;top:0;width:32px;height:32px;background:url('${thumb}') center/contain no-repeat"></i>`, text};
+    const i = (u.icon_era || {})[era] ?? u.icon;   // the art pack's icon sheet is a placeholder: only while the unit loads
+    return {icon: spr("units_32", [1 + 33 * (i % 14), 1 + 33 * Math.floor(i / 14), 32, 32], 0, 0, "", `data-thumb="${esc(o.name)}"`), text};
   }
   return {icon: b != null ? spr("buildings_small", [33, 33 + 33 * b, 32, 32], 0, 0) : "", text: o.name};
 }
