@@ -162,7 +162,8 @@ agent-env run openciv3 --task frontier
 The key is read from agent-env's secret store (the secrets file the checkout's config names, or an environment
 variable `OPENCIV3_STREAM_KEY`) and never appears in a command line or in the output. `--server` sends to any other
 RTMP server (YouTube's is `rtmp://a.rtmp.youtube.com/live2`), `--size 1280x720 --bitrate 3000k` suits a slower
-uplink, and the first run builds the streamer image (`streamer/`, about 1.5 GB).
+uplink, `--test` sends to Twitch without going live (its bandwidth test, visible only in Twitch Inspector), and the
+first run builds the streamer image (`streamer/`, about 1.5 GB).
 
 When the game ends, its recording is saved with the run: an MP4 of the map, scores and actions turn by turn, a
 self-contained HTML replay with a turn slider, and with `--client` the real client's view. `agent-env openciv3

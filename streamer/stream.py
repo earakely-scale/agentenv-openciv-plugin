@@ -50,7 +50,7 @@ def main() -> int:
     p.add_argument("--linger", type=float, default=60)
     args = p.parse_args()
     target = os.environ["STREAM_URL"]
-    secret = target.rsplit("/", 1)[-1]
+    secret = target.rsplit("/", 1)[-1].split("?")[0]
     width, height = args.size.split("x")
 
     print(f"Waiting for {args.url}", flush=True)

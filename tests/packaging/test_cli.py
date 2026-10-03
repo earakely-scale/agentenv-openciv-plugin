@@ -109,14 +109,16 @@ def test_stream_sends_the_newest_game_under_way_without_showing_the_key(tmp_path
     assert "--network host -e STREAM_URL openciv3-streamer --url http://127.0.0.1:42000/live" in args
     assert "live_123_secret" not in args and args.endswith("--linger 30")
     assert url == "rtmp://live.twitch.tv/app/live_123_secret"
+    assert CliRunner().invoke(openciv3, ["stream", "--test"]).exit_code == 0
+    assert log.read_text().splitlines()[1] == "rtmp://live.twitch.tv/app/live_123_secret?bandwidthtest=true"
 
 
 def test_the_streamer_hides_the_key_and_ends_after_the_game():
     spec = importlib.util.spec_from_file_location("streamer", STREAMER)
     streamer = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(streamer)
-    assert streamer.redacted("Error writing to rtmp://x/app/live_9: broken pipe", "live_9") == (
-        "Error writing to rtmp://x/app/<stream key>: broken pipe")
+    assert streamer.redacted("Error writing to rtmp://x/app/live_9?bandwidthtest=true: broken pipe", "live_9") == (
+        "Error writing to rtmp://x/app/<stream key>?bandwidthtest=true: broken pipe")
     assert not streamer.stop_at(None, None, 60, 1000)
     assert not streamer.stop_at(950, None, 60, 1000) and streamer.stop_at(940, None, 60, 1000)
     assert not streamer.stop_at(None, 945, 60, 1000) and streamer.stop_at(None, 940, 60, 1000)
