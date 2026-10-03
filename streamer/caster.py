@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import array
+import codecs
 import concurrent.futures
 import http.client
 import json
@@ -53,6 +54,16 @@ WORDS_PER_SECOND = 2.5  # a line's length when its audio failed
 EVENTS = ("civ_destroyed", "city_captured", "city_destroyed", "war_declared", "peace_signed", "lead_change",
           "government_changed", "city_founded")   # the events worth a call, the biggest first
 EARLY_CITIES = 3        # a civ's first cities are news, later ones are not
+# Slurs and strong profanity, whole words: the env's moderation.BLOCKLIST (ROT13, so the repository holds no plaintext
+# slurs), copied because this runs without the env's package. A line that says one gets "bleep" instead.
+BLOCKLIST = codecs.decode(
+    "shpx shpxre shpxref shpxvat shpxrq shpxva zbgureshpxre zbgureshpxref zbgureshpxvat fuvg fuvgf fuvggl "
+    "fuvgurnq ohyyfuvg phag phagf gjng gjngf ovgpu ovgpurf juber juberf fyhg fyhgf jnaxre jnaxref nffubyr "
+    "nffubyrf pbpxfhpxre avttre avttref avttn avttnf snttbg snttbgf snt sntf genaal genaavrf "
+    "ergneq ergneqf ergneqrq xvxr xvxrf fcvp fcvpf puvax puvaxf tbbx tbbxf jrgonpx jrgonpxf ornare "
+    "ornaref pbba pbbaf cnxv cnxvf enturnq enturnqf gbjryurnq gbjryurnqf fnaqavttre", "rot13").split()
+BLOCKED = re.compile(r"\b(?:" + "|".join(sorted(BLOCKLIST, key=len, reverse=True)) + r")\b", re.IGNORECASE)
+MASKED = re.compile(r"(?<![*\w])[A-Za-z]+(?:\*{2,}[A-Za-z]*|\*[A-Za-z]+)")   # "s***", as the data masks it, or "f**k"
 TOPICS = {  # what the analysis is about when nothing new happened, each in turn
     "race": "the race at the top: the leader, the gap to second place, and who has the momentum over the last five "
             "turns",
@@ -96,6 +107,8 @@ Say "turn 12", never "T12".
 - Never repeat a fact, joke or opening from RECENT LINES: find a fresh angle or another player. No stock phrases: \
 not "that's not X, that's Y", not "Ada here", and don't start lines with "And", "Well" or "Wow".
 - Don't explain the rules of the game, or how scores, leads and wins are decided: the viewers know strategy games.
+- This is a public stream: no profanity or slurs, and a word the DATA masks (like "s***") stays unsaid. A rude \
+message is described in your own words, never quoted.
 
 Reply with JSON only: {"lines": [{"speaker": "Max" or "Ada", "text": "...", "focus": "<civ or null>"}]}, the number \
 of lines asked for, speakers alternating. "focus" is the civ a line is mostly about, else null."""
@@ -324,11 +337,27 @@ class Caster:
         return Moment(("note", turn, civ), "note", turn, civ,
                       f'{self.match.who_civ(civ)}, ending turn {turn}: "{text}"', now)
 
-    @staticmethod
-    def event_text(e: dict, entry: dict) -> str:
+    def event_text(self, e: dict, entry: dict) -> str:
+        if e["kind"] == "lead_change":
+            return f"turn {entry['turn']}: {self.lead_text(e['owner'], entry)}"
         city = next((c for c in entry.get("cities") or () if (c[0], c[1]) == (e.get("x"), e.get("y"))), None)
         size = f" (size {city[4]})" if city and e["kind"] in ("city_captured", "city_founded") else ""
         return f"turn {entry['turn']}: {e['text']}{size}"
+
+    def lead_text(self, leader: int, entry: dict) -> str:
+        """A lead change as the scores show it: the data's own text names a previous leader also when the top score
+        was tied."""
+        m = self.match
+        now = {int(i): s[0] for i, s in (entry.get("scores") or {}).items()}
+        before = {int(i): s[0] for i, s in (m.entry(entry["turn"] - 1).get("scores") or {}).items()}
+        top = max(before.values(), default=None)
+        was = [i for i, s in before.items() if s == top]
+        if len(was) > 1:
+            return (f"{m.who(leader)} takes the lead on {now.get(leader)}, after "
+                    f"{' and '.join(m.who(i) for i in was)} were level at the top on {top}")
+        if was and was[0] != leader:
+            return f"{m.who(leader)} takes the lead from {m.who(was[0])}, {now.get(leader)} to {now.get(was[0])}"
+        return f"{m.who(leader)} takes the lead on {now.get(leader)}"
 
     # ---- choosing the beat ----
 
@@ -353,8 +382,8 @@ class Caster:
         if messages := [x for x in self.pending if x.kind == "message"][-3:]:
             return Beat("message", "New diplomacy between the players, sent where everyone can see it:\n"
                         + "\n".join(f"- {x.text}" for x in messages)
-                        + "\nMax reads it out, quoting it; Ada reads between the lines: a bluff or a real threat, "
-                          "and does it fit the sender's wars, army or plan in the DATA?",
+                        + "\nMax reads it out, quoting it unless it is rude; Ada reads between the lines: do the "
+                          "sender's wars, army or plan in the DATA back it up?",
                         PBP, 2 if len(messages) == 1 else 3, messages)
         notes = self.notes_to_read()
         if notes and self.last_kind != "message":
@@ -627,8 +656,10 @@ def parse_lines(content: str, match: Match) -> list[dict]:
 
 
 def spoken(text) -> str:
-    """A line as it is said: no stage directions or speaker prefix, at most MAX_WORDS words (whole sentences)."""
-    text = re.sub(r"\*[^*]*\*|\[[^\]]*\]", "", str(text or ""))
+    """A line as it is said: no stage directions or speaker prefix, "bleep" for a blocked or masked word (a voice
+    could read "s***" as the word), at most MAX_WORDS words (whole sentences)."""
+    text = MASKED.sub("bleep", str(text or ""))   # before its stars read as a stage direction
+    text = BLOCKED.sub("bleep", re.sub(r"\*[^*]*\*|\[[^\]]*\]", "", text))
     text = " ".join(re.sub(r"^\s*(Max|Ada)\s*:\s*", "", text).split())
     if len(text.split()) <= MAX_WORDS:
         return text

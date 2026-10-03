@@ -2,6 +2,7 @@
 themselves to their audio, what they serve the stream page, and that failures neither stop them nor print the key."""
 
 import array
+import codecs
 import importlib.util
 import json
 import math
@@ -390,7 +391,8 @@ def test_a_lead_change_is_called_once_the_new_leader_still_leads(fake):
     until_quiet(c, clock)
     c.tick()
     said = fake.prompts[1].split("NOW\n")[1]
-    assert "claude-opus takes it back" in said and "gpt-sol takes the lead" not in said
+    assert "turn 7: claude-opus (Rome) takes the lead from gpt-sol (Greece), 50 to 45" in said
+    assert "gpt-sol (Greece) takes the lead" not in said
     assert "Leader: claude-opus (Rome), on top since turn 7" in fake.prompts[1]
 
     level = {"1": [50, 1, 3, 9, 2, 0], "2": [50, 1, 3, 9, 2, 0]}
@@ -401,6 +403,39 @@ def test_a_lead_change_is_called_once_the_new_leader_still_leads(fake):
     assert c.lines[-1]["kind"] == "color"   # a tie is no lead change, whatever the data calls it
     assert "No leader: claude-opus (Rome) and gpt-sol (Greece) are level on 50" in fake.prompts[2]
     assert "takes the lead" not in fake.prompts[2]
+
+    fake.turns.append(entry(9, scores={"1": [50, 1, 3, 9, 2, 0], "2": [55, 1, 3, 9, 2, 0]},
+                            events=[event("lead_change", 2, "gpt-sol takes the lead from claude-opus", **{"from": 1})]))
+    fake.live["turn"] = 9
+    until_quiet(c, clock)
+    c.tick()
+    said = fake.prompts[3].split("NOW\n")[1]
+    assert ("turn 9: gpt-sol (Greece) takes the lead on 55, after claude-opus (Rome) and gpt-sol (Greece) were level "
+            "at the top on 50") in said
+    assert "from claude-opus" not in said   # it wasn't leading: it was level
+
+
+def test_the_casters_never_say_what_the_env_masks(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(1)], turn=1)
+    c.tick()
+    rude = codecs.decode("Ebzr, lbh fuvg shpxvat pbjneq.", "rot13")
+    fake.turns.append(entry(2, messages=[{"from": 2, "to": [1], "text": "Rome, you s*** f****** coward."}]))
+    fake.live["turn"] = 2
+    fake.content = json.dumps({"lines": [{"speaker": "Max", "text": f'Greece goes nuclear: "{rude}"'},
+                                         {"speaker": "Ada", "text": "Rome, you s*** f****** coward. Bold words."}]})
+    until_quiet(c, clock)
+    c.tick()
+    assert "quoting it unless it is rude" in fake.prompts[-1] and "stays unsaid" in caster.SYSTEM
+    said = [line["text"] for line in c.lines[3:]]
+    assert said == ['Greece goes nuclear: "Rome, you bleep bleep coward."', "Rome, you bleep bleep coward. Bold words."]
+    assert [s["input"] for s in fake.speech[3:]] == said
+
+
+def test_the_casters_block_the_words_the_env_blocks():
+    moderation = pytest.importorskip("agentenv_openciv3.moderation")
+    assert caster.BLOCKLIST == moderation.BLOCKLIST
 
 
 def test_lines_are_cleaned_up_for_speech():
@@ -417,6 +452,10 @@ def test_lines_are_cleaned_up_for_speech():
     mixed_up = ('{"lines": [{"speaker": "Ada", "text": "Rome takes the lead, Ada."},'
                 ' {"speaker": "pbp", "text": "Max!"}]}')
     assert [line["text"] for line in caster.parse_lines(mixed_up, match)] == ["Rome takes the lead, Max.", "Ada!"]
+    blocked = codecs.decode("Fuvg, gung'f n OHYYFUVG zbir", "rot13")
+    assert caster.spoken(f"*grins* {blocked}; what the f**k, sh*t, s*** **Rome** 5*3") == (
+        "bleep, that's a bleep move; what the bleep, bleep, bleep Rome 5*3")
+    assert caster.spoken("Scunthorpe, shiitake and a classic assassin") == "Scunthorpe, shiitake and a classic assassin"
     assert caster.wav_seconds(caster.fixed_wav(streamed_wav(1.5))) == 1.5
     with pytest.raises(ValueError):
         caster.fixed_wav(b"ID3 not a wav")

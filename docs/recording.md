@@ -168,7 +168,9 @@ still thinking), and the outro at GAME OVER, which fits in the default minute of
 `--cast-model` that returns one to three lines, and each line is voiced by `openai/gpt-4o-mini-tts` in its caster's
 voice and levelled to the same loudness. It paces itself to the audio: the next beat is written so that it lands as
 the last one ends, so the talk runs on without piling up. The endpoint is agent-env's `[model]`; a failed call skips
-a beat, and a line whose voice failed is still captioned. The page (`?stream&cast=<caster URL>`) polls
+a beat, and a line whose voice failed is still captioned. The stream is public, so the casters are told to keep it
+clean and to paraphrase a rude message rather than quote it, and a word on the env's blocklist, or one it masked
+(`s***`), is said and captioned as "bleep" if a line has one anyway. The page (`?stream&cast=<caster URL>`) polls
 `/cast.json?since=<id>` for new lines (`speaker`, `name`, `text`, `audio`, `seconds`, `turn`, `focus`, `kind`) and
 plays `/audio/<id>.wav` in order with a caption; Chromium runs with autoplay allowed. `--title` puts the broadcast's
 name on screen and in the intro.
