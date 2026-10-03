@@ -84,7 +84,8 @@ kbd { background: var(--raise); border: 1px solid var(--line2); border-radius: 3
   color: var(--text2); padding: 20px; font-size: 13px; }
 
 /* ---- side panel ---- */
-.side { border-left: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; min-height: 0; }
+.side { border-left: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; min-height: 0;
+  overflow-y: auto; }
 .side section { padding: 10px 14px; border-bottom: 1px solid var(--line); }
 .side h2, .card h2 { font-size: 11px; letter-spacing: .07em; color: var(--muted); margin: 0 0 8px; font-weight: 650;
   text-transform: uppercase; display: flex; align-items: center; gap: 8px; }
@@ -103,6 +104,7 @@ table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nu
 .standings .d { width: 24px; font-size: 11px; }
 .who { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .who b { font-weight: 650; } .who span.civ { color: var(--muted); }
+.warmark { display: inline-flex; margin-left: 2px; cursor: help; }
 .bar { height: 3px; border-radius: 0 3px 3px 0; margin-top: 2px; }
 .state { width: 14px; text-align: center; }
 .dot-live { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--gold); animation: pulse 1.2s infinite; }
@@ -125,7 +127,7 @@ ul.lines li { padding: 2px 0; color: var(--text2); white-space: nowrap; overflow
 ul.lines li.bad { color: var(--bad); }
 .btnrow { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
 .btnrow button { font-size: 12px; padding: 3px 9px; }
-.feedwrap { flex: 1; min-height: 120px; display: flex; flex-direction: column; }
+.feedwrap { flex: 1 1 260px; min-height: 260px; display: flex; flex-direction: column; }
 .kfilter { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 14px 6px; }
 .kfilter .chip { font-size: 11px; padding: 1px 8px; }
 ul.feed { list-style: none; margin: 0; padding: 0 14px 10px; overflow: auto; flex: 1; }
@@ -156,8 +158,14 @@ ul.feed .tag { font-size: 10px; text-transform: uppercase; letter-spacing: .05em
 .acard .mm .livestate { position: absolute; right: 8px; top: 8px; font-size: 11px; background: rgba(10,12,16,.85);
   border-radius: 999px; padding: 1px 8px; display: flex; align-items: center; gap: 5px; }
 .acard .ft { padding: 6px 10px 8px; border-top: 1px solid var(--line); display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; }
-.acard .stats { display: flex; gap: 10px; color: var(--text2); white-space: nowrap; font-variant-numeric: tabular-nums; overflow: hidden; }
+.acard .stats { color: var(--text2); white-space: nowrap; font-variant-numeric: tabular-nums; overflow: hidden;
+  text-overflow: ellipsis; min-width: 0; }
+.acard .stats > span { margin-right: 10px; }
 .acard .stats b { color: var(--text); font-weight: 600; }
+.acard .mm .warchip { position: absolute; left: 8px; bottom: 8px; display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; color: #f6b3a4; background: rgba(10,12,16,.88); border: 1px solid rgba(240,116,90,.5); border-radius: 999px;
+  padding: 1px 8px 1px 6px; max-width: calc(100% - 16px); white-space: nowrap; overflow: hidden; }
+.acard .mm .warchip .sw { margin-right: 3px; }
 .acard .stats i { font-style: normal; color: var(--good); font-size: 11px; margin-left: 2px; }
 .acard .act { grid-column: 1 / -1; color: var(--text2); font-size: 12px; height: 34px; overflow: hidden; }
 .acard .act div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
