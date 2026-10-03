@@ -28,6 +28,8 @@ START = (12, 10)
 WIDTH = HEIGHT = 60
 RIVER = {(13, 9), (14, 10), (15, 11), (16, 12), (17, 13)}
 RESOURCES = {(13, 9): "Wheat", (16, 8): "Horses", (10, 14): "Gems", (8, 8): "Fish"}
+# The strategic and luxury ones, with their icon in resources.png (the client's ruleset.json).
+TRADE_GOODS = {"Horses": ("strategic", 0), "Gems": ("luxuries", 15)}
 OVERLAY = {(14, 8): "Hills", (15, 7): "Forest", (11, 13): "Forest", (16, 10): "Mountains", (10, 12): "Marsh"}
 SIZES = ["Tiny", "Small", "Standard", "Large", "Huge"]
 CITY_NAMES = ["Rome", "Veii", "Antium", "Cumae", "Neapolis", "Ravenna"]
@@ -180,6 +182,7 @@ class Game:
         self.met = False
         self.government, self.anarchy_until, self.revolution_target = "Despotism", None, None
         self.wars, self.talks_from, self.barbarian_killed = set(), {}, False
+        self.battles = []  # known_map's, every one the seat's own attack
         self.threats_seen = set()
         self.risk_seen = set()
 
@@ -233,7 +236,7 @@ class Game:
         name = CITY_NAMES[len(self.cities) % len(CITY_NAMES)]
         self.cities[cid] = {"id": cid, "name": name, "pos": u["pos"], "size": 1, "food": 0, "shields": 0,
                             "producing": "Warrior", "source": "engine", "pending": True, "lost": 0, "capped_seen": None,
-                            "disorder": False, "buildings": ["Palace"] if not self.cities else []}
+                            "disorder": False, "buildings": ["Palace"] if not self.cities else [], "founded": self.turn}
         del self.units[u["id"]]
         return self.cities[cid]
 
@@ -258,6 +261,52 @@ class Game:
         item = c["producing"]
         return bool(item) and item in POP_COST and c["shields"] >= ITEMS[item][1] and c["size"] <= POP_COST[item]
 
+    def maintenance(self, c) -> int:
+        return sum(b != "Palace" for b in c["buildings"])
+
+    def commerce(self) -> dict:
+        """Each city's commerce split as the engine does, its taxes making up gpt() (plus upkeep), so the domestic
+        advisor's figures add up."""
+        cities = list(self.cities.values())
+        upkeep = sum(self.maintenance(c) for c in cities)
+        taxes = [(self.gpt() + upkeep) // len(cities)] * len(cities) if cities else []
+        if taxes:
+            taxes[0] += self.gpt() + upkeep - sum(taxes)
+        out = {}
+        for c, tax in zip(cities, taxes, strict=True):
+            science, luxury = self.rates["science"] * (1 + c["size"]) // 6, self.rates["luxury"] * c["size"] // 4
+            corrupt = 0 if "Palace" in c["buildings"] else 1
+            out[c["id"]] = {"total": tax + science + luxury + corrupt, "taxes": tax, "science": science,
+                            "luxury": luxury, "corrupt": corrupt, "wealth": 0}
+        return out
+
+    def finance(self) -> dict:
+        commerce = self.commerce().values()
+        parts = {k: sum(c[k] for c in commerce) for k in ("total", "science", "luxury", "corrupt")}
+        income = {"cities": parts["total"], "taxmen": 0, "other_civs": 0, "interest": 0}
+        expenses = {"science": parts["science"], "entertainment": parts["luxury"], "corruption": parts["corrupt"],
+                    "maintenance": sum(self.maintenance(c) for c in self.cities.values()), "unit_costs": 0,
+                    "other_civs": 0}
+        return {"income": {**income, "total": sum(income.values())},
+                "expenses": {**expenses, "total": sum(expenses.values())}}
+
+    def city_screen(self, c, worked) -> dict:
+        """The city command's culture, resources and citizens (the client's city screen)."""
+        per_turn = sum({"Palace": 1, "Temple": 2}.get(b, 0) for b in c["buildings"])
+        total = per_turn * max(0, self.turn - c.get("founded", self.turn))
+        goods = {"strategic": [], "luxuries": []}
+        for p in area(c["pos"], 2):
+            if RESOURCES.get(p) in TRADE_GOODS:
+                kind, icon = TRADE_GOODS[RESOURCES[p]]
+                goods[kind].append({"name": RESOURCES[p], "icon": icon, "count": 1})
+        happy, content, unhappy = self.mood(c)
+        moods = ["happy"] * happy + ["content"] * content + ["unhappy"] * unhappy
+        return {"culture": {"per_turn": per_turn, "total": total, "next_border": 10 ** len(str(max(1, total)))},
+                **goods, "specialists": [],
+                "citizens": [{"mood": m, "works": "tile",
+                              "tile": [worked[i][0], worked[i][1]] if i < len(worked) else None}
+                             for i, m in enumerate(moods)]}
+
     def city_view(self, c) -> dict:
         food_pt, spt = 2, self.spt(c)
         needed = 10 + 5 * c["size"]
@@ -272,7 +321,10 @@ class Game:
                 "turns_to_complete": ceil_div(cost - c["shields"], spt) if item and cost and spt else None,
                 "disorder": c["disorder"], "happy": happy, "content": content, "unhappy": unhappy,
                 "defenders": self.defenders(c), "riot_risk": self.riot_risk(c), "capped": self.capped(c),
-                "shields_lost_last_turn": c["lost"], "buildings": c["buildings"]}
+                "shields_lost_last_turn": c["lost"], "buildings": c["buildings"],
+                "food_eaten": 2 * c["size"], "commerce": self.commerce()[c["id"]],
+                "shields": {"total": spt or 1 + c["size"], "useful": spt, "corrupt": 0 if spt else 1 + c["size"]},
+                "maintenance": self.maintenance(c)}
 
     def city(self, key):
         found = self.cities.get(key)
@@ -336,12 +388,12 @@ class Game:
         r = self.research
         return {
             "turn": self.turn, "turn_limit": self.turn_limit, "game_over": self.game_over(), "defeated": False,
-            "civ": self.civ, "government": self.government, "anarchy_until": self.anarchy_until,
+            "civ": self.civ, "era": 0, "government": self.government, "anarchy_until": self.anarchy_until,
             "tile_penalty": self.government == "Despotism",
             "governments": [g for g in self.governments_view()["available"]
                             if g["name"] != self.government and not self.anarchy_until],
             "revolution_target": self.revolution_target,
-            "gold": self.gold, "gold_per_turn": self.gpt(),
+            "gold": self.gold, "gold_per_turn": self.gpt(), "finance": self.finance(),
             "rates": {"tax": 10 - self.rates["science"] - self.rates["luxury"], **self.rates},
             "research": {"current": r, "turns_left": self.tech_turns(r) if r else None, "beakers": self.beakers,
                          "cost": TECHS[r][0] if r else None, "queue": list(self.queue),
@@ -502,9 +554,19 @@ class Game:
             if target != self.barbarian():
                 raise Refused("bad_target", f"There is nothing to attack at {target}.", self.attack_targets(u))
             self.barbarian_killed, u["moves"] = True, 0.0
+            civs = [self.civ, *self.opponents, "Barbarians"]
+            battle = {"id": len(self.battles) + 1, "turn": self.turn, "kind": "attack",
+                      "attacker": {"owner": civs.index(a.get("seat", self.civ)), "type": "Warrior", "x": u["pos"][0],
+                                   "y": u["pos"][1], "id": u["id"], "hp_before": u["hp"], "hp_after": u["hp"] - 1,
+                                   "hp_max": UNIT_STATS["Warrior"][1]},
+                      "defender": {"owner": len(civs) - 1, "type": "Warrior", "x": target[0], "y": target[1],
+                                   "id": None, "hp_before": 3, "hp_after": 0, "hp_max": 3},
+                      "rounds": ["a", "d", "a", "a"], "winner": "attacker", "city": None, "razed": False}
+            u["hp"] -= 1
+            self.battles.append(battle)
             return {"message": f"{u['id']} Warrior attacked the Barbarians Warrior at ({target[0]},{target[1]}) "
                                "(win chance about 50%) and won: the Barbarians Warrior was destroyed.",
-                    "unit": self.unit_view(u), "city": None, "path": None}
+                    "unit": self.unit_view(u), "city": None, "path": None, "battle": battle}
         if order == "found_city" or (order == "settle" and target == u["pos"]):
             if not self.can_found(u["pos"])["ok"]:
                 self.raise_cannot_found(u, u["pos"])
@@ -527,7 +589,7 @@ class Game:
                 u["moves"] = 0.0
             msg = f"{u['id']} {u['type']}: {order}."
         return {"message": msg, "unit": self.unit_view(u) if u["id"] in self.units else None, "city": city,
-                "path": path}
+                "path": path, "battle": None}
 
     def raise_cannot_found(self, u, p):
         sites = self.sites(u["pos"], 3)
@@ -845,7 +907,8 @@ class Game:
         return {"turn": self.turn, "width": WIDTH, "height": HEIGHT, "wrap_x": True,
                 "players": [{"index": i, "civ": c, "barbarian": c == "Barbarians", "me": i == mine,
                              "color": CLIENT_COLORS[colors[i]]} for i, c in enumerate(civs)],
-                "tiles": tiles, "cities": cities, "units": units}
+                "tiles": tiles, "cities": cities, "units": units,
+                "battles": [b for b in self.battles if b["turn"] >= self.turn - 1]}
 
     def handle(self, cmd, a, on_turn) -> dict:
         if a.get("seat", self.civ) not in self.seats:
@@ -874,8 +937,13 @@ class Game:
             return self.unit_order(a)
         if cmd == "city":
             c = self.city(a["city"])
+            tiles = area(c["pos"], 1)[: c["size"] + 1]
+            worked = [p for p in tiles if p != c["pos"]][: c["size"]]
             return {**self.city_view(c), "options": self.options(c),
-                    "tiles_worked": [{"x": p[0], "y": p[1]} for p in area(c["pos"], 1)[: c["size"] + 1]]}
+                    "tiles_worked": [{"x": p[0], "y": p[1]} for p in tiles],
+                    "worked": [[p[0], p[1], *tile_yield(p).values()] for p in [c["pos"], *worked]],
+                    "workable": [[p[0], p[1]] for p in area(c["pos"], 2) if p != c["pos"] and on_map(p)],
+                    **self.city_screen(c, worked)}
         if cmd == "set_production":
             c = self.city(a["city"])
             names = [o["name"] for o in self.options(c)]

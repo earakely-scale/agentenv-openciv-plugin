@@ -81,13 +81,20 @@ sealed partial class Session {
 
 	/// <summary>The engine's own mood calculation for the city as it stands, leaving the residents untouched.</summary>
 	Mood EngineMoods(City c) {
+		List<CityResident.Mood> moods = ResidentMoods(c);
+		return new Mood(
+			moods.Count(m => m == CityResident.Mood.Happy),
+			moods.Count(m => m == CityResident.Mood.Content),
+			moods.Count(m => m == CityResident.Mood.Unhappy));
+	}
+
+	/// <summary>Each resident's mood, by index, after the engine's City.RecalculateCitizenMoods (which the client runs
+	/// before it draws a city's heads), leaving the residents untouched.</summary>
+	List<CityResident.Mood> ResidentMoods(City c) {
 		var saved = c.residents.Select(r => r.mood).ToList();
 		try {
 			c.RecalculateCitizenMoods(gd);
-			return new Mood(
-				c.residents.Count(r => r.mood == CityResident.Mood.Happy),
-				c.residents.Count(r => r.mood == CityResident.Mood.Content),
-				c.residents.Count(r => r.mood == CityResident.Mood.Unhappy));
+			return c.residents.Select(r => r.mood).ToList();
 		} finally {
 			for (int i = 0; i < saved.Count; i++) c.residents[i].mood = saved[i];
 		}

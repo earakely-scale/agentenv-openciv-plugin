@@ -20,6 +20,7 @@ sealed partial class Session {
 			["defeated"] = h.defeated,
 			["victory"] = VictoryJson(),
 			["civ"] = h.civilization.name,
+			["era"] = Math.Clamp(h.EraIndex(), 0, EraNames.Length - 1),
 			["government"] = h.government.name,
 			["anarchy_until"] = h.government.transitionType ? (JsonNode)h.inAnarchyUntilTurn : null,
 			["tile_penalty"] = h.government.hasTilePenalty,
@@ -27,6 +28,7 @@ sealed partial class Session {
 			["revolution_target"] = revolutionTarget?.name,
 			["gold"] = h.gold,
 			["gold_per_turn"] = h.CalculateGoldPerTurn(),
+			["finance"] = Finance(h),
 			["rates"] = Rates(),
 			["research"] = Research(),
 			["decisions"] = Decisions(),
@@ -50,6 +52,24 @@ sealed partial class Session {
 			}),
 			["blockers"] = Blockers(),
 			["last_events"] = Json.Array(lastEvents, e => e.DeepClone()),
+		};
+	}
+
+	/// <summary>
+	/// The domestic advisor's income and expenses, as it shows them (C7/UIElements/Advisors/DomesticAdvisor.cs, ShowAdvisor):
+	/// Player.AggregateFlows, whose Netflows is CalculateGoldPerTurn, so income.total - expenses.total == gold_per_turn.
+	/// </summary>
+	static JsonObject Finance(Player p) {
+		PlayerCommerceBreakdown f = p.AggregateFlows();
+		return new JsonObject {
+			["income"] = new JsonObject {
+				["cities"] = f.CityInflows(), ["taxmen"] = f.taxmenTaxes, ["other_civs"] = f.fromOtherCivs, ["interest"] = f.interest,
+				["total"] = f.Inflows(),
+			},
+			["expenses"] = new JsonObject {
+				["science"] = f.beakers, ["entertainment"] = f.happiness, ["corruption"] = f.corrupted, ["maintenance"] = f.maintenance,
+				["unit_costs"] = f.unitSupport, ["other_civs"] = f.toOtherCivs, ["total"] = f.Outflows(),
+			},
 		};
 	}
 
@@ -105,6 +125,10 @@ sealed partial class Session {
 		int food = c.FoodGrowthPerTurn();
 		Mood mood = EngineMoods(c), model = Moods(c);
 		if (mood != model) Log.Warning("mood model {Model} differs from the engine's {Engine} in {City}", model, mood, c.name);
+		// The domestic advisor's row and the city screen's lines (DomesticAdvisor.MakeCityRow, CityScreen.RenderCommerceDetails
+		// and RenderProductionDetails): City.CurrentCommerceYield, CurrentProductionYield, FoodConsumedPerTurn, MaintenanceCosts.
+		CommerceBreakdown commerce = c.CurrentCommerceYield();
+		CorruptableValue shields = c.CurrentProductionYield();
 		return new JsonObject {
 			["id"] = ids.Of(c),
 			["name"] = c.name,
@@ -131,7 +155,53 @@ sealed partial class Session {
 			["defenders"] = Defenders(c),
 			["riot_risk"] = RiotRisk(c),
 			["buildings"] = Json.Strings(c.GetBuildings().Select(b => b.building.name)),
+			["food_eaten"] = c.FoodConsumedPerTurn(),
+			["commerce"] = new JsonObject {
+				["total"] = commerce.taxes + commerce.beakers + commerce.happiness + commerce.corrupted + commerce.wealth,
+				["taxes"] = commerce.taxes, ["science"] = commerce.beakers, ["luxury"] = commerce.happiness,
+				["corrupt"] = commerce.corrupted, ["wealth"] = commerce.wealth,
+			},
+			["shields"] = new JsonObject { ["total"] = shields.useful + shields.corrupt, ["useful"] = shields.useful, ["corrupt"] = shields.corrupt },
+			["maintenance"] = c.MaintenanceCosts(),
 		};
+	}
+
+	/// <summary>
+	/// The rest of the client's city screen (C7/UIElements/CityScreen/CityScreen.cs): RenderCulture, RenderStrategicResources,
+	/// RenderLuxuries and RenderPopHeads.
+	/// </summary>
+	void AddCityScreen(JsonObject o, City c) {
+		o["culture"] = new JsonObject {
+			["per_turn"] = c.GetCulturePerTurn(),
+			["total"] = c.GetCulture(),
+			["next_border"] = (int)Math.Pow(10, c.GetBorderExpansionLevel()),
+		};
+		static JsonArray Resources(Dictionary<Resource, int> counts) =>
+			Json.Array(counts, e => new JsonObject { ["name"] = e.Key.Name, ["icon"] = e.Key.Icon, ["count"] = e.Value });
+		o["strategic"] = Resources(c.GetStrategicResources(gd));
+		o["luxuries"] = Resources(c.GetLuxuries(gd));
+		// The heads in the client's order: the laborers happy, then content, then unhappy, then the specialists.
+		List<CityResident.Mood> moods = ResidentMoods(c);
+		var laborers = Enumerable.Range(0, c.residents.Count).Where(i => c.residents[i].citizenType.IsDefaultCitizen).ToList();
+		var specialists = c.residents.Where(r => !r.citizenType.IsDefaultCitizen).ToList();
+		var citizens = new JsonArray();
+		foreach (CityResident.Mood m in new[] { CityResident.Mood.Happy, CityResident.Mood.Content, CityResident.Mood.Unhappy })
+			foreach (int i in laborers.Where(i => moods[i] == m)) {
+				Tile t = c.residents[i].tileWorked;
+				citizens.Add(new JsonObject {
+					["mood"] = m.ToString().ToLowerInvariant(), ["works"] = "tile",
+					["tile"] = Tile.IsTileValid(t) ? new JsonArray(t.XCoordinate, t.YCoordinate) : null,
+				});
+			}
+		foreach (CityResident r in specialists)
+			citizens.Add(new JsonObject { ["mood"] = null, ["works"] = "specialist", ["specialist"] = r.citizenType.SingularName });
+		o["citizens"] = citizens;
+		o["specialists"] = Json.Array(specialists.GroupBy(r => r.citizenType).Select(g => (Type: g.Key, Count: g.Count())),
+			s => new JsonObject {
+				["type"] = s.Type.SingularName, ["index"] = s.Type.SpecialistIndex, ["count"] = s.Count,
+				["taxes"] = s.Type.Taxes, ["research"] = s.Type.Research, ["luxuries"] = s.Type.Luxuries,
+				["corruption"] = s.Type.Corruption, ["construction"] = s.Type.Construction,
+			});
 	}
 
 	/// <summary>Turns until the current item completes, including waiting for the population it costs.</summary>
@@ -265,6 +335,7 @@ sealed partial class Session {
 			["tiles"] = tiles,
 			["cities"] = cities,
 			["units"] = units,
+			["battles"] = BattlesJson(),
 		};
 	}
 
@@ -380,6 +451,13 @@ sealed partial class Session {
 				["yield"] = Yield(t.FoodYield(c).yield, t.ProductionYield(c).yield, t.CommerceYield(c).yield),
 			};
 		});
+		// The city screen's map (C7/Map/TileAssignmentLayer.cs): the centre and the worked tiles with the yields it draws
+		// on them, the engine's Tile.FoodYield/ProductionYield/CommerceYield for the city, which City.CurrentFoodYield and
+		// the rest sum; and the tiles in the city's radius it could work (City.GetWorkableTiles, the border it draws).
+		o["worked"] = Json.Array(c.residents.Select(r => r.tileWorked).Where(Tile.IsTileValid).Prepend(c.location),
+			t => new JsonArray(t.XCoordinate, t.YCoordinate, t.FoodYield(c).yield, t.ProductionYield(c).yield, t.CommerceYield(c).yield));
+		o["workable"] = Json.Array(c.GetWorkableTiles(), t => new JsonArray(t.XCoordinate, t.YCoordinate));
+		AddCityScreen(o, c);
 		return o;
 	}
 

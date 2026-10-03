@@ -30,6 +30,6 @@ def page(data: dict | None = None, videos: dict[str, dict] | None = None) -> str
 
 def play_page() -> str:
     """The play UI as one HTML file; it reads its seat's token from the URL's `#token=`."""
-    js = "\n".join(_asset(f) for f in ("map.js", "art.js", "play.js")).replace("</script", "<\\/script")
+    js = "\n".join(_asset(f) for f in ("map.js", "art.js", "screens.js", "play.js")).replace("</script", "<\\/script")
     fills = {"CSS": _asset("play.css"), "JS": js}
     return re.sub(r"/\*__(CSS|JS)__\*/", lambda m: fills[m[1]], _asset("play.html"))

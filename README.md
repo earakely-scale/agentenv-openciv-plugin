@@ -611,8 +611,8 @@ This repository is licensed under the Apache License 2.0 ([LICENSE](LICENSE), [N
   referenced as a git submodule and never modified there; the engine in the bridge and the image is built from a copy
   with the patches in `patches/` applied: a defeated player no longer hangs the turn loop, war declarations use the
   game's seeded RNG, budget and AI-turn errors are contained, buildings that need another building and small wonders
-  become buildable, the AI funds its science, supports its units, changes government and makes peace, and research
-  cost follows the difficulty.
+  become buildable, the AI funds its science, supports its units, changes government and makes peace, research
+  cost follows the difficulty, and battles tell an observer each round as they are fought.
 - The image also contains Blast (Apache-2.0), Serilog (Apache-2.0), MoonSharp (BSD-3-Clause), ini-parser (MIT), the
   .NET runtime (MIT) and a static FFmpeg build (GPL-3.0-or-later); it carries their licences in
   `/opt/civbridge/licenses/`. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

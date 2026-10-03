@@ -64,7 +64,13 @@ Args: none (plays the request's seat, like every command). Everything the seat k
              "id": "c1", "producing": "Settler", "turns_to_complete": 6, "turns_to_grow": 4,
              "starving": false}],                              // the last five: own cities only
  "units": [{"x", "y", "owner", "type", "count", "id": "u3",   // on visible tiles; id on the seat's own units only
-            "hp": 3, "hp_max": 3, "fortified": false, "combat": true}]}
+            "hp": 3, "hp_max": 3, "fortified": false, "combat": true}],
+ "battles": [{"id": 7, "turn": 12, "kind": "attack" | "bombard",   // this turn's and the last's, that the seat saw
+              "attacker": {"owner", "type", "x", "y", "id": "u3" | null, "hp_before", "hp_after", "hp_max"},
+              "defender": {...},                                    // the same
+              "rounds": ["a", "d", "a"],                            // who won each round, in order
+              "winner": "attacker" | "defender" | "retreat",
+              "city": {"x", "y", "name"} | null, "razed": false}]}
 ```
 
 Terrain and overlay names are the engine's lower-case keys, as in the world snapshot; a resource shows only once the
@@ -83,6 +89,41 @@ reader of the old nine columns keeps working. What the OpenCiv3 client's art nee
   `disorder` adds the fire; `starving` (own cities) turns the label's population red.
 - A unit's `hp`/`hp_max` fill the hit point bar, drawn only when `combat`; `fortified` frames it. A foreign group
   shows the unit the client would draw of it, its best defender.
+- `battles` are what the client animates in combat: per round both units play ATTACK1 facing each other (the
+  defender facing back), the round's loser losing a hit point, and the loser of the battle plays DEATH. A battle
+  shows while its turn is this one or the last, if the seat fought it or had either tile in sight when it began,
+  whoever's turn it was (an AI attacking the seat, AI against AI in sight, the seat's own attacks); `id` grows
+  with each battle of the game, so a page plays each once. `rounds` are as the engine drew them: `"a"` the
+  attacker won the round (the defender loses a hit point), `"d"` the defender did; `hp_before - hp_after` is the
+  rounds the other side won, but for a `retreat`, whose last round's loser withdrew (the defender when it is
+  `"a"`, the attacker when `"d"`). `id` is the seat's own unit's; `x`, `y` are where the units stood. `city` is
+  the city on the defender's tile, and `razed` says the winner destroyed it. A `bombard` is the bombarder's
+  shots at a unit: `"a"` a hit, `"d"` a miss. The seat's own `attack` or `bombard` order answers with the same
+  record as the act's `result.battle`.
+
+The city screen and the advisors read two more commands' fields:
+
+- `city` (`GET /play/api/city`) has `worked`, `[[x, y, food, shields, commerce], ...]`, the centre first and then
+  every worked tile with the yields the client's city screen draws on it (`TileAssignmentLayer`), and `workable`,
+  `[[x, y], ...]`, the tiles in the city's radius it could work, around which the client draws the border.
+- `state` has `era`, the seat's era 0-3, by which the client picks the advisors' heads and the science advisor's
+  background.
+- `state` has `finance`, the domestic advisor's income and expenses as it computes them (`Player.AggregateFlows()`):
+  `income` `{cities, taxmen, other_civs, interest, total}` ("From cities: +n", ..., "Income: n") and `expenses`
+  `{science, entertainment, corruption, maintenance, unit_costs, other_civs, total}` ("-n: Science", ...,
+  "Expenses: n"); `income.total - expenses.total` is `gold_per_turn`, the "Net gain/Net loss/Neutral" line.
+- Each of `state`'s cities (and `city`) has the domestic advisor's row: `food_eaten` (the food column's
+  `eaten.surplus` with `food_per_turn`), `shields` `{total, useful, corrupt}` (`corrupt.useful`), `commerce`
+  `{total, taxes, science, luxury, corrupt, wealth}` (the commerce column is `corrupt.(taxes + science + luxury)`,
+  the science and tax columns its `science` and `taxes`; the city screen's three commerce lines are its `taxes`,
+  `science` with `corrupt`, and `luxury`), and `maintenance` (its buildings' upkeep, which the client leaves at 0).
+- `city` has the rest of the city screen: `culture` `{per_turn, total, next_border}` ("n/turn", "Total:
+  total/next_border"); `strategic` and `luxuries`, `[{name, icon, count}]` with `icon` the resource's index in
+  `resources.png`; `citizens`, one per resident in the order the client draws the heads (laborers happy, content,
+  unhappy, then specialists), `{"mood", "works": "tile", "tile": [x, y]}` or `{"mood": null, "works": "specialist",
+  "specialist": "Entertainer"}`; and `specialists`, `[{type, index, count, taxes, research, luxuries, corruption,
+  construction}]`, `index` picking the head's row in `popHeads.png` (`16 + index - 1`). Details in
+  [protocol.md](protocol.md#state) and [`city`](protocol.md#city).
 
 ## 4. The play API (the env, next to `/mcp`)
 
@@ -164,11 +205,55 @@ the map with the OpenCiv3 client's own art, the way the client draws it. **T** s
   marks, and the turning cursor under the active unit. The HUD takes the client's art too: the status scroll with
   the next-turn dome (Enter or Space ends the turn when no unit waits), the minimap's frame and colours, and the unit
   order buttons. Colours are the client's (`known_map` `players[].color`).
+- **Battles:** every battle the seat saw (`known_map` `battles`, and its own attack's `result.battle` at once) plays
+  on the map as the client plays it: both units face each other and play their attack each round while their HP bars
+  drop, then the loser plays its death; one battle at a time, in order, the camera following, each once (the page
+  remembers the ones it showed, so a reload doesn't replay them). A long fight shows its last eight rounds.
+- **The advisors and the city screen** (`screens.js`) are the client's too, with the art on: its 1024x768 screens,
+  scaled to the window, every label and button where the client puts it (UIElements/Advisors, UIElements/CityScreen),
+  in its Noto Sans. The advisors' heads are the seat's era's (`state.era`). Esc or the exit button closes a screen;
+  F1, F4 and F6 switch between the advisors; the client's own popups (an advisor's head over the parchment, the
+  orb buttons) confirm what changes the game.
+  - **Domestic (F1):** the income and expenses, line by line as the client lists them (`state.finance`), the
+    treasury and the net gold per turn; the science and luxury sliders (drag the beaker or the
+    smiley, or press their plus and minus), each step moving a tenth as the client does (more science takes it from
+    taxes, else from luxury; less gives it to taxes), sent as `set_rates`; the research and its turns; the
+    government button, which starts a revolution ("You say you want a revolution?") and then asks for the new
+    government (`revolution`; the client asks that when the anarchy ends); and a row per city in the client's
+    columns: food eaten.surplus, shields wasted.useful, commerce corrupt.(taxes + science + luxury), the buildings'
+    upkeep (which the client leaves at 0), happy.content, science, taxes, the citizens' heads by mood, and what it
+    builds. A city's name opens
+    its screen.
+  - **Foreign (F4):** the client's screen, whose tab panel (Treaties, Trades, Details) is otherwise empty, with the
+    seat's `diplomacy` on its parchment: a row per civ met (war or peace, the gold asked for peace, score,
+    government) with Declare war or Propose peace, and the treaties, the peace offers and the civs met in the panel.
+  - **Science (F6):** the client's tech tree, an era a page (Previous Era, Next Era), each tech's box where the
+    ruleset places it, sized by what it brings, coloured by its state: known, being researched or queued (with its
+    place in the queue), researchable now (with its turns), or blocked; a tech not needed for the next era is in
+    italics, marked. Clicking a tech of this era or an earlier one researches it, its missing prerequisites first
+    (`research`). This art draws only the ancient era's small boxes, so every box is that one stretched to its size.
+  - **City screen** (click your city, or its name in the domestic advisor): the map shows through the screen's
+    window with the camera on the tile south of the city, as the client puts it, the tiles the city can work
+    outlined and each worked tile's food, shields and commerce on it (`city` `worked`, `workable`); its culture
+    (per turn, and the total against the next border growth), strategic resources (with their counts) and luxuries;
+    the citizens' heads, laborers by mood and specialists with what each adds (`city` `citizens`, `specialists`); the
+    improvements; the production button (the unit or building being built) and its list
+    (`set_production`), the shield box and row (useful shields, and the waste from the left); the food box (with
+    the granary's half), the food line and row (the food eaten and the surplus); the growth and completion; where the
+    commerce goes (gold to taxes, to science with the corruption, to happiness); and Hurry, which buys the production (`buy`). The arrow
+    buttons, or ← and →, go to the previous and next city.
+  - **What they leave out:** the client's moving of citizens between tiles and cycling of specialists on the city
+    screen (the bridge has no command for them), the tiles other cities work, and the specialists in the domestic
+    advisor's rows (`state`'s cities have mood counts, not `citizens`). Without the bridge's newer fields (an older
+    bridge) the screens show what its tiles' yields and mood counts give.
 - **Where it comes from:** `python -m agentenv_openciv3.webart <C7 dir> <out dir>` converts the client's art
   (C7-Game/Assets) for the browser when the client image is built: the PNG sheets as they are (losslessly smaller),
   and each unit's FLC animations decoded (`civ3flc.py`) into a sheet per unit with a row per action and direction, and
-  a mask of its civ-colour pixels. `manifest.json` names them. Out of the image, `OPENCIV_WEB_ART` points the env at
-  a converted directory.
+  a mask of its civ-colour pixels; the screens' art (`screens` in the manifest: backgrounds, heads, buttons, boxes and
+  icons, which the page fetches when a screen first opens), with the tech boxes stretched to their sizes; and, from
+  the client's ruleset (`Lua/civ3/ruleset.json`, the standalone mode's units), the science advisor's tech tree as it
+  lays it out (`techs`), the units' stats and icons (`unit_info`) and the buildings' icons (`building_icons`).
+  `manifest.json` names them. Out of the image, `OPENCIV_WEB_ART` points the env at a converted directory.
 - **Served:** `GET /play/art/<path>` (no token: it is the same for every seat), the manifest revalidated, the rest
   cached for good under the art's id. 404 when the env has no art; the view's `game.art` says whether it has.
 - **Rules followed:** the client's draw order (each layer over every tile before the next; fog over cities, under

@@ -27,7 +27,7 @@ sealed partial class Session {
 		if (!AllOrders.Contains(order)) throw Invalid(u, $"'{order}' is not an order.");
 
 		City city = null;
-		JsonObject path = null;
+		JsonObject path = null, battle = null;
 		string message;
 		switch (order) {
 			case "settle":
@@ -44,10 +44,10 @@ sealed partial class Session {
 				message = Explore(u);
 				break;
 			case "attack":
-				message = await Attack(u, TargetArg(a));
+				(message, battle) = await Attack(u, TargetArg(a));
 				break;
 			case "bombard":
-				message = await BombardOrder(u, TargetArg(a));
+				(message, battle) = await BombardOrder(u, TargetArg(a));
 				break;
 			case "auto_work":
 				message = AutoWork(u);
@@ -90,6 +90,7 @@ sealed partial class Session {
 			["unit"] = Alive(u) ? UnitJson(u) : null,
 			["city"] = city != null ? CityJson(city) : null,
 			["path"] = path,
+			["battle"] = battle,
 		};
 	}
 

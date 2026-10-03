@@ -4,7 +4,8 @@
 //   .venv/bin/python playtest/bots.py --seats 2 --humans Rome=you --turns 8 --fast --size Tiny --out /tmp/hv &
 //   NODE_PATH=$(npm root -g) node playtest/play_e2e.mjs /tmp/hv          # waits for /tmp/hv/play.json
 //
-// It plays every turn until the game is over: closes the turn report, picks research in the science advisor (F6),
+// It plays every turn until the game is over, with the plain UI or the client's art (its advisor and city screens,
+// screens.js): closes the turn report, picks research in the science advisor (F6),
 // founds a city with B, opens the city by clicking it on the map and picks what to build, moves units with the arrow
 // keys, sends one exploring (X) and fortifies the rest (F), sets the rates in the domestic advisor (F1), opens the
 // foreign advisor (F4), hovers a tile for its tooltip, and ends the turn with Enter. It then checks what the env saw:
@@ -75,10 +76,13 @@ async function closeDialogs() {
     await sleep(150);
   }
 }
+// A tech to research: the plain advisor lists them (li); the client's (the art on) draws the tree, the techs that can be
+// researched now in their own colour (.cs-tb.possible).
+const TECH = "#dialog li[data-tech], #dialog .cs-tb.possible[data-tech]";
 async function pickResearch() {
-  if ((await dialogKind()) !== "science") { await page.keyboard.press("F6"); await page.waitForSelector("#dialog li[data-tech]"); }
-  const tech = await page.$eval("#dialog li[data-tech]", li => li.dataset.tech);
-  await page.click(`#dialog li[data-tech="${tech}"]`);
+  if ((await dialogKind()) !== "science") { await page.keyboard.press("F6"); await page.waitForSelector(TECH); }
+  const tech = await page.$eval(TECH, li => li.dataset.tech);
+  await page.click(`#dialog [data-tech="${tech}"]`);
   await waitFor(async () => (await view()).state.research?.current, 10_000, "research set");
   log("research:", tech);
   return tech;
@@ -163,6 +167,9 @@ while (turnsPlayed < MAX_TURNS) {
     await sleep(100);
     const [px, py] = await tileCenter(c.x, c.y);
     await page.mouse.click(px, py);
+    // the client's city screen (the art on) opens its production list with the production button
+    await page.waitForSelector("#dialog li[data-item], #dialog [data-prodbtn]", {timeout: 10_000});
+    if (await page.$("#dialog [data-prodbtn]")) await page.click("#dialog [data-prodbtn]");
     await page.waitForSelector("#dialog li[data-item]", {timeout: 10_000});
     await page.screenshot({path: path.join(shots, `T${lastTurn}-city.png`)});
     const items = await page.$$eval("#dialog li[data-item]", ls => ls.map(l => l.dataset.item));
@@ -176,15 +183,16 @@ while (turnsPlayed < MAX_TURNS) {
   if (!rated && turnsPlayed >= 2) {
     await page.keyboard.press("F1");
     await page.waitForSelector("#r-sci");
-    await page.$eval("#r-sci", el => { el.value = 7; el.dispatchEvent(new Event("input")); });
-    await page.click("#setrates");
+    // the plain advisor sets the rates with its button; the client's slider sets them when it is let go (change)
+    await page.$eval("#r-sci", el => { el.value = 7; el.dispatchEvent(new Event("input")); el.dispatchEvent(new Event("change")); });
+    if (await page.$("#setrates")) await page.click("#setrates");
     const ok = await waitFor(async () => (await view()).state.rates?.science === 7, 10_000, "rates").catch(() => false);
     check(ok, `T${lastTurn}: the domestic advisor (F1) sets science to 70%`);
     rated = true;
   }
   if (!foreign && turnsPlayed >= 3) {
     await page.keyboard.press("F4");
-    await page.waitForSelector("#dialog .dlg h2");
+    await page.waitForSelector("#dialog .dlg h2, #dialog .cs-frame");
     await page.screenshot({path: path.join(shots, `T${lastTurn}-foreign.png`)});
     check((await dialogKind()) === "foreign", `T${lastTurn}: F4 opens the foreign advisor`);
     await page.keyboard.press("Escape");

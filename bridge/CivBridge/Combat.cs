@@ -51,7 +51,8 @@ sealed partial class Session {
 		return Math.Min(1, win);
 	}
 
-	async Task<string> Attack(MapUnit u, Tile target) {
+	/// <summary>Attacks; returns the message and the battle fought (as known_map reports it), if there was one.</summary>
+	async Task<(string Message, JsonObject Battle)> Attack(MapUnit u, Tile target) {
 		if (u.unitType.attack <= 0) throw Invalid(u, $"{Label(u)} cannot attack.");
 		if (!u.movementPoints.canMove)
 			throw new BridgeError("no_moves", $"{Label(u)} has no moves left this turn; it can attack next turn.", suggest: "end_turn()");
@@ -67,13 +68,15 @@ sealed partial class Session {
 		Stop(u);
 		string label = Label(u), foe = e.Defender == null ? null : $"the {Owner(e.Owner)} {e.Defender.unitType.name}";
 		double odds = e.Defender == null ? 1 : WinChance(u, e.Defender);
+		int before = battleCount;
 		bool alive = await u.Move(u.location.DirectionTo(target), true);
 		DrainUi();
+		JsonObject battle = BattleOf(u, before);
 		bool killed = e.Defender != null && !gd.mapUnits.Contains(e.Defender);
 		bool razed = e.City != null && !gd.cities.Contains(e.City);
 		string hp = alive ? $"; {label} has {u.hitPointsRemaining}/{u.maxHitPoints} hp" : "";
 		string fell = razed ? $" {e.City.name} fell and was razed (this engine destroys the cities it takes)." : "";
-		if (foe == null) return $"{label} entered {At(target)}.{fell}{hp}.";
+		if (foe == null) return ($"{label} entered {At(target)}.{fell}{hp}.", battle);
 		string outcome = !alive ? $"lost: {label} was destroyed" : killed ? $"won: {foe} was destroyed" : "ended with a retreat";
 		if (SeatOf(e.Owner) is Seat victim) {
 			string theirs = $"{victim.Ids.Of(e.Defender)} {e.Defender.unitType.name}", attacker = $"{Owner(human)} {u.unitType.name}";
@@ -81,7 +84,7 @@ sealed partial class Session {
 				? $"{theirs} was lost at {At(target)} to an attacking {attacker}."
 				: $"{theirs} at {At(target)} held off an attacking {attacker}{(alive ? "" : ", which was destroyed")}.", target);
 		}
-		return $"{label} attacked {foe} at {At(target)} (win chance about {odds:P0}) and {outcome}{hp}.{fell}";
+		return ($"{label} attacked {foe} at {At(target)} (win chance about {odds:P0}) and {outcome}{hp}.{fell}", battle);
 	}
 
 	/// <summary>The tiles in range this unit can bombard: an enemy unit, city or improvement of a civ at war with the human.</summary>
@@ -100,7 +103,8 @@ sealed partial class Session {
 		return owner != null && owner != human && t.HasImprovements ? owner : null;
 	}
 
-	async Task<string> BombardOrder(MapUnit u, Tile target) {
+	/// <summary>Bombards; returns the message and, for a bombardment of a unit, the battle (as known_map reports it).</summary>
+	async Task<(string Message, JsonObject Battle)> BombardOrder(MapUnit u, Tile target) {
 		if (u.unitType.bombard <= 0 || !u.HasBombardAbility()) throw Invalid(u, $"{Label(u)} cannot bombard.");
 		if (!u.movementPoints.canMove)
 			throw new BridgeError("no_moves", $"{Label(u)} has no moves left this turn; it can bombard next turn.", suggest: "end_turn()");
@@ -116,8 +120,10 @@ sealed partial class Session {
 		d = d != MapUnit.NONE ? d : null;
 		City c = target.HasCity() ? target.cityAtTile : null;
 		int hp = d?.hitPointsRemaining ?? 0, size = c?.residents.Count ?? 0, buildings = c?.constructed_buildings.Count ?? 0;
+		int before = battleCount;
 		await u.Bombard(target);
 		DrainUi();
+		JsonObject battle = BattleOf(u, before);
 		var hits = new List<string>();
 		if (d != null) hits.Add(gd.mapUnits.Contains(d) ? $"the {Owner(d.owner)} {d.unitType.name} lost {hp - d.hitPointsRemaining} hp" : $"the {Owner(d.owner)} {d.unitType.name} was destroyed");
 		if (c != null && gd.cities.Contains(c)) {
@@ -126,7 +132,7 @@ sealed partial class Session {
 		}
 		string damage = hits.Count == 0 ? "no damage." : string.Join(", ", hits) + ".";
 		if (hits.Count > 0) Notify(owner, "bombarded", $"{Owner(human)} {u.unitType.name} bombarded {At(target)}: {damage}", target);
-		return $"{Label(u)} bombarded {At(target)}: {damage}";
+		return ($"{Label(u)} bombarded {At(target)}: {damage}", battle);
 	}
 
 	BridgeError NoBombardTarget(MapUnit u, string why) {

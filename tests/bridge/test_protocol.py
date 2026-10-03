@@ -148,7 +148,7 @@ def test_bad_request_lines(launch):
 def test_initial_state(game):
     s = game.call("state")
     assert (s["turn"], s["turn_limit"], s["game_over"], s["defeated"]) == (0, 60, False, False)
-    assert s["civ"] == "Rome" and s["government"] == "Despotism" and s["anarchy_until"] is None
+    assert s["civ"] == "Rome" and s["government"] == "Despotism" and s["anarchy_until"] is None and s["era"] == 0
     assert set(s["rates"]) == {"tax", "science", "luxury"} and sum(s["rates"].values()) == 10
     assert s["research"] == {
         "current": None, "turns_left": None, "beakers": 0, "cost": None, "queue": [], "source": None}
@@ -240,6 +240,9 @@ def test_found_city_production_and_city(game):
     options = {o["name"]: o for o in info["options"]}
     assert options["Warrior"]["kind"] == "unit" and options["Wealth"]["kind"] == "wealth"
     assert info["tiles_worked"] and set(info["tiles_worked"][0]) == {"x", "y", "terrain", "yield"}
+    check_city_screen(info)
+    # The new capital loses nothing to corruption: its shields are its production.
+    assert sum(t[3] for t in info["worked"]) == info["shields_per_turn"] and len(info["worked"]) == 2
     assert game.call("city", city="rome")["id"] == "c1"
     err = game.error("set_production", city="c1", item="Granary")
     assert err["code"] == "unknown_item" and "Pottery" in err["message"]
@@ -251,6 +254,93 @@ def test_found_city_production_and_city(game):
     assert "size 3" in res["message"] and res["city"]["turns_to_complete"] >= res["city"]["turns_to_grow"]
     assert game.error("set_production", city="c7", item="Warrior")["alternatives"] == ["c1"]
     assert game.error("city", city="c2")["code"] == "unknown_city"
+
+
+def check_city_screen(info: dict) -> None:
+    """The city command's worked and workable tiles: the centre first, then the citizens' tiles with the engine's
+    yields, which add up to the city's food and production."""
+    worked, workable = info["worked"], {tuple(t) for t in info["workable"]}
+    assert all(len(t) == 5 and all(isinstance(v, int) for v in t) for t in worked)
+    assert worked[0][:2] == [info["x"], info["y"]] and len(worked) <= info["size"] + 1
+    assert worked[1:] == [[t["x"], t["y"], t["yield"]["food"], t["yield"]["shields"], t["yield"]["commerce"]]
+                          for t in info["tiles_worked"]]
+    assert len({(t[0], t[1]) for t in worked}) == len(worked)
+    assert all((t[0], t[1]) in workable for t in worked[1:]) and (info["x"], info["y"]) not in workable
+    assert all(len(t) == 2 for t in info["workable"]) and len(workable) == len(info["workable"]) >= len(worked) - 1
+    # City.CurrentFoodYield and CurrentProductionYield sum these; a citizen eats two food, and corruption or disorder
+    # only take shields away.
+    assert sum(t[2] for t in worked) - 2 * info["size"] == info["food_per_turn"]
+    assert sum(t[3] for t in worked) >= info["shields_per_turn"]
+    check_city_figures(info)
+    # The rest of the city screen. Shields: its tiles' production, split into useful and corrupt (specialists add none).
+    assert info["shields"]["total"] == sum(t[3] for t in worked)
+    # Commerce: its tiles' commerce, plus what each specialist adds, plus Wealth's.
+    specialists = info["specialists"]
+    assert info["commerce"]["total"] == sum(t[4] for t in worked) + info["commerce"]["wealth"] + sum(
+        s["count"] * (s["taxes"] + s["research"] + s["luxuries"]) for s in specialists)
+    # Culture: City.GetCulturePerTurn, GetCulture and the next border level's 10^n, as "Total: x/y".
+    culture = info["culture"]
+    assert set(culture) == {"per_turn", "total", "next_border"} and culture["per_turn"] >= 0 and culture["total"] >= 0
+    assert culture["next_border"] == 10 ** len(str(max(1, culture["total"]))) > culture["total"]
+    if "Palace" in info["buildings"]:
+        assert culture["per_turn"] > 0
+    # Resources: name, icon (resources.png index) and count, strategic and luxury apart.
+    for kind in ("strategic", "luxuries"):
+        assert all(set(r) == {"name", "icon", "count"} and r["icon"] >= 0 and r["count"] >= 1 for r in info[kind])
+    assert not {r["name"] for r in info["strategic"]} & {r["name"] for r in info["luxuries"]}
+    # Citizens, one per resident in the client's order: laborers happy, content, unhappy, then the specialists.
+    citizens = info["citizens"]
+    assert len(citizens) == info["size"]
+    order = {"happy": 0, "content": 1, "unhappy": 2, None: 3}
+    assert [order[c["mood"]] for c in citizens] == sorted(order[c["mood"]] for c in citizens)
+    laborers = [c for c in citizens if c["works"] == "tile"]
+    assert all(c["mood"] is not None and "specialist" not in c for c in laborers)
+    assert sorted(tuple(c["tile"]) for c in laborers) == sorted((t["x"], t["y"]) for t in info["tiles_worked"])
+    workers = [c for c in citizens if c["works"] == "specialist"]
+    assert all(c["mood"] is None and c["specialist"] for c in workers)
+    assert [s["type"] for s in specialists] == list(dict.fromkeys(c["specialist"] for c in workers))
+    assert all(s["index"] >= 1 and s["count"] >= 1 for s in specialists)
+    assert sum(s["count"] for s in specialists) == len(workers) == len(citizens) - len(laborers)
+    # The happy/content/unhappy counts are the engine's over every resident (a specialist keeps a mood it no longer
+    # updates); the laborers' moods are within them.
+    for mood in ("happy", "content", "unhappy"):
+        assert sum(c["mood"] == mood for c in laborers) <= info[mood]
+    assert info["happy"] + info["content"] + info["unhappy"] == info["size"]
+
+
+def check_city_figures(c: dict) -> None:
+    """The domestic advisor's per-city figures, in state's cities and the city command alike."""
+    commerce, shields = c["commerce"], c["shields"]
+    assert set(commerce) == {"total", "taxes", "science", "luxury", "corrupt", "wealth"}
+    assert commerce["total"] == sum(v for k, v in commerce.items() if k != "total")
+    assert all(v >= 0 for v in commerce.values())
+    assert set(shields) == {"total", "useful", "corrupt"} and shields["total"] == shields["useful"] + shields["corrupt"]
+    assert shields["useful"] == c["shields_per_turn"] and shields["corrupt"] >= 0
+    if c["disorder"]:
+        assert shields["useful"] == 0
+    assert c["food_eaten"] == 2 * c["size"] and c["maintenance"] >= 0
+
+
+def check_finance(s: dict) -> None:
+    """state.finance is Player.AggregateFlows as the domestic advisor shows it: the parts add up, the net is
+    gold_per_turn, and the cities' figures add up to its city lines."""
+    f = s["finance"]
+    income, expenses = f["income"], f["expenses"]
+    assert set(income) == {"cities", "taxmen", "other_civs", "interest", "total"}
+    assert set(expenses) == {"science", "entertainment", "corruption", "maintenance", "unit_costs", "other_civs",
+                             "total"}
+    assert income["total"] == sum(v for k, v in income.items() if k != "total")
+    assert expenses["total"] == sum(v for k, v in expenses.items() if k != "total")
+    assert income["total"] - expenses["total"] == s["gold_per_turn"]
+    cities = s["cities"]
+    for c in cities:
+        check_city_figures(c)
+    total = {k: sum(c["commerce"][k] for c in cities) for k in ("total", "science", "luxury", "corrupt")}
+    # The cities' commerce is the advisor's "From cities" plus "From taxmen" (it moves the tax collectors' share).
+    assert total["total"] == income["cities"] + income["taxmen"]
+    assert (total["science"], total["luxury"], total["corrupt"]) == (
+        expenses["science"], expenses["entertainment"], expenses["corruption"])
+    assert sum(c["maintenance"] for c in cities) == expenses["maintenance"]
 
 
 def test_techs_and_research(game):
@@ -553,6 +643,53 @@ def test_attack_an_adjacent_enemy_with_its_win_chance(launch):
     assert f"{unit['id']} {unit['type']} attacked" in res["message"] or "entered" in res["message"]
     assert (res["unit"] is None) == ("was destroyed" in res["message"] and "lost" in res["message"])
 
+    # The battle, as known_map has it: this unit against the target, and the unit lives on unless it lost.
+    battle, km = res["battle"], b.call("known_map")
+    if target["defender"] is None:
+        assert battle is None
+        return
+    me_index = next(p["index"] for p in km["players"] if p["me"])
+    check_battle(battle, me_index, km)
+    assert battle in km["battles"] and battle["turn"] == km["turn"] and battle["kind"] == "attack"
+    a, d = battle["attacker"], battle["defender"]
+    assert (a["id"], a["type"], a["x"], a["y"], a["owner"]) == (unit["id"], unit["type"], me["x"], me["y"], me_index)
+    assert (d["x"], d["y"], d["id"]) == (target["x"], target["y"], None)
+    assert target["defender"] == f"{d['type']} {d['hp_before']}/{d['hp_max']} hp"
+    assert (res["unit"] is None) == (battle["winner"] == "defender")
+    assert res["unit"] is None or res["unit"]["hp"] >= a["hp_after"]  # a winner may be promoted, one hp more
+    assert battle["city"] == (None if target["city"] is None else {"x": d["x"], "y": d["y"], "name": target["city"]})
+    assert battle["razed"] == ("fell and was razed" in res["message"])
+
+
+def test_battles_the_seat_saw_this_turn_and_the_last(launch):
+    """The engine AI plays every civ; barbarians and AIs attack. Each battle the seat saw shows for two turns, the same
+    record each time, then goes."""
+    b = launch()
+    b.call("new_game", seed=SEED, turn_limit=400, barbarians="Raging")
+    records, gone = {}, set()
+    for _ in range(40):
+        b.call("autoplay", turns=1, policy="engine_ai")
+        km = b.call("known_map")
+        check_known_map(km, b.call("world"), b.call("state"))
+        now = {x["id"]: x for x in km["battles"]}
+        assert all(records.get(i, x) == x for i, x in now.items()), "a battle's record never changes"
+        assert not gone & set(now), "a battle that went does not come back"
+        gone |= {i for i, x in records.items() if x["turn"] < km["turn"] - 1}
+        assert not gone & set(now)
+        records.update(now)
+        if len(records) >= 3 and gone:
+            break
+    else:
+        pytest.fail(f"only {len(records)} battles in sight by T{km['turn']}")
+    me = next(p["index"] for p in km["players"] if p["me"])
+    # Ids grow with each battle; the seat fights in most, and sees the rest from its tiles.
+    assert sorted(records) == list(records)
+    assert any(me in (x["attacker"]["owner"], x["defender"]["owner"]) for x in records.values())
+    for x in records.values():
+        if me not in (x["attacker"]["owner"], x["defender"]["owner"]):
+            known = {(t[0], t[1]) for t in km["tiles"]}
+            assert {(x[side]["x"], x[side]["y"]) for side in ("attacker", "defender")} & known
+
 
 def test_saves_keeps_every_turn_as_a_loadable_save(launch, tmp_path):
     b = launch("--saves", str(tmp_path / "saves"))
@@ -665,7 +802,7 @@ def client_colors(world: dict) -> list[str]:
 def check_known_map(km: dict, world: dict, state: dict, k: int = 0) -> None:
     """known_map for seats[k] against the world snapshot (which sees through the fog) and the seat's own state."""
     me = world["seats"][k]["index"]
-    assert list(km) == ["turn", "width", "height", "wrap_x", "players", "tiles", "cities", "units"]
+    assert list(km) == ["turn", "width", "height", "wrap_x", "players", "tiles", "cities", "units", "battles"]
     assert (km["turn"], km["width"], km["height"], km["wrap_x"]) == (
         world["turn"], world["map"]["width"], world["map"]["height"], world["map"]["wrap_x"])
     assert km["players"] == [{"index": p["index"], "civ": p["civ"], "barbarian": p["civ"] == "Barbarians",
@@ -737,6 +874,53 @@ def check_known_map(km: dict, world: dict, state: dict, k: int = 0) -> None:
     assert {(u["x"], u["y"], u["owner"], u["type"]): u["count"] for u in foreign} == groups
     assert len(foreign) == len(groups)
 
+    # Battles this turn and the last, oldest first, each one the seat fought or had in sight.
+    for x in km["battles"]:
+        check_battle(x, me, km)
+    assert [x["id"] for x in km["battles"]] == sorted({x["id"] for x in km["battles"]})
+
+
+def neighbours(km: dict, a: dict, b: dict) -> bool:
+    dx, dy = b["x"] - a["x"], b["y"] - a["y"]
+    if km["wrap_x"]:
+        dx = (dx + km["width"] // 2) % km["width"] - km["width"] // 2
+    return (dx, dy) in {(1, -1), (2, 0), (1, 1), (0, 2), (-1, 1), (-2, 0), (-1, -1), (0, -2)}
+
+
+def check_battle(x: dict, me: int, km: dict) -> None:
+    """A known_map battle (docs/protocol.md) against itself: the hit points each side lost are the rounds the other
+    won, the winner is the side left standing, and only the seat's own units carry ids."""
+    assert list(x) == ["id", "turn", "kind", "attacker", "defender", "rounds", "winner", "city", "razed"]
+    assert isinstance(x["id"], int) and x["id"] > 0 and x["turn"] in (km["turn"] - 1, km["turn"])
+    assert x["kind"] in ("attack", "bombard") and x["rounds"] and set(x["rounds"]) <= {"a", "d"}
+    a, d = x["attacker"], x["defender"]
+    for side in (a, d):
+        assert list(side) == ["owner", "type", "x", "y", "id", "hp_before", "hp_after", "hp_max"]
+        assert 0 <= side["owner"] < len(km["players"]) and isinstance(side["type"], str) and side["type"]
+        assert 0 <= side["hp_after"] <= side["hp_before"] <= side["hp_max"]
+        if side["owner"] != me:
+            assert side["id"] is None
+        else:  # only a unit killed before the seat ever saw it has none
+            assert isinstance(side["id"], str) and side["id"].startswith("u") or side["hp_after"] == 0
+    assert a["owner"] != d["owner"]
+    rounds = x["rounds"]
+    if x["kind"] == "attack":
+        assert neighbours(km, a, d)
+        lost_a, lost_d = rounds.count("d"), rounds.count("a")
+        if x["winner"] == "retreat":  # the last round's loser withdrew instead of losing its last hit point
+            lost_a, lost_d = (lost_a - 1, lost_d) if rounds[-1] == "d" else (lost_a, lost_d - 1)
+        assert (a["hp_before"] - a["hp_after"], d["hp_before"] - d["hp_after"]) == (lost_a, lost_d)
+        alive = (a["hp_after"] > 0, d["hp_after"] > 0)
+        assert alive == {"attacker": (True, False), "defender": (False, True), "retreat": (True, True)}[x["winner"]]
+        if x["winner"] != "retreat":
+            assert rounds[-1] == x["winner"][0]
+    else:  # each round is a shot: "a" a hit, "d" a miss
+        assert a["hp_after"] == a["hp_before"] and d["hp_before"] - d["hp_after"] == rounds.count("a")
+        assert x["winner"] == ("attacker" if d["hp_after"] == 0 else "defender")
+    if x["city"] is not None:
+        assert set(x["city"]) == {"x", "y", "name"} and (x["city"]["x"], x["city"]["y"]) == (d["x"], d["y"])
+    assert not x["razed"] or (x["winner"] == "attacker" and x["city"] is not None and x["kind"] == "attack")
+
 
 def test_known_map_draws_what_the_seat_knows(launch):
     b = launch()
@@ -789,9 +973,14 @@ def test_known_map_draws_what_the_seat_knows(launch):
     after = b.call("known_map")
     check_known_map(after, b.call("world"), b.call("state"))
     assert next(u for u in after["units"] if u.get("id") == unit_id)["fortified"] is True
-    # Still in the Ancient era while an Ancient tech is left to learn.
+    # Still in the Ancient era while an Ancient tech is left to learn; the state's era is the cities'.
+    era = b.call("state")["era"]
+    assert era in (0, 1, 2, 3) and all(c["era"] == era for c in km["cities"] if c["owner"] == me)
     if any(t["era"] == "Ancient Times" for t in b.call("techs")["available"]):
-        assert all(c["era"] == 0 for c in km["cities"] if c["owner"] == me)
+        assert era == 0
+    # Every city screen's tiles, with a few citizens by now.
+    for c in b.call("state")["cities"]:
+        check_city_screen(b.call("city", city=c["id"]))
 
     camps = [(t[0], t[1]) for t in km["tiles"] if "barbarian_camp" in t[8]]
     assert camps, "a barbarian camp should be known by now"
@@ -799,6 +988,51 @@ def test_known_map_draws_what_the_seat_knows(launch):
         [tile] = b.call("map", x=x, y=y, radius=0)["tiles"]
         assert "barbarian_camp" in tile["improvements"]
         assert tile["city_site"] == {"ok": False, "reason": "a barbarian camp is here"}
+
+
+def test_domestic_advisor_and_city_screen(launch):
+    b = launch()
+    b.call("new_game", seed=SEED, turn_limit=400)
+    s = b.call("state")
+    assert s["finance"] == {
+        "income": {"cities": 0, "taxmen": 0, "other_civs": 0, "interest": 0, "total": 0},
+        "expenses": {"science": 0, "entertainment": 0, "corruption": 0, "maintenance": 0, "unit_costs": 0,
+                     "other_civs": 0, "total": 0}}
+    found_capital(b)
+    check_finance(b.call("state"))
+    info = b.call("city", city="c1")
+    check_city_screen(info)
+    # A new capital: the Palace's culture, none gathered yet, the first border at 10.
+    assert info["culture"]["total"] == 0 and info["culture"]["per_turn"] > 0 and info["culture"]["next_border"] == 10
+    per_turn = info["culture"]["per_turn"]
+    b.call("end_turn", skip_idle=True)
+    assert b.call("city", city="c1")["culture"]["total"] == per_turn
+
+    s = until(b, lambda s: len(s["cities"]) >= 4 and s["finance"]["expenses"]["maintenance"] > 0, 300)
+    me = next(p["index"] for p in b.call("known_map")["players"] if p["me"])
+    for rates in ({"science": 4, "luxury": 2}, {"science": s["rates"]["science"], "luxury": s["rates"]["luxury"]}):
+        b.call("set_rates", **rates)
+        s = b.call("state")
+        check_finance(s)
+        if rates["luxury"] == 2:  # 40% tax, 40% science, 20% luxury: every part of the cities' commerce shows
+            assert all(s["finance"]["expenses"][k] > 0 for k in ("science", "entertainment", "maintenance"))
+            assert sum(c["commerce"]["taxes"] for c in s["cities"]) > 0
+        km = b.call("known_map")
+        owned: dict[str, int] = {}
+        for t in km["tiles"]:
+            if t[5] == me and t[7]:
+                owned[t[7]] = owned.get(t[7], 0) + 1
+        for c in s["cities"]:
+            info = b.call("city", city=c["id"])
+            check_city_screen(info)
+            for key in ("commerce", "shields", "food_eaten", "maintenance"):
+                assert info[key] == c[key]
+            # A city has the resources on the civ's tiles its road network reaches (TradeNetwork), the city's own
+            # tile among them: never more than the civ's tiles with that resource.
+            for r in info["strategic"] + info["luxuries"]:
+                assert r["count"] <= owned.get(r["name"], 0), (c["name"], r)
+    # Rome has gathered culture from its Palace since its founding.
+    assert b.call("city", city="c1")["culture"]["total"] > 0
 
 
 def test_watchdog_answers_timeout_and_exits(launch):
@@ -978,6 +1212,47 @@ def test_seats_meet_declare_war_and_make_peace(launch):
     assert ("peace_signed", "Rome and Greece made peace.") in kinds(events["Egypt"])
     assert not any(c["at_war"] for c in b.call("diplomacy", seat="Rome")["civs"])
     assert not any(p["at_war"] for p in b.call("world")["players"])
+
+
+def test_battles_reach_the_seats_that_saw_them(launch, tmp_path):
+    """A barbarian attacks a seat's unit during the barbarians' turn: that seat sees the battle, a seat far away does
+    not, and a restored game still has it."""
+    b = launch("--autosave", str(tmp_path / "a"))
+    b.call("new_game", seed=SEED, opponents=2, seats=["Greece", "Egypt"], turn_limit=80, barbarians="Raging")
+    for civ in SEATS:
+        b.call("unit_order", seat=civ, unit="u1", order="found_city")
+        b.call("set_production", seat=civ, city="c1", item="Warrior")
+        b.call("unit_order", seat=civ, unit="u2", order="explore")
+    for _ in range(40):
+        end_round(b)
+        maps = {civ: b.call("known_map", seat=civ) for civ in SEATS}
+        if any(km["battles"] for km in maps.values()):
+            break
+    else:
+        pytest.fail("no battle by T40")
+    world = b.call("world")
+    index = {p["civ"]: p["index"] for p in world["players"]}
+    barbarians = next(p["index"] for p in world["players"] if p["civ"] == "Barbarians")
+    battles = {}
+    for k, civ in enumerate(SEATS):
+        check_known_map(maps[civ], world, b.call("state", seat=civ), k)
+        for x in maps[civ]["battles"]:
+            assert battles.setdefault(x["id"], x)["rounds"] == x["rounds"]
+    assert any(x["attacker"]["owner"] == barbarians for x in battles.values())
+    for i, x in battles.items():
+        owners = {x["attacker"]["owner"], x["defender"]["owner"]}
+        has = {civ for civ in SEATS if any(y["id"] == i for y in maps[civ]["battles"])}
+        assert {civ for civ in SEATS if index[civ] in owners} <= has
+        assert has != set(SEATS), "the seats far away did not see it"
+        for civ in has:
+            mine = next(y for y in maps[civ]["battles"] if y["id"] == i)
+            for side in ("attacker", "defender"):
+                assert {k_: v for k_, v in mine[side].items() if k_ != "id"} == {
+                    k_: v for k_, v in x[side].items() if k_ != "id"}
+    restored = launch()
+    restored.call("load", path=str(tmp_path / "a" / "autosave.json"))
+    for civ in SEATS:
+        assert restored.call("known_map", seat=civ)["battles"] == maps[civ]["battles"]
 
 
 def test_a_seat_game_restores_every_seat(launch, tmp_path):

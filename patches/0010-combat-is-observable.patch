@@ -1,0 +1,97 @@
+Combat is observable: MapUnit.combatObserver (an ICombatObserver, CombatResult.cs) is told when a battle's rounds begin (MapUnit.Fight after any defensive bombard, and MapUnit.BombardUnits), who won each round or bombard shot as the engine draws it, and when the rounds are over (hit points spent, before the loser is removed or the winner promoted). The engine sends no animation messages while animations are off, so without this a headless UI cannot replay a battle round by round. The observer is called synchronously and changes nothing: no state, no draw from GameData.rng, so outcomes are as before.
+
+--- a/C7Engine/C7GameData/CombatResult.cs
++++ b/C7Engine/C7GameData/CombatResult.cs
+@@ -7,6 +7,22 @@
+ 		Impossible
+ 	}
+ 
++	/// <summary>
++	/// Follows battles as the engine fights them, round by round, for a UI with no animation messages to follow (the
++	/// engine sends none while animations are off) or a battle log. Calls are synchronous and nested only when a
++	/// retreat leads into another battle. An observer must not change game state or draw from GameData.rng.
++	/// </summary>
++	public interface ICombatObserver {
++		/// <summary>The rounds begin: an attack (MapUnit.Fight, after any defensive bombard) or a bombardment of a unit.</summary>
++		void CombatStarted(MapUnit attacker, MapUnit defender, bool bombard);
++
++		/// <summary>One round, or one bombard shot, and whether the attacker won it.</summary>
++		void CombatRound(MapUnit attacker, MapUnit defender, bool attackerWon);
++
++		/// <summary>The rounds are over and the hit points spent; the loser is not yet removed, nor the winner promoted.</summary>
++		void CombatEnded(MapUnit attacker, MapUnit defender);
++	}
++
+ 	public static class CombatResultExtensions {
+ 		public static bool AttackerWon(this CombatResult cR) {
+ 			return (cR == CombatResult.DefenderKilled) || (cR == CombatResult.DefenderRetreated);
+--- a/C7Engine/C7GameData/MapUnit_Actions.cs
++++ b/C7Engine/C7GameData/MapUnit_Actions.cs
+@@ -283,6 +283,9 @@
+ 		return true;
+ 	}
+ 
++	/// <summary>Told of every battle as it is fought; null for none.</summary>
++	public static ICombatObserver combatObserver;
++
+ 	public async Task<CombatResult> Fight(MapUnit defender) {
+ 		var attacker = this;
+ 
+@@ -342,12 +345,14 @@
+ 		}
+ 
+ 		bool defenderEligibleToRetreat = defender.hitPointsRemaining > 1 && ! defender.location.HasCity();
++		combatObserver?.CombatStarted(attacker, defender, false);
+ 
+ 		// Do combat rounds
+ 		while (true) {
+ 			defender.animate(MapUnit.AnimatedAction.ATTACK1);
+ 			await attacker.animateAsync(MapUnit.AnimatedAction.ATTACK1);
+ 			if (GameData.rng.NextDouble() < attackerOdds) {
++				combatObserver?.CombatRound(attacker, defender, true);
+ 				if (defenderEligibleToRetreat &&
+ 					defender.hitPointsRemaining == 1 &&
+ 					GameData.rng.NextDouble() < defender.RetreatChance(attacker, false)) {
+@@ -366,6 +371,7 @@
+ 					break;
+ 				}
+ 			} else {
++				combatObserver?.CombatRound(attacker, defender, false);
+ 				if (attacker.hitPointsRemaining == 1 &&
+ 					GameData.rng.NextDouble() < attacker.RetreatChance(defender, true)) {
+ 					result = CombatResult.AttackerRetreated;
+@@ -379,6 +385,8 @@
+ 			}
+ 		}
+ 
++		combatObserver?.CombatEnded(attacker, defender);
++
+ 		if ((result == CombatResult.AttackerKilled) || (result == CombatResult.DefenderKilled)) {
+ 			var (dead, alive) = (result == CombatResult.AttackerKilled) ? (attacker, defender) : (defender, attacker);
+ 			alive.RollToPromote(dead);
+--- a/C7Engine/C7GameData/MapUnit_Bombard.cs
++++ b/C7Engine/C7GameData/MapUnit_Bombard.cs
+@@ -160,6 +160,7 @@
+ 
+ 			var tries = 0;
+ 			var hitCount = 0;
++			combatObserver?.CombatStarted(this, target, true);
+ 
+ 			while (tries < unitType.rateOfFire) {
+ 				tries++;
+@@ -169,6 +170,7 @@
+ 					break;
+ 
+ 				var r = GameData.rng.NextDouble();
++				combatObserver?.CombatRound(this, target, r < attackerOdds);
+ 				if (r < attackerOdds) {
+ 					hitCount++;
+ 				}
+@@ -182,6 +184,7 @@
+ 
+ 			} else
+ 				await tile.AnimateAsync(tile.IsWater() ? AnimatedEffect.WaterMiss : AnimatedEffect.Miss);
++			combatObserver?.CombatEnded(this, target);
+ 
+ 			if (target.hitPointsRemaining <= 0) {
+ 				RollToPromote(target);

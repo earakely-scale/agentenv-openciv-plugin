@@ -30,7 +30,8 @@ class Art {
   async _fonts() {
     for (const f of this.m.fonts || []) {
       try {
-        const face = new FontFace("C7 Noto Sans", `url(${this.url("fonts/" + f)})`, {weight: f.includes("Bold") ? "700" : "400"});
+        const face = new FontFace("C7 Noto Sans", `url(${this.url("fonts/" + f)})`,
+          {weight: f.includes("Bold") ? "700" : "400", style: f.includes("Italic") ? "italic" : "normal"});
         document.fonts.add(await face.load());
         this.font = "'C7 Noto Sans', system-ui, sans-serif";
       } catch (e) { /* the system font will do */ }
@@ -151,7 +152,8 @@ class ArtPainter {
   draw(ctx, world, cam, w, h, o = {}) {
     const z = cam.hw / 64, dpr = window.devicePixelRatio || 1, scale = z < 0.5 ? 0.5 : 1;
     this.zs = z;
-    const key = [world.version, cam.cx.toFixed(4), cam.cy.toFixed(4), cam.hw.toFixed(3), w, h, dpr, o.cityRadius?.id ?? ""].join();
+    const key = [world.version, cam.cx.toFixed(4), cam.cy.toFixed(4), cam.hw.toFixed(3), w, h, dpr, o.cityRadius?.id ?? "",
+      o.cityScreen ? `${o.cityScreen.id}:${JSON.stringify(o.cityScreen.worked || [])}` : ""].join();
     if (key !== this.cacheKey || !this.cache) {
       if (!this.cache) this.cache = document.createElement("canvas");
       // map pixels per screen pixel: 1/z; the offscreen map covers the screen plus a margin for the fractional origin
@@ -263,6 +265,8 @@ class ArtPainter {
     // cities: the sprite by size and era, the label below
     const labels = [];
     for (const p of known) { const c = world.city(p.x, p.y); if (c) labels.push(this._city(g, world, c, p, z)); }
+    // the city screen's tile assignment, while it is open (screens.js)
+    if (o.cityScreen) this._cityScreen(g, world, o.cityScreen);
     // fog of war, at each tile's north corner, over every position in view (unknown land goes black)
     const st = t => !t ? 0 : t.visible ? 2 : 1;
     for (const p of all) {
@@ -413,6 +417,38 @@ class ArtPainter {
     g.stroke();
   }
 
+  // The city screen's tile assignment (TileAssignmentLayer.cs), over the cities and under the fog: a white 2 px
+  // outline round the tiles the city can work (city `workable`) and its centre, and on the centre and every worked
+  // tile (city `worked`: x, y, food, shields, commerce) its yield as the city screen's icons, food then shields then
+  // commerce, side by side, centred on the tile, their top 15 px above its centre. Without `workable` (an older
+  // bridge) the outline is the city's radius.
+  _cityScreen(g, world, c) {
+    const {ox, oy, MW} = this.origin, W = world.W;
+    let vx = c.x;   // the copy of the city nearest the camera's centre, round the wrap
+    if (world.wrap) { const mid = (MW / 2 - ox) / 64; vx += Math.round((mid - vx) / W) * W; }
+    const near = x => world.wrap ? vx + ((((x - c.x) % W) + W + W / 2) % W - W / 2) : x;
+    if (!c.workable) this._cityRadius(g, world, c);
+    else {
+      const set = new Set([[c.x, c.y], ...c.workable].map(([x, y]) => world.key(x, y)));
+      g.strokeStyle = "#fff"; g.lineWidth = 2; g.beginPath();
+      for (const [x, y] of [[c.x, c.y], ...c.workable]) {
+        const sx = ox + 64 * near(x), sy = oy + 32 * y;
+        for (const [dx, dy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]])
+          if (!set.has(world.key(x + dx, y + dy))) { g.moveTo(sx + 64 * dx, sy); g.lineTo(sx, sy + 32 * dy); }
+      }
+      g.stroke();
+    }
+    const im = this.art.img("yield_icons");
+    if (!im) return;
+    const ICONS = [[195, 1, 21, 30], [133, 1, 16, 30], [67, 1, 21, 30]];   // food, shield, commerce
+    for (const [x, y, ...yields] of c.worked || []) {
+      const strip = yields.flatMap((n, i) => Array(Math.max(0, n | 0)).fill(ICONS[i]));
+      let px = ox + 64 * near(x) - strip.reduce((s, r) => s + r[2], 0) / 2;
+      const py = oy + 32 * y - 15;
+      for (const [sx, sy, sw, sh] of strip) { g.drawImage(im, sx, sy, sw, sh, Math.round(px), py, sw, sh); px += sw; }
+    }
+  }
+
   // ---- units: drawn every frame over the cached picture (they move and the cursor turns) ----
   // One unit per tile, as the client shows it (UnitLayer.selectUnitToDisplay): the selected one, else the seat's own
   // (a fighting one first), else the first. Under it its HP bar, movement light and stack marks, and the selection
@@ -424,7 +460,9 @@ class ArtPainter {
     this._track(world, mine, now);
     ctx.save();
     ctx.imageSmoothingEnabled = z < 0.999;
+    const fight = this._battleNow(now), busy = fight ? new Set([fight.a, fight.d].map(s => world.key(s.x, s.y))) : null;
     const tiles = this.plain._onScreen(world, cam, w, h).filter(([t]) => t.visible && world.unitsAt(t.x, t.y).length)
+      .filter(([t]) => !busy || !busy.has(world.key(t.x, t.y)))
       .sort((a, b) => a[0].y - b[0].y || a[2] - b[2]);
     for (const [t, sx, sy] of tiles) {
       const us = world.unitsAt(t.x, t.y), own = us.filter(u => u.owner === world.me);
@@ -476,7 +514,75 @@ class ArtPainter {
         ctx.drawImage(cell, cx - ax * z, cy - ay * z, cell.width * z, cell.height * z);
       } else this.plain.unitMarker(ctx, world, top, count, cx, cy - 10 * z, cam.hw, false);
     }
+    if (fight) this._drawBattle(ctx, world, cam, w, h, fight, z, hz);
     ctx.restore();
+  }
+
+  // ---- battles: as the client plays them (MapUnit_Actions.cs): both sides play their attack each round, facing each
+  // other, the round's loser losing a hit point; then the loser plays its death. One at a time, in order. ----
+  queueBattles(list) {
+    if (!this.battles) { this.battles = []; this.played = new Set(); }
+    for (const b of list || []) if (!this.played.has(b.id)) { this.played.add(b.id); this.battles.push(b); }
+  }
+  get battling() { return !!(this.battles && this.battles.length); }
+  _battleNow(now) {
+    if (!this.battles || !this.battles.length) return null;
+    let f = this.fight;
+    if (!f || f.b !== this.battles[0]) {
+      const b = this.battles[0];
+      const ua = this.art.unit(b.attacker.type, () => draw()), ud = this.art.unit(b.defender.type, () => draw());
+      if ((!ua && this.art.m.units[b.attacker.type]) || (!ud && this.art.m.units[b.defender.type])) return null;   // loading
+      const roundMs = Math.max(...[ua, ud].map(u => u ? u.spec.actions.attack1.frames * u.spec.actions.attack1.ms : 600), 400);
+      const rounds = (b.rounds || []).slice(-8);   // a long fight shows its last eight rounds
+      const loser = b.winner === "attacker" ? "d" : b.winner === "defender" ? "a" : null;
+      const deathMs = loser ? (() => { const u = loser === "a" ? ua : ud; return u ? u.spec.actions.death.frames * u.spec.actions.death.ms : 700; })() : 0;
+      f = this.fight = {b, t0: now, a: b.attacker, d: b.defender, ua, ud, rounds, roundMs, loser, deathMs,
+        total: rounds.length * roundMs + deathMs + 350};
+      this.onBattle && this.onBattle(b);
+    }
+    if (now - f.t0 > f.total) { this.battles.shift(); this.fight = null; return this._battleNow(now); }
+    return f;
+  }
+  _drawBattle(ctx, world, cam, w, h, f, z, hz) {
+    const now = performance.now(), t = now - f.t0, W = world.wrap ? world.W : 0;
+    const round = Math.min(f.rounds.length, Math.floor(t / f.roundMs)), dying = t >= f.rounds.length * f.roundMs;
+    // hit points so far: each round's loser loses one, from hp_before toward hp_after
+    const hp = side => {
+      const u = side === "a" ? f.a : f.d, lost = f.rounds.slice(0, round).filter(r => r !== side).length;
+      return Math.max(u.hp_after ?? 0, (u.hp_before ?? u.hp_max ?? 3) - lost);
+    };
+    let dx = f.d.x - f.a.x;
+    if (W) dx = ((dx % W) + W + W / 2) % W - W / 2;
+    const dy = f.d.y - f.a.y;
+    const toward = (ddx, ddy) => !ddy ? (ddx > 0 ? "E" : "W") : !ddx ? (ddy > 0 ? "S" : "N") : (ddy < 0 ? "N" : "S") + (ddx > 0 ? "E" : "W");
+    for (const side of ["a", "d"]) {
+      const u = side === "a" ? f.a : f.d, art = side === "a" ? f.ua : f.ud;
+      const [sx, sy] = cam.screen(u.x, u.y, w, h, W);
+      const facing = side === "a" ? toward(dx, dy) : toward(-dx, -dy);
+      let action = "attack1", frame = 0, alpha = 1;
+      if (dying) {
+        if (f.loser === side) {
+          const p = (t - f.rounds.length * f.roundMs) / f.deathMs;
+          action = "death"; frame = Math.floor(Math.min(0.999, p) * (art?.spec.actions.death.frames || 1));
+          if (p > 1) alpha = Math.max(0, 1 - (p - 1) * 3);
+          if (!art || !art.spec.actions.death || art.spec.actions.death === art.spec.actions.default) alpha = Math.max(0, 1 - p);
+        } else action = "default";
+      } else if (art) frame = Math.floor(((t % f.roundMs) / f.roundMs) * art.spec.actions.attack1.frames);
+      // the HP bar, as on the map
+      const max = u.hp_max || 3, cur = hp(side), s = hz * z, seg = (max <= 6 ? 4 : max <= 12 ? 2 : 1) * s;
+      const total = seg * max + (max - 1) * s, bx = sx - 26 * z, by = sy - 8 * z - total;
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = "#000"; ctx.fillRect(bx, by, 2 * s, total);
+      const fr = cur / max;
+      ctx.fillStyle = fr >= 0.67 ? "#0f0" : fr >= 0.34 && max > 2 ? "#ff0" : "#f00";
+      for (let i = 0; i < cur; i++) ctx.fillRect(bx, by + total - seg - (seg + s) * i, 2 * s, seg);
+      if (art) {
+        const cell = this.art.unitCell(art, action, facing, frame, rgb(world.color(u.owner)));
+        const [ax, ay] = art.spec.anchor;
+        ctx.drawImage(cell, sx - ax * z, sy - ay * z, cell.width * z, cell.height * z);
+      } else this.plain.unitMarker(ctx, world, {owner: u.owner, type: u.type}, 1, sx, sy - 10 * z, cam.hw, false);
+      ctx.globalAlpha = 1;
+    }
   }
   // Notice the seat's units that moved since the last view: they face the way they went and slide there.
   _track(world, mine, now) {

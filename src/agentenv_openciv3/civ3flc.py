@@ -197,8 +197,9 @@ def save_small(im, path: Path) -> None:
 
 
 # What the play page shows: an idle unit holds its last DEFAULT frame (its last FORTIFY frame when fortified), as
-# OpenCiv3 draws it; RUN plays once as it moves. (INI key, last frame only)
-ACTIONS = (("DEFAULT", True), ("FORTIFY", True), ("RUN", False))
+# OpenCiv3 draws it; RUN plays once as it moves; in a battle both sides play ATTACK1 each round and the loser DEATH
+# (MapUnit_Actions.cs). (INI key, last frame only)
+ACTIONS = (("DEFAULT", True), ("FORTIFY", True), ("RUN", False), ("ATTACK1", False), ("DEATH", False))
 
 
 def convert_unit(folder: Path, out: Path, slug: str, actions=ACTIONS) -> dict:
@@ -241,6 +242,7 @@ def convert_unit(folder: Path, out: Path, slug: str, actions=ACTIONS) -> dict:
         rows += 8
     out_actions.setdefault("fortify", out_actions["default"])
     out_actions.setdefault("run", out_actions["default"])
+    out_actions.setdefault("attack1", out_actions["default"])     # no DEATH: the unit fades out
     cols = max(a["frames"] for a in out_actions.values())
     base, mask = Image.new("RGBA", (cols * cw, rows * ch)), Image.new("LA", (cols * cw, rows * ch))
     civ = False

@@ -36,6 +36,7 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 	bool GameOver => human.defeated || gd.turn >= turnLimit || victory != null;
 
 	public async Task<JsonNode> Run(string cmd, Args a) {
+		MapUnit.combatObserver = this;
 		if (cmd == "new_game") return NewGame(a);
 		if (cmd == "load") return Load(a);
 		if (!Commands.Contains(cmd))
@@ -357,6 +358,7 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 			}
 		}
 		while (EngineStorage.TryDequeueNextAnimationMessage(out AnimationMessage a)) a.markCompleted();
+		if (gd != null) SettleBattles();
 	}
 
 	/// <summary>The active seat's events from the turn's UI messages; what its own commands raised it already knows.</summary>

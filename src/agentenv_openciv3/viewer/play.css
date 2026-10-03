@@ -144,3 +144,78 @@ body.art .commands { background: rgba(0,0,0,.35); border-color: rgba(255,255,255
 body.art .commands button.icon { width: 32px; height: 32px; min-width: 0; padding: 0; border: 0; border-radius: 0;
   background-color: transparent; background-repeat: no-repeat; position: relative; }
 body.art .commands button.icon kbd { position: absolute; right: -3px; bottom: -4px; font-size: 8px; padding: 0 2px; opacity: .85; }
+
+/* the client's advisor screens and city screen in its art (screens.js): its 1024x768 frame, scaled to the window,
+   with the client's labels (Noto Sans, line box 1.362 em) and buttons placed in frame pixels */
+.cs-root { position: absolute; inset: 0; z-index: 6; overflow: hidden; --s: 1; }
+.cs-frame { position: absolute; left: 50%; top: 50%; width: 1024px; height: 768px; transform: translate(-50%, -50%) scale(var(--s));
+  color: #000; font-size: 14px; line-height: 1.362; user-select: none; -webkit-user-select: none; }
+.cs-city .cs-frame { box-shadow: 0 0 0 10000px #000; }
+.cs-bg { position: absolute; left: 0; top: 0; width: 1024px; height: 768px; pointer-events: none; }
+.cs-sp { position: absolute; display: block; background-repeat: no-repeat; pointer-events: none; }
+.cs-lb { position: absolute; white-space: pre; line-height: 1.362; pointer-events: none; color: #000; }
+.cs-title { font-size: 26px; letter-spacing: 14px; word-spacing: 22px; }
+.cs-center { text-align: center; }
+.cs-btn { position: absolute; padding: 0; margin: 0; border: 0; border-radius: 0; background-color: transparent;
+  background-repeat: no-repeat; background-position: var(--n); cursor: pointer; color: #000; font: inherit; overflow: visible; }
+.cs-btn:hover:not(:disabled) { background-position: var(--h); }
+.cs-btn:active:not(:disabled) { background-position: var(--p); }
+.cs-btn:disabled { opacity: 1; cursor: default; }
+.cs-btn:focus-visible, .cs-tbtn:focus-visible, .cs-orb:focus-visible, .cs-tb:focus-visible { outline: 1px dotted #0073bd; outline-offset: 1px; }
+/* a Godot text button (C7Theme.tres): 13 px black; hover #B55A00; pressed #0073BD on #FFF7DE */
+.cs-tbtn { position: absolute; padding: 0; margin: 0; border: 0; border-radius: 0; background: transparent; color: #000;
+  font: inherit; font-size: 13px; line-height: 1.362; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cs-tbtn:hover:not(:disabled) { color: #b55a00; border: 0; }
+.cs-tbtn:active:not(:disabled) { color: #0073bd; background: #fff7de; box-shadow: -2px 0 #fff7de, 2px 0 #fff7de, 0 -3px #fff7de, 0 3px #fff7de; }
+.cs-tbtn:disabled { opacity: 1; color: #6b6b6b; cursor: default; }
+/* the client's menu button: the orb (buttonsFINAL.png) and its 14 px label */
+.cs-orb { position: absolute; display: flex; align-items: center; gap: 4px; padding: 0; border: 0; border-radius: 0; background: none;
+  color: #000; font: inherit; font-size: 14px; line-height: 1.362; cursor: pointer; white-space: pre; }
+.cs-orb i { width: 20px; height: 20px; flex: none; background-repeat: no-repeat; background-position: -1px -1px; }
+.cs-orb:hover i { background-position: -22px -1px; } .cs-orb:hover { color: #b55a00; }
+.cs-orb:active i { background-position: -43px -1px; } .cs-orb:active { color: #0073bd; }
+.cs-hit { position: absolute; padding: 0; border: 0; border-radius: 0; background: transparent; cursor: pointer; }
+.cs-modal { position: absolute; inset: 0; }
+.cs-pop { position: absolute; }
+.cs-pophd { left: 0; font-size: 24px; text-align: center; }
+/* domestic: the rate sliders' grabbers (a range input whose thumb is the icon), the city rows */
+.cs-range { position: absolute; width: 198px; height: 30px; margin: 0; padding: 0; background: transparent; cursor: pointer;
+  -webkit-appearance: none; appearance: none; }
+.cs-range:focus { outline: none; }
+.cs-range::-webkit-slider-runnable-track { height: 30px; background: transparent; border: 0; }
+.cs-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 30px; height: 30px; border: 0; background: var(--g); }
+.cs-range::-moz-range-track { height: 30px; background: transparent; border: 0; }
+.cs-range::-moz-range-thumb { width: 30px; height: 30px; border: 0; border-radius: 0; background: var(--g); }
+.cs-rows { position: absolute; left: 72px; top: 298px; width: 914px; height: 378px; overflow-x: hidden; overflow-y: auto; }
+.cs-row { position: absolute; left: 0; width: 100%; height: 50px; }
+.cs-col { width: 40px; text-align: center; }
+.cs-prod { width: 100px; top: 6px !important; overflow: hidden; text-overflow: ellipsis; }
+.cs-rule { position: absolute; height: 1px; background: rgba(91, 53, 22, .5); }
+.cs-clip { overflow: hidden; text-overflow: ellipsis; }
+.cs-panel { width: 205px; white-space: pre-wrap; font-size: 12px; }
+/* science: the tech boxes */
+.cs-tb { position: absolute; background-repeat: no-repeat; cursor: pointer; }
+.cs-tb.idle { cursor: default; }
+.cs-tn { position: absolute; left: 12px; top: 13px; font-size: 11px; line-height: 1.362; white-space: pre; pointer-events: none; }
+.cs-tb:not(.idle):hover .cs-tn { color: #b55921 !important; }
+.cs-navlb { left: 0; top: 7px; width: 129px; text-align: center; }
+/* the city screen: the map through the hole, the lists, the production button and list */
+.cs-hole { position: absolute; left: 0; top: 92px; width: 1024px; height: 415px; }
+.cs-cityname { font-size: 28px; text-align: center; }
+.cs-list { position: absolute; overflow-y: auto; overflow-x: hidden; }
+.cs-list div { font-size: 14px; line-height: 1.362; margin-bottom: 4px; white-space: nowrap; }
+.cs-strat { display: flex; overflow-x: auto; overflow-y: hidden; }
+.cs-res { flex: none; width: 45px; display: flex; flex-direction: column; align-items: center; position: relative; }
+.cs-res .cs-sp { position: relative; }
+.cs-res span { font-size: 14px; line-height: 1.362; }
+.cs-lux { display: flex; align-items: center; gap: 4px; height: 22px; }
+.cs-lux i { width: 22px; height: 22px; background-repeat: no-repeat; }
+.cs-produnit { position: absolute; left: -63px; top: -85px; width: 240px; height: 240px; pointer-events: none; }
+.cs-prodlb { left: 0; top: 65px; width: 114px; text-align: center; overflow: visible; }
+.cs-pq { position: absolute; left: 814px; top: 135px; width: 203px; height: 360px; background-repeat: no-repeat; }
+.cs-pq.closed { display: none; }
+.cs-pq ul { list-style: none; margin: 0; padding: 4px; height: 100%; overflow-y: auto; }
+.cs-pq li { display: grid; grid-template-columns: 32px 1fr 50px; gap: 4px; align-items: center; min-height: 40px; margin-bottom: 1px;
+  font-size: 10px; line-height: 1.362; cursor: pointer; }
+.cs-pq li:hover, .cs-pq li:focus-visible { background: rgba(120, 100, 60, .12); outline: none; }
+.cs-pqi { position: relative; width: 32px; height: 32px; }
