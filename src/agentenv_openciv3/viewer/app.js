@@ -1,5 +1,6 @@
 // The match viewer (docs/viewer.md): live at GET /live, and embedded in recordings as one HTML file.
-// No libraries. Sections: model, map painter, app shell, map view, agents view, summary view, timeline, live.
+// No libraries. Sections: model, map painter, app shell, map view, agents view, summary view, timeline, broadcast
+// (?stream), live.
 "use strict";
 
 // ======================================================================== utilities
@@ -109,7 +110,7 @@ class Match {
     this.tileAt = new Map(this.tiles.map((t, i) => [t.x * 4096 + t.y, i]));
     this.ownersCk = new Map(); this.knownCk = new Map();
     this.landBox = this.box(this.tiles.filter(t => !WATER.has(t.base)), 3);
-    this.series = {}; this.events = []; this.leaders = []; this.unitIndex = [];
+    this.series = {}; this.events = []; this.leaders = []; this.unitIndex = []; this.messages = [];
   }
   _players(list) {
     for (const p of list) {
@@ -127,6 +128,7 @@ class Match {
     this.turns.push(t);
     for (const p of this.civs) this.series[p.index][ti] = t.scores[p.index] || this.series[p.index][ti - 1] || [0, 0, 0, 0, 0, 0];
     for (const e of t.events) this.events.push({...e, turn: t.turn, ti, x: e.x == null ? null : this.sx(e.x)});
+    for (const m of t.messages || []) this.messages.push({...m, turn: t.turn - 1, ti: Math.max(0, ti - 1)});
     // the score leader, or null while the top score is tied (every civ starts on the same score)
     const top = Math.max(...this.civs.map(p => this.series[p.index][ti][0]));
     const at = this.civs.filter(p => this.series[p.index][ti][0] === top);
@@ -180,6 +182,35 @@ class Match {
   liveSeat(i) {
     const p = this.byIndex[i];
     return this.live?.seats?.find(s => s.civ === p?.civ) || null;
+  }
+  // What a seat wrote for the people watching, as {text, turn}: its newest end_turn note and plan up to the end of turn
+  // index ti. Entry ti + 1 holds what was written during turn ti; the turn in progress live comes from `live`.
+  lastNote(ti, i) {
+    const s = ti === this.last ? this.liveSeat(i) : null;
+    return s?.note ? {text: s.note, turn: this.live.turn} : this._newest(ti, "notes", i);
+  }
+  planAt(ti, i) {
+    const s = ti === this.last ? this.liveSeat(i) : null;
+    return s?.plan ? {text: s.plan, turn: s.plan_turn ?? null} : this._newest(ti, "plans", i);
+  }
+  _newest(ti, key, i) {
+    for (let k = Math.min(ti + 1, this.last); k >= 0; k--) {
+      const text = (this.turns[k][key] || {})[i];
+      if (text) return {text, turn: this.turns[k].turn - 1};
+    }
+    return null;
+  }
+  // The messages sent up to the end of turn index ti, oldest first: {from, to: [index] | "all", text, turn}.
+  messagesUpTo(ti) {
+    const out = this.messages.filter(m => m.ti <= ti);
+    if (ti !== this.last) return out;
+    const civ = n => this.players.find(p => p.civ === n)?.index;
+    for (const m of this.live?.messages || []) {
+      const from = civ(m.from);
+      if (from != null) out.push({from, to: m.to === "all" ? "all" : (m.to || []).map(civ).filter(i => i != null),
+        text: m.text, turn: this.live.turn, ti});
+    }
+    return out;
   }
   box(tiles, margin) {
     let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
@@ -259,23 +290,29 @@ class Painter {
     if (c) return c;
     c = makeCanvas(Math.round(w * dpr), Math.round(h * dpr));
     const ctx = c.getContext("2d"); ctx.scale(dpr, dpr);
-    ctx.fillStyle = "#0b0e14"; ctx.fillRect(0, 0, w, h);
-    const m = this.m;
-    for (let i = 0; i < m.tiles.length; i++) {
-      const t = m.tiles[i]; ctx.beginPath(); this.path(ctx, t.x, t.y, v, 1.03); ctx.fillStyle = rgb(this.tColor[i]); ctx.fill();
-    }
+    this.ground(ctx, v, w, h);
     if (this.cache.size > 24) this.cache.delete(this.cache.keys().next().value);
     this.cache.set(key, c);
     return c;
   }
+  ground(ctx, v, w, h) {
+    ctx.fillStyle = "#0b0e14"; ctx.fillRect(0, 0, w, h);
+    const m = this.m;
+    for (let i = 0; i < m.tiles.length; i++) {
+      const t = m.tiles[i], [cx, cy] = this.center(t.x, t.y, v);
+      if (cx < -v.hw || cy < -v.hw || cx > w + v.hw || cy > h + v.hw) continue;
+      ctx.beginPath(); this.path(ctx, t.x, t.y, v, 1.03); ctx.fillStyle = rgb(this.tColor[i]); ctx.fill();
+    }
+  }
   /* opts: focus (player index|null), pov (seat number|null: draw only what that seat knows), labels (auto|all|none),
      ownLabels (bool), units, territory, borders (bool), anim ({from, t} to tween from turn index `from`),
-     pulses [{x, y, rgb, t}], marks [{x, y, city, age, span}] (recent battles), dpr */
+     pulses [{x, y, rgb, t}], marks [{x, y, city, age, span}] (recent battles), moving (the camera is flying: a
+     cached terrain per frame would only be thrown away), dpr */
   draw(ctx, ti, v, w, h, o = {}) {
     const m = this.m, own = m.owners(ti), focus = o.focus ?? null, dpr = o.dpr || 1;
     const pov = o.pov ?? null, known = pov != null ? m.known(ti) : null, bit = pov != null ? 1 << pov : 0;
     const seen = i => !known || (known[i] & bit) !== 0;
-    ctx.drawImage(this.terrain(v, w, h, dpr), 0, 0, w, h);
+    if (o.moving) this.ground(ctx, v, w, h); else ctx.drawImage(this.terrain(v, w, h, dpr), 0, 0, w, h);
     const vis = t => {
       const cx = (t.x - v.x0) * v.hw, cy = (t.y - v.y0) * v.hw / 2;
       return cx > -v.hw && cy > -v.hw && cx < w + v.hw && cy < h + v.hw;
@@ -489,16 +526,20 @@ const M = new Match();
 let P = null;                           // the painter, made when the first document arrives
 const LIVE = !window.OPENCIV_DATA;
 // ?stream: a full-screen layout for broadcasting (agent-env openciv3 stream), with a director instead of controls;
-// ?stream&client puts the spotlit agent's client view full size instead of in the corner.
-const STREAM = new URLSearchParams(location.search).has("stream");
-const STREAM_CLIENT = STREAM && new URLSearchParams(location.search).has("client");
+// &client puts the spotlit agent's client view full size instead of in the corner, &cast=URL plays the casters'
+// lines from that caster service with captions, &title= names the broadcast (docs/viewer.md, section 5).
+const QUERY = new URLSearchParams(location.search);
+const STREAM = QUERY.has("stream");
+const STREAM_CLIENT = STREAM && QUERY.has("client");
+const CAST = STREAM && QUERY.get("cast") ? QUERY.get("cast").replace(/\/+$/, "") : null;
+const TITLE = STREAM ? (QUERY.get("title") || "").trim() : "";
 const VIDEOS = window.OPENCIV_VIDEOS || {};
 const S = {
   ti: 0, follow: true, view: "map", pov: null, focus: null, metric: 0, speed: 5, playing: null,
   layers: {territory: true, borders: true, units: true, labels: "auto"},
   kinds: new Set(["civ_destroyed", "city_captured", "city_destroyed", "war_declared", "peace_signed", "lead_change",
     "victory", "city_founded", "government_changed", "unit_lost"]),
-  v: null, userMoved: false, anim: null, pulses: [], client: {open: false, seat: null, big: false},
+  v: null, userMoved: false, flying: false, anim: null, pulses: [], client: {open: false, seat: null, big: false},
 };
 const METRICS = [["Score", 0], ["Cities", 1], ["Pop", 2], ["Land", 3], ["Techs", 4]];
 
@@ -555,7 +596,7 @@ const person = p => p?.human ? `<span class="person" title="played by a person">
 function shell() {
   $("#app").innerHTML = `
   <header class="top">
-    <div class="brand">OpenCiv3<small id="sub"></small></div>
+    <div class="brand">${TITLE ? esc(TITLE) : "OpenCiv3"}<small id="sub"></small></div>
     <div class="tabs" role="tablist">
       <button data-view="map">Map<span class="k">M</span></button>
       <button data-view="agents">Agents<span class="k">A</span></button>
@@ -581,7 +622,9 @@ function shell() {
         <section><h2>Standings <span class="grow"></span><span class="hint">click to follow an agent</span></h2>
           <table class="standings" id="standings"></table></section>
         <section id="agentcard" class="agentcard" hidden></section>
-        <section><h2><span id="charttitle">Score</span><span class="grow"></span><span class="metrics" id="metrics"></span></h2>
+        <section id="diplo" class="diplo" hidden><h2>Diplomacy<span class="grow"></span><span class="hint" id="diploscope"></span></h2>
+          <ul class="msgs" id="msgs"></ul></section>
+        <section id="chartsec"><h2><span id="charttitle">Score</span><span class="grow"></span><span class="metrics" id="metrics"></span></h2>
           <svg class="chart" id="chart"></svg></section>
         <div class="feedwrap"><section style="border:0;padding-bottom:4px"><h2>Events<span class="grow"></span>
           <span class="hint" id="feedscope"></span></h2></section>
@@ -605,6 +648,12 @@ function shell() {
   </footer>`;
   document.body.appendChild(tip);
   document.body.classList.toggle("stream", STREAM);
+  if (STREAM) {
+    $("#stage").insertAdjacentHTML("beforeend", `<div class="bubble" id="bubble" hidden></div><div class="chyron" id="chyron" hidden></div>`);
+    $("#views").insertAdjacentHTML("beforeend", `<div class="bcl"><div class="caption" id="caption" hidden></div></div>`);
+    $(".timeline").insertAdjacentHTML("beforebegin", `<div class="ticker" id="ticker" hidden><div class="tag">Agent notes</div><div class="tk" id="tk"></div></div>`);
+    document.body.insertAdjacentHTML("beforeend", `<div class="moment" id="moment" hidden></div>`);
+  }
   for (const b of $$(".tabs button")) b.onclick = () => setView(b.dataset.view);
   $("#pov").onchange = () => setPov($("#pov").value === "" ? null : +$("#pov").value);
   $("#play").onclick = togglePlay;
@@ -704,15 +753,32 @@ function fitMap() {
   const box = S.pov != null ? (M.seatBox(S.pov, S.ti, 3) || M.landBox) : M.landBox;
   S.v = fitView(box, r.width, r.height);
 }
-function flyTo(box) {
-  if (!box) return;
-  const r = canvas().getBoundingClientRect(), target = fitView(box, r.width, r.height, 26), from = {...S.v};
-  const start = performance.now();
+// A new flight replaces the one under way. On the stream a flight is slower, and a far one rises on the way (it zooms
+// out and back in), so the viewer keeps their bearings.
+let flight = 0;
+// A view no wider (taller) than the map stays on it: no void past its edges.
+function inMap(v, w, h) {
+  const keep = (x0, span, size) => span >= size + 2 ? x0 : clamp(x0, -1, size + 1 - span);
+  return {hw: v.hw, x0: keep(v.x0, w / v.hw, M.W), y0: keep(v.y0, 2 * h / v.hw, M.H)};
+}
+const inOut = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(2 - 2 * t, 3) / 2;
+function flyTo(box, {maxHw = 26} = {}) {
+  const r = canvas().getBoundingClientRect();
+  if (!box || !r.width) return;
+  if (!S.v) fitMap();
+  const w = r.width, h = r.height, from = {...S.v}, to = inMap(fitView(box, w, h, maxHw), w, h);
+  const mid = v => [v.x0 + w / v.hw / 2, v.y0 + h / v.hw], [ax, ay] = mid(from), [bx, by] = mid(to);
+  const span = Math.max(w / from.hw, w / to.hw), rise = STREAM ? clamp(Math.hypot(bx - ax, (by - ay) / 2) / span - 0.35, 0, 1.2) : 0;
+  const ms = STREAM ? 1700 : 450, start = performance.now(), id = ++flight;
   S.userMoved = true;
   const step = now => {
-    const t = ease(clamp((now - start) / 450, 0, 1));
-    S.v = {hw: from.hw + (target.hw - from.hw) * t, x0: from.x0 + (target.x0 - from.x0) * t, y0: from.y0 + (target.y0 - from.y0) * t};
-    paint(); if (t < 1) requestAnimationFrame(step);
+    if (id !== flight) return;
+    const t = clamp((now - start) / ms, 0, 1), e = STREAM ? inOut(t) : ease(t);
+    const hw = Math.exp(Math.log(from.hw) + (Math.log(to.hw) - Math.log(from.hw)) * e) / (1 + rise * Math.sin(Math.PI * e));
+    const cx = ax + (bx - ax) * e, cy = ay + (by - ay) * e;
+    S.v = {hw, x0: cx - w / hw / 2, y0: cy - h / hw};
+    S.flying = t < 1; paint();
+    if (t < 1) requestAnimationFrame(step);
   };
   requestAnimationFrame(step);
 }
@@ -733,7 +799,7 @@ function paint() {
     const t = (now - S.anim.start) / animMs();
     if (t >= 1) S.anim = null; else anim = {from: S.anim.from, t};
   }
-  P.draw(ctx, S.ti, S.v, w, h, {...S.layers, focus: S.focus, pov: S.pov, dpr, anim, marks: battleMarks(S.ti),
+  P.draw(ctx, S.ti, S.v, w, h, {...S.layers, focus: S.focus, pov: S.pov, dpr, anim, marks: battleMarks(S.ti), moving: S.flying,
     pulses: S.pulses.map(p => ({...p, t: (now - p.start) / 1500}))});
   if (S.anim || S.pulses.length) raf = requestAnimationFrame(paint);
 }
@@ -878,7 +944,7 @@ function renderAgentCard() {
   const wars = (st.at_war || []).map(j => M.byIndex[j]).filter(Boolean);
   const calls = during.calls;
   const live = during.live;
-  const state = live ? (live.ended ? `ended the turn after ${fmtSecs(live.seconds)}` : `playing · ${fmtSecs(live.seconds)}`)
+  const state = live ? (live.ended ? `ended the turn after ${fmtSecs(live.seconds)}` : `${p.human ? "playing" : "thinking"} · ${fmtSecs(live.seconds)}`)
     : during.done ? `turn T${M.turns[ti].turn}` : "";
   el.innerHTML = `<div class="head">${sw(p)}<b>${lab(p)}</b>${person(p)}<span class="muted">${esc(p.label ? p.civ : "")}</span>
       <span class="grow" style="flex:1"></span><span class="muted">#${ranks[p.index]}</span><b class="num">${s[0]}</b></div>
@@ -888,7 +954,8 @@ function renderAgentCard() {
       <div class="fact"><div class="l">Researching</div><div class="v" title="${esc(st.research || "")}">${esc(st.research || "–")}</div></div>
     </div>
     ${wars.length ? `<div class="wars">${wars.map(q => `<span class="war">at war · ${sw(q)}${lab(q)}</span>`).join("")}</div>` : ""}
-    ${p.seat != null ? `<h2 style="margin-top:6px">Its turn <span class="grow"></span><span class="hint">${esc(state)}</span></h2>
+    ${p.seat != null ? mind(p, ti) : ""}
+    ${p.seat != null ? `<h2 style="margin-top:6px">Its turn <span class="grow"></span><span class="hint turnstate">${esc(state)}</span></h2>
       <div class="muted" style="margin-bottom:4px">${calls ? `${calls.ok + calls.failed} tool calls${calls.failed ? `, <span class="down">${calls.failed} failed</span>` : ""}` : "no tool calls recorded"}</div>
       <ul class="lines">${during.actions.length ? during.actions.map(a => `<li class="${a.ok === false ? "bad" : ""}">${esc(a.text)}</li>`).join("")
         : `<li class="muted">No game actions${during.done || live ? "" : " yet"}</li>`}</ul>` : `<div class="muted">The game's own AI plays this civ.</div>`}
@@ -900,6 +967,28 @@ function renderAgentCard() {
   $("#ac-client") && ($("#ac-client").onclick = () => openClient(p.index));
   $("#ac-fly").onclick = () => flyTo(M.civBox(p.index, S.ti, 4));
   $("#ac-clear").onclick = () => setFocus(null);
+}
+// A seat's newest note and its plan (docs/viewer.md, sections 2-3): agent-written, so always escaped.
+const quote = s => `“${esc(s)}”`;
+function mind(p, ti) {
+  const note = M.lastNote(ti, p.index), plan = M.planAt(ti, p.index);
+  if (!note && !plan) return "";
+  return `<div class="mind" style="--a:${p.color}">${note ? `<div class="note">${quote(note.text)}<span class="t">T${note.turn}</span></div>` : ""}
+    ${plan ? `<div class="plan"><span class="l">Plan${plan.turn != null ? ` · T${plan.turn}` : ""}</span><span class="tx">${esc(plan.text)}</span></div>` : ""}</div>`;
+}
+const toWhom = m => m.to === "all" ? `<span class="all">all</span>`
+  : m.to.map(j => `<span class="who">${sw(M.byIndex[j])}${lab(M.byIndex[j])}</span>`).join(" ");
+function renderMessages() {
+  if (S.view !== "map") return;
+  const all = M.messagesUpTo(S.ti), f = S.focus, el = $("#diplo");
+  el.hidden = !M.messages.length && !all.length;
+  if (el.hidden) return;
+  const shown = f == null ? all : all.filter(m => m.from === f || m.to === "all" || m.to.includes(f)), turn = M.turns[S.ti].turn;
+  $("#diploscope").textContent = (f == null ? "everyone" : M.name(f)) + " · up to T" + turn;
+  $("#msgs").innerHTML = shown.slice(-80).reverse().map(m => `<li class="${m.turn === turn ? "now" : ""}">
+    <div class="mh"><span class="t">T${m.turn}</span><span class="who">${sw(M.byIndex[m.from])}<b>${lab(M.byIndex[m.from])}</b></span>
+      <span class="arrow">→</span>${toWhom(m)}</div><div class="mt">${quote(m.text)}</div></li>`).join("")
+    || `<li class="muted">No messages yet.</li>`;
 }
 function renderMetrics() {
   $("#metrics").innerHTML = METRICS.map(([l, k]) => `<button class="${k === S.metric ? "on" : ""}" data-k="${k}">${l}</button>`).join("");
@@ -989,6 +1078,7 @@ function renderFeed() {
     if (e.x != null) { const r = canvas().getBoundingClientRect(), hw = Math.max(S.v.hw, 16);
       flyTo({x0: e.x - r.width / hw / 2 + 1, x1: e.x + r.width / hw / 2 - 1, y0: e.y - r.height / hw + 2, y1: e.y + r.height / hw - 2}); }
   };
+  renderMessages();
 }
 
 // ---- the real client's view of a seat ----
@@ -1078,7 +1168,7 @@ function renderAgents() {
         <span class="rank"><span class="lead-tag"></span><span class="dd"></span><span class="r"></span><span class="s num"></span></span></div>
       <div class="mm"><canvas></canvas><span class="badge">${p.seat != null ? "its view" : "territory"}</span><span class="livestate" hidden></span>
         <span class="warchip" hidden></span></div>
-      <div class="ft"><div class="stats"></div><svg class="spark" width="110" height="20"></svg><div class="act"></div></div></div>`).join("");
+      <div class="ft"><div class="stats"></div><svg class="spark" width="110" height="20"></svg><div class="think"></div><div class="act"></div></div></div>`).join("");
     for (const c of $$(".acard", el)) {
       const open = () => { const i = +c.dataset.i, p = M.byIndex[i];
         S.focus = i; if (p.seat != null) S.pov = p.seat; $("#pov").value = S.pov == null ? "" : String(S.pov);
@@ -1110,8 +1200,9 @@ function renderAgents() {
     if (during.live) {
       ls.hidden = false;
       ls.innerHTML = during.live.ended ? `<span class="tick">✓</span> ended · ${fmtSecs(during.live.seconds)}`
-        : `<span class="dot-live"></span> playing · ${fmtSecs(during.live.seconds)} · ${(during.live.calls?.ok || 0) + (during.live.calls?.failed || 0)} calls`;
+        : `<span class="dot-live"></span> ${p.human ? "playing" : "thinking"} · ${fmtSecs(during.live.seconds)} · ${(during.live.calls?.ok || 0) + (during.live.calls?.failed || 0)} calls`;
     } else ls.hidden = true;
+    $(".think", c).innerHTML = p.seat != null ? mind(p, ti) : "";
     const acts = during.actions.slice(-2).reverse(), evs = M.events.filter(e => e.ti <= ti && (e.owner === i || e.from === i) && kindRank(e.kind) <= 4).slice(-2).reverse();
     $(".act", c).innerHTML = acts.length ? acts.map(a => `<div class="${a.ok === false ? "down" : ""}"><span class="t">T${t.turn}</span>${esc(a.text)}</div>`).join("")
       : evs.length ? evs.map(e => `<div><span class="t">T${e.turn}</span>${esc(e.text)}</div>`).join("") : `<div class="muted">Nothing yet</div>`;
@@ -1355,6 +1446,283 @@ function keys() {
   });
 }
 
+// ======================================================================== broadcast (?stream)
+
+// The stream's director cuts between shots. The match's events, the agents' messages and the casters' lines queue
+// shots by priority; a shot holds the screen for at least DWELL before a more important one cuts in, a queued shot goes
+// stale after MAX_AGE, and full-screen cards are at least CARD_GAP apart. With nothing queued it runs the loop: the
+// whole map (20 s), three agents in the spotlight (15 s each: the map flies to the civ, its card shows its plan and
+// turn, and with the client its client view sits in the corner), then every agent's panel (25 s); with ?stream&client
+// and the client, the whole map, then every agent's client view full size in turn. A title card opens the broadcast;
+// once the game is over a winner card leads to the summary, which stays up.
+const DWELL = 6000, MAX_AGE = 45000, CARD_GAP = 8000, LEAD_GAP = 45000;
+class Director {
+  constructor(loop) { this.loop = loop; this.queue = []; this.keys = new Set(); this.on = null; this.lastCard = -Infinity; this.step = 0; }
+  // Queue a shot {key, prio (lower first), ms, card, focus, expires, run}; a key queued before is ignored.
+  add(shot, now) {
+    if (this.keys.has(shot.key)) return false;
+    this.keys.add(shot.key);
+    this.queue.push({expires: now + MAX_AGE, ...shot, born: now});
+    return true;
+  }
+  // The shot to cut to at `now`, or null to stay on the one on screen.
+  next(now) {
+    this.queue = this.queue.filter(s => s.expires > now);
+    const on = this.on, held = on ? now - on.start : Infinity, done = !on || held >= on.ms;
+    const best = this.queue.filter(s => !s.card || now - this.lastCard >= CARD_GAP)
+      .sort((a, b) => a.prio - b.prio || a.born - b.born)[0];
+    if (best && (done || (held >= DWELL && best.prio < on.prio))) {
+      this.queue.splice(this.queue.indexOf(best), 1);
+      return this.cut(best, now);
+    }
+    return done && !this.queue.length ? this.cut(this.loop(this.step++), now) : null;   // a card waits for its gap
+  }
+  cut(shot, now) {
+    if (shot.card) this.lastCard = now;
+    return (this.on = {...shot, start: now});
+  }
+}
+
+const bc = {director: null, timers: [], leader: null, leadAt: -Infinity, notes: new Set(), tick: 0};
+function later(ms, fn) { bc.timers.push(setTimeout(fn, ms)); }
+function tick() {
+  if (!M.ready || !bc.director) return;
+  const shot = bc.director.next(performance.now());
+  if (!shot) return;
+  for (const t of bc.timers) clearTimeout(t);
+  bc.timers = [];
+  for (const el of [$("#bubble"), $("#chyron")]) if (!el.hidden) leave(el);   // they belong to the shot that ends
+  shot.run();
+}
+function broadcastStart() {
+  for (const t of bc.timers) clearTimeout(t);
+  Object.assign(bc, {director: new Director(loopShot), timers: [], leader: M.leaders[M.last], leadAt: -Infinity, notes: new Set()});
+  for (const m of M.messagesUpTo(M.last)) bc.director.keys.add(msgKey(m));   // only what happens from now on
+  bc.director.add({key: "title", prio: 0, card: true, ms: 9000, run: () => { overview(); card("title", titleCard(), 8000); }},
+    performance.now());
+  broadcastNews(M.last);
+}
+// What the newest data adds: events of turns after turn index `wasLast`, new messages, a new leader, the game's end.
+function broadcastNews(wasLast) {
+  const d = bc.director, now = performance.now();
+  if (!d) return;
+  let k = M.events.length; while (k > 0 && M.events[k - 1].ti > wasLast) k--;
+  for (const e of M.events.slice(k)) { const s = eventShot(e); if (s) d.add(s, now); }
+  for (const m of M.messagesUpTo(M.last)) d.add(messageShot(m), now);
+  const lead = M.leaders[M.last];
+  if (lead != null && lead !== bc.leader && now - bc.leadAt >= LEAD_GAP && M.turns[M.last].turn > 5) {
+    bc.leader = lead; bc.leadAt = now; d.add(leadShot(M.byIndex[lead]), now);
+  }
+  if ($("#ticker").hidden) renderTicker();
+  if (M.live?.game_over) d.add({key: "over", prio: 0, card: true, ms: Infinity,
+    run: () => { overview(); card("win", winCard(), 8000); later(7600, () => setView("summary")); }}, now);
+}
+
+// ---- shots ----
+
+// `zoom`: how far in a shot may go, as a multiple of the whole map's zoom (on a small map a fixed one is no zoom at all).
+function onMap({focus = null, box = null, zoom = 1.8} = {}) {
+  closeClient();
+  if (S.view !== "map") setView("map");
+  setFocus(focus);
+  const r = canvas().getBoundingClientRect();
+  if (box && r.width) flyTo(box, {maxHw: Math.min(56, fitView(M.landBox, r.width, r.height).hw * zoom)});
+}
+function overview() { onMap({box: M.landBox, zoom: 1}); }
+function spotlight(p) {
+  onMap({focus: p.index, box: M.civBox(p.index, S.ti, 4)});
+  S.client.big = STREAM_CLIENT;
+  if (M.live?.client && p.seat != null) openClient(p.index);
+}
+function loopShot(step) {
+  const seats = (M.seats.length ? M.seats : M.civs).filter(p => !M.series[p.index][M.last][5]);
+  const shot = (ms, run, p = null) => ({key: "loop", prio: 9, ms, run, focus: p?.index ?? null});
+  if (!seats.length) return shot(20000, overview);
+  if (STREAM_CLIENT && M.live?.client) {
+    const p = seats[step % (seats.length + 1) - 1];
+    return p ? shot(15000, () => spotlight(p), p) : shot(20000, overview);
+  }
+  const k = step % 5, p = seats[(Math.floor(step / 5) * 3 + k - 1) % seats.length];
+  return k === 0 ? shot(20000, overview) : k === 4 ? shot(25000, () => { closeClient(); setFocus(null); setView("agents"); })
+    : shot(15000, () => spotlight(p), p);
+}
+const near = (x, y, r) => ({x0: x - r, x1: x + r, y0: y - r * 2, y1: y + r * 2});
+function eventShot(e) {
+  const p = M.byIndex[e.owner], q = M.byIndex[e.from];
+  if (!p || p.barbarian) return null;
+  if (e.kind === "civ_destroyed")
+    return {key: "out:" + e.owner, prio: 1, card: true, ms: 9000, run: () => { overview(); card("out", outCard(p, e), 4500); }};
+  if ((e.kind === "war_declared" || e.kind === "peace_signed") && q && !q.barbarian) {
+    const war = e.kind === "war_declared";
+    return {key: `${e.kind}:${e.turn}:${e.owner}:${e.from}`, prio: war ? 2 : 4, card: true, ms: 10000, run: () => {
+      onMap(); card(war ? "war" : "peace", pairCard(p, q, war, e), 4000);
+      later(3600, () => onMap({box: borderBox(p.index, q.index), zoom: 2.2}));
+    }};
+  }
+  if ((e.kind === "city_captured" || e.kind === "city_destroyed") && e.x != null) {
+    const taker = e.kind === "city_captured" ? e.owner : null, cutaway = taker != null && M.live?.client && p.seat != null;
+    return {key: `${e.kind}:${e.turn}:${e.x},${e.y}`, prio: 2, ms: cutaway ? 12000 : 8000, focus: taker, run: () => {
+      onMap({focus: taker, box: near(e.x, e.y, 5), zoom: 3}); chyron(e, cutaway ? 6000 : 7600);
+      if (cutaway) later(6000, () => { S.client.big = true; openClient(taker); });   // the taker's own view of it
+    }};
+  }
+  // a civ's second to fourth city: the opening's expansion race, a short look that soon goes stale
+  const cities = M.turns[e.ti].cities.filter(c => c[3] === e.owner).length;
+  if (e.kind === "city_founded" && e.x != null && cities >= 2 && cities <= 4)
+    return {key: `founded:${e.turn}:${e.x},${e.y}`, prio: 7, ms: 6000, expires: performance.now() + 20000, focus: e.owner,
+      run: () => { onMap({focus: e.owner, box: near(e.x, e.y, 6), zoom: 2.5}); chyron(e, 5600); }};
+  return null;
+}
+const leadShot = p => ({key: `lead:${p.index}:${M.last}`, prio: 3, card: true, ms: 10000, focus: p.index,
+  run: () => { onMap(); card("lead", leadCard(p), 4000); later(3600, () => spotlight(p)); }});
+const msgKey = m => `msg:${m.turn}:${m.from}:${m.text}`;
+const messageShot = m => ({key: msgKey(m), prio: 5, ms: 7000, focus: m.from,
+  run: () => { onMap({focus: m.from, box: M.civBox(m.from, S.ti, 4)}); bubble(m, 6600); }});
+// Where two civs meet: their shared border, or else the two closest cities of theirs.
+function borderBox(a, b) {
+  const own = M.owners(S.ti), pts = [];
+  M.tiles.forEach((t, i) => {
+    if (own[i] !== a) return;
+    for (const [dx, dy] of [[1, 1], [1, -1], [-1, 1], [-1, -1], [2, 0], [-2, 0], [0, 2], [0, -2]]) {
+      const j = M.tileIndex(t.x + dx, t.y + dy);
+      if (j != null && own[j] === b) { pts.push(t, M.tiles[j]); return; }
+    }
+  });
+  if (pts.length) return M.box(pts, 3);
+  const at = i => M.turns[S.ti].cities.filter(c => c[3] === i).map(c => ({x: M.sx(c[0]), y: c[1]}));
+  let best = null;
+  for (const c of at(a)) for (const d of at(b)) {
+    const dist = Math.hypot(c.x - d.x, (c.y - d.y) / 2);
+    if (!best || dist < best[0]) best = [dist, c, d];
+  }
+  return best ? M.box(best.slice(1), 3) : M.landBox;
+}
+
+// ---- what the shots show: full-screen cards, the speech bubble, the event chyron ----
+
+// An overlay enters (.in), stays `ms`, then leaves (.out); ms Infinity stays until leave().
+const overlayTimers = {};
+function flash(el, ms) {
+  for (const t of overlayTimers[el.id] || []) clearTimeout(t);
+  el.hidden = false; el.classList.remove("in", "out"); void el.offsetWidth; el.classList.add("in");
+  overlayTimers[el.id] = ms === Infinity ? [] : [setTimeout(() => leave(el), ms - 350)];
+}
+function leave(el) {
+  for (const t of overlayTimers[el.id] || []) clearTimeout(t);
+  el.classList.add("out");
+  overlayTimers[el.id] = [setTimeout(() => { el.hidden = true; }, 350)];
+}
+function card(kind, html, ms) { const el = $("#moment"); el.className = "moment card-" + kind; el.innerHTML = html; flash(el, ms); }
+const shout = p => `<div class="big${lab(p).length > 10 ? " long" : ""}">${lab(p)}</div>`;
+const NUMBERS = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve"];
+function titleCard() {
+  const seats = M.seats.length ? M.seats : M.civs, people = seats.filter(p => p.human).length, agents = seats.length - people;
+  const n = k => NUMBERS[k] || String(k);
+  const who = `${n(agents)} AI model${agents === 1 ? "" : "s"}${people ? ` and ${n(people).toLowerCase()} ${people === 1 ? "person" : "people"}` : ""}`;
+  return `<div class="titlecard"><h1>${esc(TITLE || "OpenCiv3")}</h1>
+    <p>${who} share${seats.length === 1 ? "s" : ""} one world for ${M.limit} turns.${seats.length > 1 ? " They can message each other." : ""}</p>
+    <div class="lineup">${seats.map((p, k) => `<div class="seat" style="--a:${p.color};--k:${k}"><b>${lab(p)}</b>
+      <span>${esc(p.civ)}${p.human ? ", played by a person" : ""}</span></div>`).join("")}</div></div>`;
+}
+function leadCard(p) {
+  const ti = M.last, rk = M.ranks(ti), second = M.civs.find(q => rk[q.index] === 2), s = M.series[p.index][ti][0];
+  return `<div class="slab" style="--a:${p.color}"><div class="words">${shout(p)}<div class="what">takes the lead</div></div></div>
+    <div class="meta">${esc(p.civ)}, ${s} points${second ? `, ${s - M.series[second.index][ti][0]} ahead of ${lab(second)}` : ""}, turn ${M.turns[ti].turn}</div>`;
+}
+function pairCard(p, q, war, e) {
+  const side = r => `<div class="party">${shout(r)}<div class="civ">${esc(r.civ)}</div></div>`;
+  return `<div class="slab pair" style="--a:${p.color};--b:${q.color}">${side(p)}<div class="vs"><span>${war ? "War" : "Peace"}</span></div>${side(q)}</div>
+    <div class="meta">${esc(e.text)}, turn ${e.turn}</div>`;
+}
+function outCard(p, e) {
+  return `<div class="slab gone" style="--a:${p.color}"><div class="words">${shout(p)}<div class="what">eliminated</div></div></div>
+    <div class="meta">${esc(p.civ)} is out of the game, turn ${e.turn}</div>`;
+}
+function winCard() {
+  const ti = M.last, rk = M.ranks(ti), order = M.civs.slice().sort((a, b) => rk[a.index] - rk[b.index]);
+  const score = p => M.series[p.index][ti][0], v = M.meta.victory, w = (v && M.players.find(p => p.civ === v.civ)) || order[0];
+  const tied = !v && order.length > 1 && score(order[1]) === score(w);
+  const how = v ? `by ${esc(v.kind)} victory, turn ${v.turn}` : tied ? `tied on ${score(w)} points, turn ${M.turns[ti].turn}`
+    : `on score, ${score(w)} points to ${lab(order[1] || w)}'s ${score(order[1] || w)}, turn ${M.turns[ti].turn}`;
+  return `<div class="slab" style="--a:${tied ? "#3a3f48" : w.color}"><div class="words"><div class="what">game over</div>
+      ${tied ? `<div class="big">a tie</div>` : `${shout(w)}<div class="what">wins</div>`}</div></div>
+    <div class="meta">${how}</div>
+    <div class="final">${order.map(p => `<span>${sw(p)}<b>${lab(p)}</b>${score(p)}</span>`).join("")}</div>`;
+}
+function bubble(m, ms) {
+  const el = $("#bubble"), p = M.byIndex[m.from];
+  el.style.setProperty("--a", p?.color || "#777");
+  el.innerHTML = `<div class="bh"><span class="who">${sw(p)}<b>${lab(p)}</b><span class="civ">${esc(p?.civ)}</span></span>
+    <span class="arrow">→</span>${toWhom(m)}</div><p class="${m.text.length > 140 ? "long" : ""}">${quote(m.text)}</p>`;
+  flash(el, ms);
+}
+function chyron(e, ms) {
+  const el = $("#chyron");
+  el.style.setProperty("--k", kindHot(e.kind) ? "var(--bad)" : M.byIndex[e.owner]?.color || "#777");
+  el.classList.toggle("hot", kindHot(e.kind));
+  el.innerHTML = `<span class="k">${esc(kindLabel(e.kind))}</span>${sw(M.byIndex[e.owner])}<span>${esc(e.text)}</span><span class="t">T${e.turn}</span>`;
+  flash(el, ms);
+}
+
+// ---- the notes ticker: each seat's newest end_turn note, the ones not shown yet first ----
+
+function renderTicker() {
+  if (!M.ready || !$("#ticker")) return;
+  const notes = M.seats.map(p => ({p, n: M.lastNote(M.last, p.index)})).filter(x => x.n);
+  $("#ticker").hidden = !notes.length;
+  if (!notes.length) return;
+  const key = x => `${x.n.turn}:${x.p.index}`, fresh = notes.filter(x => !bc.notes.has(key(x)));
+  const x = fresh.length ? fresh.sort((a, b) => a.n.turn - b.n.turn || a.p.seat - b.p.seat)[0] : notes[bc.tick++ % notes.length];
+  bc.notes.add(key(x));
+  $("#tk").innerHTML = `<div class="item">${sw(x.p)}<b>${lab(x.p)}:</b><span class="q">${quote(x.n.text)}</span><span class="t">T${x.n.turn}</span></div>`;
+}
+
+// ---- the casters (&cast=URL): their lines in order, voiced, with a caption while each plays ----
+
+const CASTERS = {pbp: ["play-by-play", "#e9c46a"], color: ["analyst", "#8fb4ff"]};
+const voice = {last: 0, queue: [], on: null, first: true};
+async function pollCast() {
+  try {
+    const r = await fetch(`${CAST}/cast.json?since=${voice.last}`, {cache: "no-store"}), doc = await r.json();
+    const lines = (doc.lines || []).filter(l => l.id > voice.last).sort((a, b) => a.id - b.id);
+    if (lines.length) voice.last = lines.at(-1).id;
+    voice.queue.push(...(voice.first ? stillOn(lines, doc.speaking_until) : lines));
+    voice.first = false;
+    speak();
+  } catch (e) { /* the caster isn't up yet: keep asking */ }
+  setTimeout(pollCast, 1000);
+}
+// A page opened mid-broadcast starts with the lines still under way by the caster's clock, not its whole backlog.
+function stillOn(lines, until) {
+  let left = (until || 0) - Date.now() / 1000, k = lines.length;
+  while (k > 0 && left > 0) left -= (lines[--k].seconds || 0) + 0.5;
+  return lines.slice(k);
+}
+function speak() {
+  if (voice.on || !voice.queue.length) return;
+  const line = voice.queue.shift(), el = $("#caption"), [role, colour] = CASTERS[line.speaker] || ["", "#b6bac3"];
+  const secs = line.seconds || String(line.text).split(/\s+/).length / 2.6, start = performance.now();
+  voice.on = line;
+  el.style.setProperty("--c", colour);
+  el.innerHTML = `<div class="who"><b>${esc(line.name)}</b><span>${role}</span></div><p>${esc(line.text)}</p>`;
+  flash(el, Infinity);
+  castFocus(line);
+  let timer = setTimeout(done, (secs + 3) * 1000);   // audio that never ends
+  function done() { clearTimeout(timer); if (voice.on !== line) return; voice.on = null; leave(el); setTimeout(speak, 400); }
+  function silent() { clearTimeout(timer); timer = setTimeout(done, Math.max(0, secs * 1000 - (performance.now() - start))); }
+  if (!line.audio) return silent();
+  const audio = new Audio(`${CAST}/${line.audio}`);
+  audio.onended = done; audio.onerror = silent;
+  audio.play().catch(silent);   // autoplay refused: the caption still shows for the line's length
+}
+function castFocus(line) {
+  if (!line.focus || !bc.director || !M.ready) return;
+  const f = String(line.focus).toLowerCase(), p = M.civs.find(q => q.civ.toLowerCase() === f || (q.label || "").toLowerCase() === f);
+  const now = performance.now(), ms = Math.max(DWELL, (line.seconds || 4) * 1000);
+  if (p && bc.director.on?.focus !== p.index)
+    bc.director.add({key: "cast:" + line.id, prio: 6, ms, expires: now + ms, focus: p.index, run: () => spotlight(p)}, now);
+}
+
 // ======================================================================== startup and live polling
 
 // A link pasted into the open page (only its #hash changed) takes it to the same view.
@@ -1372,50 +1740,17 @@ addEventListener("hashchange", () => {
   renderClient();
 });
 
-// The stream's director, on a 90 s loop: the whole map (20 s), three agents in the spotlight (15 s each: the map flies
-// to the civ, its card shows its turn, and with the client its client view sits in the corner), then every agent's
-// panel (25 s). With ?stream&client and the client, it shows the whole map (20 s), then every agent's client view full
-// size in turn (15 s each). Once the game is over, the summary stays up.
-let shot = null;
-function direct() {
-  if (!STREAM || !M.ready) return;
-  const seats = M.seats.length ? M.seats : M.civs;
-  if (M.live?.game_over) {
-    if (shot !== "summary") { shot = "summary"; closeClient(); setView("summary"); }
-    return;
-  }
-  const now = Math.floor(Date.now() / 1000);
-  let next, p = null;
-  if (STREAM_CLIENT && M.live?.client) {
-    const t = now % (20 + 15 * seats.length);
-    if (t < 20) next = "overview";
-    else { p = seats[Math.floor((t - 20) / 15)]; next = "agent:" + p.index; }
-  } else {
-    const loop = Math.floor(now / 90), t = now % 90;
-    if (t < 20) next = "overview";
-    else if (t < 65) { p = seats[(loop * 3 + Math.floor((t - 20) / 15)) % seats.length]; next = "agent:" + p.index; }
-    else next = "agents";
-  }
-  if (next === shot) return;
-  shot = next;
-  if (next === "agents") { closeClient(); setFocus(null); setView("agents"); return; }
-  if (S.view !== "map") setView("map");
-  if (next === "overview") { closeClient(); setFocus(null); S.userMoved = false; fitMap(); draw(); return; }
-  setFocus(p.index, {fly: true});
-  S.client.big = STREAM_CLIENT;
-  if (M.live?.client && p.seat != null) openClient(p.index); else closeClient();
-}
-
 function start() {
   P = new Painter(M);
   S.ti = M.last;
-  if (STREAM) { S.kinds.delete("unit_lost"); setInterval(direct, 1000); } else readHash();
+  if (STREAM) S.kinds.delete("unit_lost"); else readHash();
   $("#emptymsg").hidden = true;
   for (const id of ["#v-map", "#v-agents", "#v-summary"]) $(id).hidden = true;
   renderTop(); renderLayers(); renderMetrics(); renderKinds(); renderPovNote();
   setView(S.view);
   setTurn(S.ti);
   if (S.client.open) renderClient();
+  if (STREAM) broadcastStart();
 }
 function waiting(msg) {
   $("#emptymsg").hidden = false; $("#emptymsg").innerHTML = `<div>${esc(msg)}</div><div class="muted">${LIVE ? "This page follows the game as it plays." : ""}</div>`;
@@ -1441,8 +1776,9 @@ async function poll() {
       else { renderScrub(); renderStatus(); }
     } else {
       renderStatus();
-      if (S.ti === M.last) { if (S.view === "map") { renderStandings(); renderAgentCard(); } if (S.view === "agents") renderAgents(); }
+      if (S.ti === M.last) { if (S.view === "map") { renderStandings(); renderAgentCard(); renderMessages(); } if (S.view === "agents") renderAgents(); }
     }
+    if (STREAM) broadcastNews(wasLast);
   } catch (e) {
     failures++;
     if ($("#waiting")) $("#waiting").textContent = failures > 1 ? "Lost the env; retrying…" : "";
@@ -1454,6 +1790,7 @@ async function poll() {
 
 shell();
 $("#views").insertAdjacentHTML("beforeend", `<div class="empty" id="emptymsg" hidden></div>`);
+if (STREAM) { setInterval(tick, 250); setInterval(renderTicker, 5000); if (CAST) pollCast(); }
 if (LIVE) { waiting("Connecting to the game…"); poll(); }
 else if (M.ingest(window.OPENCIV_DATA) && M.ready) start();
 else waiting("This recording has no turns.");

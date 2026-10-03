@@ -1,0 +1,263 @@
+"""The viewer app (app.js) in a real browser: headless Chrome or Chromium runs a page for a stretch of virtual time and
+dumps its DOM, where a probe script has written what was on screen. Covers what the agents write (notes, plans and
+messages, shown as text and never as markup) and the stream's broadcast layer (docs/viewer.md, section 5): the
+director, its cards, the speech bubble, the chyron, captions with the casters' voices, and the notes ticker."""
+
+import html
+import io
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import time
+import urllib.parse
+import wave
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+import pytest
+
+from agentenv_openciv3 import recording, viewer
+from agentenv_openciv3.matchdata import MatchData
+
+FAKE = Path(__file__).resolve().parents[1] / "env" / "fake_bridge.py"
+MAC_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+CHROME = next((c for c in (os.environ.get("CHROME"), shutil.which("google-chrome"), shutil.which("chromium"),
+                           shutil.which("chromium-browser"), MAC_CHROME) if c and Path(c).exists()), None)
+pytestmark = pytest.mark.skipif(CHROME is None, reason="needs Chrome or Chromium")
+
+NOTE = "Settling the river <b>before</b> Greece does."
+PLAN = "Expand to 6 cities by T40, then <script>window.pwned = 1</script> take Athens."
+MESSAGE = "Join me against Carthage, or you're next. <img src=x onerror=\"window.pwned = 1\">"
+LIVE_MESSAGE = "Athens will be free again, Rome."
+
+
+@pytest.fixture(scope="module")
+def doc(tmp_path_factory) -> dict:
+    """The fake bridge's game (T1 to T6) with two seats, opus (Rome) and sol (Greece), at war from T3, Rome taking
+    Athens on T5; opus writes a note, a plan and a message during T2, both write notes during T4 and sol a message."""
+    record = tmp_path_factory.mktemp("record")
+    lines = [{"id": 1, "cmd": "new_game", "args": {"seed": 3, "turn_limit": 8}},
+             {"id": 2, "cmd": "autoplay", "args": {"turns": 5, "policy": "settler_bot"}}]
+    subprocess.run([sys.executable, str(FAKE), "--record", str(record)], check=True, capture_output=True, text=True,
+                   timeout=60, input="".join(json.dumps(x) + "\n" for x in lines))
+    snaps = recording.load_snapshots(record)
+    for s in snaps:
+        s["schema"] = 2
+        s["seats"] = [{"index": 0, "civ": "Rome", "label": "opus"}, {"index": 1, "civ": "Greece", "label": "sol"}]
+        for p in s["players"]:
+            p["label"] = {"Rome": "opus", "Greece": "sol"}.get(p["civ"])
+            p["at_war"] = [1 - p["index"]] if s["turn"] >= 3 and p["index"] < 2 else []
+        for c in s["cities"]:
+            if c["name"] == "Athens" and s["turn"] >= 5:
+                c["owner"] = 0
+    d = MatchData.from_snapshots(snaps).document()
+    turns = {t["turn"]: t for t in d["turns"]}
+    turns[3].update(notes={"0": NOTE}, plans={"0": PLAN}, messages=[{"from": 0, "to": [1], "text": MESSAGE}])
+    turns[5].update(notes={"0": "Took Athens.", "1": "Lost Athens; walls everywhere now."},
+                    messages=[{"from": 1, "to": "all", "text": "Rome broke the peace. Remember it."}])
+    assert any(e["kind"] == "city_captured" for e in turns[5]["events"])
+    return d
+
+
+def probed(page: str, probe: str) -> str:
+    return page.replace("</body>", f'<pre id="probe"></pre><script>{probe}</script></body>')
+
+
+def run(url: str, budget_ms: int, tmp_path: Path):
+    """What the page's probe wrote into #probe after `budget_ms` of virtual time, as JSON."""
+    chrome = subprocess.Popen(
+        [CHROME, "--headless", "--no-sandbox", "--disable-gpu", "--no-first-run", "--mute-audio",
+         "--window-size=1920,1080", "--autoplay-policy=no-user-gesture-required",
+         f"--user-data-dir={tmp_path / 'chrome'}", f"--virtual-time-budget={budget_ms}", "--dump-dom", url],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    watchdog = threading.Timer(90, chrome.kill)
+    watchdog.start()
+    dom = ""
+    try:
+        for line in chrome.stdout:   # some builds keep running after the dump: read up to its end
+            dom += line
+            if "</html>" in line:
+                break
+    finally:
+        watchdog.cancel()
+        chrome.kill()
+        chrome.wait()
+    found = re.search(r'<pre id="probe">(.*?)</pre>', dom, re.S)
+    assert found, dom[-2000:]
+    return json.loads(html.unescape(found[1]))
+
+
+TEXT = 'const text = e => e ? e.innerText.replace(/\\s+/g, " ").trim() : null;'
+
+
+def test_a_recording_shows_what_the_agents_wrote_as_text(doc, tmp_path):
+    probe = TEXT + """
+      const out = {}, rome = M.players.find(p => p.civ === "Rome").index;
+      setTurn(M.turnIndex(2)); setFocus(rome);
+      out.t2 = {card: text($("#agentcard")), msgs: $$("#msgs li").map(text), diplo: !$("#diplo").hidden};
+      setTurn(M.turnIndex(6));
+      out.t6 = {card: text($("#agentcard")), msgs: $$("#msgs li").map(text)};
+      setFocus(null); setView("agents");
+      out.grid = $$(".acard").map(c => text($(".think", c)));
+      out.markup = $$("#app img, #app script, .mind .note :not(.t), .mind .tx *, #msgs .mt *").length;
+      out.pwned = window.pwned ?? null;
+      $("#probe").textContent = JSON.stringify(out);"""
+    page = tmp_path / "recording.html"
+    page.write_text(probed(viewer.page(doc), probe), encoding="utf-8")
+    out = run(page.as_uri(), 1000, tmp_path)
+
+    # turn 2: what opus wrote during it, and nothing from later turns
+    assert f"“{NOTE}”" in out["t2"]["card"] and PLAN in out["t2"]["card"]
+    assert out["t2"]["diplo"] and out["t2"]["msgs"] == [f"T2 opus → sol “{MESSAGE}”"]
+    # turn 6: newest first, and the newest note
+    assert out["t6"]["msgs"] == ["T4 sol → all “Rome broke the peace. Remember it.”", f"T2 opus → sol “{MESSAGE}”"]
+    assert "“Took Athens.”" in out["t6"]["card"] and PLAN in out["t6"]["card"]
+    assert "“Took Athens.”" in out["grid"][0] and PLAN in out["grid"][0]
+    assert "“Lost Athens; walls everywhere now.”" in out["grid"][1] and "Took" not in out["grid"][1]
+    assert out["markup"] == 0 and out["pwned"] is None
+
+
+def wav(seconds: float) -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(8000)
+        w.writeframes(b"\0\0" * int(8000 * seconds))
+    return buf.getvalue()
+
+
+@pytest.fixture
+def broadcast(doc):
+    """A live env and a caster on one local server. The data shows T1 to T4 for its first three answers, then T5 and
+    T6 (Athens taken, sol's live message, opus's note), and the game over from the 30th."""
+    asked, lines = [], [
+        {"id": 1, "speaker": "pbp", "name": "Max", "text": "<i>Opus</i> takes the field!", "audio": None,
+         "seconds": 2.0, "turn": None, "focus": None, "kind": "intro"},
+        {"id": 2, "speaker": "color", "name": "Ada", "text": "Greece is in trouble.", "audio": "audio/2.wav",
+         "seconds": 1.5, "turn": 5, "focus": "Greece", "kind": "color"}]
+
+    def data(since: int) -> dict:
+        n = sum(p == "/live/data.json" for p in asked)
+        last = 4 if n <= 3 else 6
+        live = {"turn": last, "game_over": n >= 30, "victory": None, "client": False, "recording": True,
+                "min_turn_seconds": 15, "messages": [], "seats": [
+                    {"civ": "Rome", "label": "opus", "human": False, "ended": True, "seconds": 12.5,
+                     "calls": {"ok": 9, "failed": 0}, "actions": [], "note": None, "plan": PLAN, "plan_turn": 2},
+                    {"civ": "Greece", "label": "sol", "human": False, "ended": False, "seconds": 20.0,
+                     "calls": {"ok": 4, "failed": 1}, "actions": [], "note": None, "plan": None, "plan_turn": None}]}
+        if last == 6:
+            live["seats"][0]["note"] = "Marching on Sparta."
+            live["messages"] = [{"from": "Greece", "to": ["Rome"], "text": LIVE_MESSAGE, "seconds": 3.2}]
+        out = {k: doc[k] for k in ("schema", "game", "meta", "players")}
+        out["turns"] = [t for t in doc["turns"] if since < t["turn"] <= last]
+        if since < 0:
+            out["static"] = doc["static"]
+        return {**out, "live": live}
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def reply(self, body: bytes, ctype: str):
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            url = urllib.parse.urlparse(self.path)
+            since = int(dict(urllib.parse.parse_qsl(url.query)).get("since", -1))
+            asked.append(url.path)
+            if url.path == "/live":
+                self.reply(probed(viewer.page(), PROBE_STREAM).encode(), "text/html; charset=utf-8")
+            elif url.path == "/live/data.json":
+                self.reply(json.dumps(data(since)).encode(), "application/json")
+            elif url.path == "/cast/cast.json":
+                body = {"lines": [ln for ln in lines if ln["id"] > since], "speaking_until": time.time() + 60}
+                self.reply(json.dumps(body).encode(), "application/json")
+            elif url.path == "/cast/audio/2.wav":
+                self.reply(wav(1.5), "audio/wav")
+            else:
+                self.send_error(404)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}", asked
+    server.shutdown()
+
+
+PROBE_STREAM = TEXT + """
+  const frames = [], shown = sel => { const e = $(sel); return e && !e.hidden ? text(e) : null; };
+  setInterval(() => {
+    if (!$("#moment")) return;
+    frames.push({t: Math.round(performance.now()), view: S.view, card: shown("#moment"), bubble: shown("#bubble"),
+      chyron: shown("#chyron"), caption: shown("#caption"), ticker: shown("#ticker"),
+      markup: $$(".titlecard h1 *, .caption p *, .bubble p *, .ticker .q *").length});
+    $("#probe").textContent = JSON.stringify(frames);
+  }, 250);"""
+
+
+def test_the_stream_casts_a_live_game(broadcast, tmp_path):
+    base, asked = broadcast
+    query = urllib.parse.urlencode({"title": "<b>Battle</b> of the Labs", "cast": f"{base}/cast"})
+    frames = run(f"{base}/live?stream&{query}", 60000, tmp_path)
+
+    def first(key, *words):   # as shown: CSS may change the case
+        return next((f for f in frames if f[key] and all(w.lower() in f[key].lower() for w in words)), None)
+
+    title = first("card", "<b>Battle</b> of the Labs", "opus", "Rome", "sol", "Greece")
+    assert title and title["t"] < 2000
+    captured = first("chyron", "captured", "Athens")
+    assert captured and captured["t"] > max(f["t"] for f in frames if f["card"] and "Battle" in f["card"])
+    assert first("bubble", "sol", "→", "opus", LIVE_MESSAGE)
+    assert first("caption", "Max", "play-by-play", "<i>Opus</i> takes the field!")
+    assert first("caption", "Ada", "analyst", "Greece is in trouble.")
+    assert "/cast/audio/2.wav" in asked
+    assert first("ticker", "Agent notes", "opus:", "“Marching on Sparta.”")
+    over = first("card", "game over")
+    assert over and over["t"] > captured["t"] and frames[-1]["view"] == "summary"
+    assert all(f["markup"] == 0 for f in frames)
+
+
+def test_the_director_holds_shots_by_priority_and_skips_the_backlog(doc, tmp_path):
+    probe = """
+      const loop = () => ({key: "loop", prio: 9, ms: 15000});
+      const shot = (key, prio, ms, more = {}) => ({key, prio, ms, ...more});
+      const key = s => s ? s.key : null, out = {};
+      let d = new Director(loop);
+      d.add(shot("msg", 5, 7000), 0); d.add(shot("war", 2, 10000, {card: true}), 0);
+      out.order = [d.next(0), d.next(5000), d.next(10000), d.next(17000)].map(key);
+      d = new Director(loop); d.next(0); d.add(shot("war", 2, 10000, {card: true}), 1000);
+      out.dwell = [d.next(5999), d.next(6000)].map(key);
+      d = new Director(loop); d.add(shot("a", 2, 4000, {card: true}), 0); d.add(shot("b", 2, 4000, {card: true}), 0);
+      out.gap = [d.next(0), d.next(4000), d.next(7999), d.next(8000)].map(key);
+      d = new Director(loop); d.add(shot("over", 0, 60000), 0); d.add(shot("msg", 5, 7000), 0);
+      out.stale = [d.next(0), d.next(60000)].map(key);
+      d = new Director(loop);
+      out.dedupe = [d.add(shot("x", 5, 1000), 0), d.add(shot("x", 5, 1000), 0)];
+      d = new Director(loop); d.add(shot("msg", 5, 7000), 0); d.next(0); d.add(shot("cast", 6, 4000), 100);
+      out.lower = [d.next(6500), d.next(7000)].map(key);
+      d = new Director(loop); d.add(shot("war", 2, 10000), 0); d.next(0);
+      d.add(shot("cast", 6, 4000, {expires: 4000}), 0);
+      out.expired = key(d.next(10000));
+      const lines = [1, 2, 3].map(id => ({id, seconds: 4}));
+      const now = Date.now() / 1000;
+      out.backlog = [stillOn(lines, now + 6), stillOn(lines, now - 1)].map(l => l.map(x => x.id));
+      $("#probe").textContent = JSON.stringify(out);"""
+    page = tmp_path / "director.html"
+    page.write_text(probed(viewer.page(doc), probe), encoding="utf-8")
+    out = run(page.as_uri(), 500, tmp_path)
+    assert out["order"] == ["war", None, "msg", "loop"]          # most important first; each holds its length
+    assert out["dwell"] == [None, "war"]                          # a more important shot cuts in after the dwell
+    assert out["gap"] == ["a", None, None, "b"]                   # full-screen cards at least 8 s apart
+    assert out["stale"] == ["over", "loop"]                       # a shot queued over 45 s ago is dropped
+    assert out["dedupe"] == [True, False]
+    assert out["lower"] == [None, "cast"]                         # a less important shot waits its turn
+    assert out["expired"] == "loop"                               # a caster's focus lasts only its line
+    assert out["backlog"] == [[2, 3], []]                         # a page opened mid-cast skips the said lines

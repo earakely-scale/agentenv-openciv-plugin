@@ -107,3 +107,44 @@ returns. Before the first game, `game` is null, `turns` is empty, and so are `se
 The `html` format is the same app with the data embedded, so it works offline as one file. With the client in the
 image, `client_mp4` renders every seat's view (`<name>.client-<label or civ>.mp4`, a frame per turn); the app plays
 those files when they sit next to the HTML, as `agent-env openciv3 recordings --out` leaves them.
+
+## 5. Broadcast mode (`?stream`)
+
+`GET /live?stream` is the layout `agent-env openciv3 stream` puts on Twitch: 1920×1080, nothing to click, a director
+choosing what to show. Parameters, after `stream`:
+
+| Parameter | Effect |
+|---|---|
+| `client` | Spotlights show the agent's real-client view full size, not in the corner |
+| `cast=URL` | The casters' service (`streamer/caster.py`, e.g. `http://127.0.0.1:8790`): their lines are voiced and captioned |
+| `title=TEXT` | The broadcast's name, in the top bar and on the title card |
+
+On screen: the map and the side panel (standings, the spotlit agent's card with its newest note, plan and turn, the
+diplomacy feed, the score chart (not while an agent is spotlit) and the events), a lower-third caption while a caster speaks, a ticker under the map
+cycling each seat's newest note (`label: "note"`, the ones not shown yet first), and the timeline.
+
+**The director** cuts between shots. The data's new turns, new messages and the casters' lines queue them; a shot
+holds the screen for at least 6 s before a more important one cuts in, a queued shot is dropped after 45 s, and
+full-screen cards are at least 8 s apart. Events in the turns already played when the page opens are not replayed.
+
+| Shot (most important first) | What it shows |
+|---|---|
+| Title (on opening), game over | A card with the title, each seat's label, civ and colour (8 s); at the end a winner card (8 s), then the summary, which stays |
+| `civ_destroyed` | An "eliminated" card, then the whole map |
+| `city_captured`, `city_destroyed` | The camera flies in on the city, with a caption naming the event; with the client, a capture cuts to the taker's client view |
+| `war_declared` | A card splitting the screen between the two sides' colours, then the camera on their border (or their closest cities) |
+| A new leader | "X TAKES THE LEAD" (4 s), then a spotlight on it; at most one every 45 s, after turn 5 |
+| `peace_signed` | Like a war, in peace colours |
+| A new message | A speech bubble over the map (6.6 s) while the camera flies to the sender |
+| A caster's line with a `focus` | A spotlight on that civ while the line plays |
+| Nothing queued: the loop | The whole map (20 s), three agents in the spotlight (15 s each), every agent's panel (25 s); with `client` and the client, the whole map and then each agent's client view (15 s each) |
+
+**The casters** (`cast`): the page asks `<cast>/cast.json?since=<last id>` every second and plays the lines in order:
+`new Audio(<cast>/<line.audio>)` with the caption up while it plays, or the caption alone for `seconds` when a line has
+no audio, the audio fails or autoplay is refused (the streamer's Chromium allows it). A page opened mid-broadcast starts
+with the lines still under way by the caster's `speaking_until`, not its backlog.
+
+Agent-written text (notes, plans, messages) and the casters' lines are shown as text, never as markup. The normal
+viewer and recordings show the same notes, plans and messages: the agent card and each agent's panel carry its newest
+note and its plan, and a diplomacy section lists the messages up to the turn shown, newest first, those to or from the
+followed agent when one is followed.
