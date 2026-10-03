@@ -153,7 +153,10 @@ client's view (docs/recording.md).
 | Xvfb, Mesa and the other Debian packages the target installs | their own licences, in `/usr/share/doc/*/copyright` | their authors | Debian |
 | OpenCiv3's art, from `C7-Game/Assets` | **none**: mostly community art from CivFanatics, not licensed for redistribution | its artists | <https://github.com/C7-Game/Assets>, at the commit the client pins |
 
-Because the client image contains the art, it is not pushed to a public registry.
+Because the client image contains the art, it is not pushed to a public registry. The image also holds the art
+converted for the play page (`/opt/openciv3-client/webart`, made by `agentenv_openciv3.webart` when the image is
+built), with the Noto Sans fonts the client's labels use (SIL Open Font License 1.1 and Apache-2.0, their licence
+alongside); the env serves them only to the play page.
 
 ## In the Python environment
 

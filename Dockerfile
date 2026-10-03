@@ -87,6 +87,8 @@ COPY client/capture.sh client/deadline.sh /opt/openciv3-client/
 ENV DOTNET_ROOT=/usr/share/dotnet GODOT=/opt/godot/godot OPENCIV_CLIENT=/opt/openciv3-client LIBGL_ALWAYS_SOFTWARE=1 \
     GODOT_ARGS="--rendering-driver opengl3 --rendering-method gl_compatibility"
 RUN "$GODOT" --version >/dev/null
+# The client's art for the browser's play page (docs/play.md, section 6): converted here so it stays in this image.
+RUN python -m agentenv_openciv3.webart /opt/openciv3-client/OpenCiv3/C7 /opt/openciv3-client/webart
 
 # The default target is the env without the client.
 FROM env

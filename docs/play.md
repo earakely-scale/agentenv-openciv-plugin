@@ -55,17 +55,34 @@ Args: none (plays the request's seat, like every command). Everything the seat k
 
 ```jsonc
 {"turn": 12, "width": 60, "height": 60, "wrap_x": true,
- "players": [{"index": 0, "civ": "Barbarians", "barbarian": true, "me": false},
-             {"index": 1, "civ": "Rome", "barbarian": false, "me": true}],
- "tiles": [[x, y, "grassland", "forest" | null, river 0|1, owner index | -1, visible 0|1,
-            "Wheat" | null, ["road", "mine", ...]]],          // every tile the seat knows, nothing else
+ "players": [{"index": 0, "civ": "Barbarians", "barbarian": true, "me": false, "color": "#f0f8ff"},
+             {"index": 1, "civ": "Rome", "barbarian": false, "me": true, "color": "#e6194b"}],
+ "tiles": [[x, y, "grassland", "forest" | null, river edges 0..255, owner index | -1, visible 0|1,
+            "Wheat" | null, ["road", "mine", "barbarian_camp", ...], bonus 0|1]],   // every tile the seat knows, nothing else
  "cities": [{"x", "y", "name", "owner", "size", "capital",    // on known tiles
-             "id": "c1", "producing": "Settler", "turns_to_complete": 6, "turns_to_grow": 4}],   // the last four: own cities only
- "units": [{"x", "y", "owner", "type", "count", "id": "u3"}]}  // on visible tiles; id on the seat's own units only
+             "era": 0, "walls": false, "disorder": false,     // every known city
+             "id": "c1", "producing": "Settler", "turns_to_complete": 6, "turns_to_grow": 4,
+             "starving": false}],                              // the last five: own cities only
+ "units": [{"x", "y", "owner", "type", "count", "id": "u3",   // on visible tiles; id on the seat's own units only
+            "hp": 3, "hp_max": 3, "fortified": false, "combat": true}]}
 ```
 
 Terrain and overlay names are the engine's lower-case keys, as in the world snapshot; a resource shows only once the
-seat knows about it, as in `map`. Reading it never draws from the engine's RNG.
+seat knows about it, as in `map`. Reading it never draws from the engine's RNG. Rows only ever grow at the end, so a
+reader of the old nine columns keeps working. What the OpenCiv3 client's art needs (details in
+[protocol.md](protocol.md#known_map)):
+
+- `river` is the tile's river edges, `NE=1, SE=2, SW=4, NW=8` (then `N=16, E=32, S=64, W=128`, which only Civ III
+  maps set); 0 means no river, so it still reads as a flag. An edge shows on both of its tiles, with the opposite
+  bit. The client's river sprite at a tile's east corner is cell `(N&4||W&1) + 2(E&8||N&2) + 4(W&2||S&8) +
+  8(S&1||E&4)` of `mtnRivers.png`, with W the tile and N, E, S its NE, E and SE neighbours.
+- `bonus` marks bonus grassland, where the client draws the shield from `tnt.png`; `barbarian_camp` in the
+  improvements marks a camp.
+- `players[].color` is the client's colour for the player, after its primary/secondary pick.
+- A city's `era` (0-3, its owner's) is the sprite row; `walls` picks the walled sprite for a town (size 6 or less);
+  `disorder` adds the fire; `starving` (own cities) turns the label's population red.
+- A unit's `hp`/`hp_max` fill the hit point bar, drawn only when `combat`; `fortified` frames it. A foreign group
+  shows the unit the client would draw of it, its best defender.
 
 ## 4. The play API (the env, next to `/mcp`)
 
@@ -129,3 +146,33 @@ nothing is being researched. While the others play, a banner names who the turn 
 
 `playtest/bots.py --humans Rome=you` starts a local match with a human seat against scripted bots, and
 `playtest/play_e2e.mjs` plays that seat in a headless browser through this UI, end to end.
+
+## 6. The game's art
+
+With the client in the image (`docker build --target client`, or `agent-env openciv3 setup --client`), `/play` draws
+the map with the OpenCiv3 client's own art, the way the client draws it. **T** switches between it and the plain map
+(the browser remembers the choice); without the client the page has only the plain map.
+
+- **What it draws:** the client's terrain (its corner sprites, so coasts and terrain edges blend as in the game),
+  forests, jungle, marsh, hills, mountains and volcanoes, rivers along tile edges, roads, railroads, irrigation, mines,
+  fortresses, pollution and ruins, resources, bonus grassland, barbarian camps, borders in each civ's colour, the fog
+  of war's soft edge, cities (town, city or metropolis by size, by their owner's era, walls on a walled town) with
+  their labels, and units: each unit's sprite tinted in its civ's colour, facing where it last moved, sliding to its
+  new tile with its run animation; under it its HP bar (framed when fortified), its movement light and its stack
+  marks, and the turning cursor under the active unit. The HUD takes the client's art too: the status scroll with
+  the next-turn dome (Enter or Space ends the turn when no unit waits), the minimap's frame and colours, and the unit
+  order buttons. Colours are the client's (`known_map` `players[].color`).
+- **Where it comes from:** `python -m agentenv_openciv3.webart <C7 dir> <out dir>` converts the client's art
+  (C7-Game/Assets) for the browser when the client image is built: the PNG sheets as they are (losslessly smaller),
+  and each unit's FLC animations decoded (`civ3flc.py`) into a sheet per unit with a row per action and direction, and
+  a mask of its civ-colour pixels. `manifest.json` names them. Out of the image, `OPENCIV_WEB_ART` points the env at
+  a converted directory.
+- **Served:** `GET /play/art/<path>` (no token: it is the same for every seat), the manifest revalidated, the rest
+  cached for good under the art's id. 404 when the env has no art; the view's `game.art` says whether it has.
+- **Rules followed:** the client's draw order (each layer over every tile before the next; fog over cities, under
+  units), offsets and sprite choices (vendor/OpenCiv3/C7: MapView.cs, Map/*.cs, CityScene.cs, CityLabelScene.cs,
+  UnitLayer.cs). Where the client draws a random variant per session (deep water, ruins), a hash of the position
+  stands in. Units hold their last idle frame, as OpenCiv3 draws them; the civ colour keeps the artist's shading,
+  where OpenCiv3 paints it flat.
+- **Licence:** the art carries no licence (THIRD_PARTY_NOTICES.md): it stays in the client image, and the env sends
+  it only to the play page's browser, like the client's view in the live viewer.

@@ -86,6 +86,8 @@ async function pickResearch() {
 
 let founded = false, setBuild = false, rated = false, foreign = false, hovered = false, explored = false, moved = 0;
 let lastTurn = -1, turnsPlayed = 0, keyEnds = 0;
+const ARROWS = ["ArrowUp", "ArrowRight", "ArrowDown", "ArrowLeft"];
+let tried = new Set();   // unit:arrow refused this turn
 const t0 = Date.now();
 while (turnsPlayed < MAX_TURNS) {
   // wait for our turn: the turn moved on (or the game ended) and the seat hasn't ended it
@@ -96,6 +98,7 @@ while (turnsPlayed < MAX_TURNS) {
   if (v.game.game_over) break;
   lastTurn = v.game.turn;
   turnsPlayed++;
+  tried = new Set();
   await sleep(300);
   await closeDialogs();
   if (!(await view()).state.research?.current) await pickResearch();
@@ -114,18 +117,29 @@ while (turnsPlayed < MAX_TURNS) {
       await page.screenshot({path: path.join(shots, `T${lastTurn}-founded.png`)});
       continue;
     }
-    if (u.type === "Settler" || u.type === "Worker") {
-      // a worker automates; a settler without a site walks a tile east
-      if (u.orders.includes("auto_work")) { await page.keyboard.press("a"); }
-      else { await page.keyboard.press("ArrowRight"); }
-    } else if (moved < 3) {
-      await page.keyboard.press(["ArrowUp", "ArrowRight", "ArrowDown", "ArrowLeft"][moved % 4]);
+    if (u.orders.includes("auto_work") && (u.type === "Worker" || u.type === "Settler")) {
+      await page.keyboard.press("a");                      // a worker automates
+    } else if (u.type === "Settler" && ARROWS.some(k => !tried.has(`${u.id}:${k}`))) {
+      // a settler without a site here walks on, a direction it hasn't been refused this turn
+      const key = ARROWS.find(k => !tried.has(`${u.id}:${k}`));
+      tried.add(`${u.id}:${key}`);
+      await page.keyboard.press(key);
+      await waitFor(async () => { const w = (await view()).state.units.find(x => x.id === u.id);
+        return !w || JSON.stringify([w.x, w.y, w.moves_left, w.status]) !== before; }, 4_000, "settler moved").catch(() => null);
+      continue;
+    } else if (u.type === "Settler") {
+      await page.keyboard.press("Space");                  // nowhere to go: skip its turn
+    } else if (moved < 3 && ARROWS.some(k => !tried.has(`${u.id}:${k}`))) {
+      // a tile the unit can't enter (water, a foreign border at peace) is refused: try another direction
+      const key = ARROWS.find(k => !tried.has(`${u.id}:${k}`) && k === ARROWS[moved % 4]) || ARROWS.find(k => !tried.has(`${u.id}:${k}`));
+      tried.add(`${u.id}:${key}`);
+      await page.keyboard.press(key);
       const after = await waitFor(async () => {
         const w = (await view()).state.units.find(x => x.id === u.id);
         return w && JSON.stringify([w.x, w.y, w.moves_left, w.status]) !== before ? w : null;
-      }, 10_000, "unit moved").catch(() => null);
+      }, 4_000, "unit moved").catch(() => null);
       if (after && (after.x !== u.x || after.y !== u.y)) { moved++; check(true, `T${lastTurn}: arrow key moves ${u.id} (${u.x},${u.y}) → (${after.x},${after.y})`); }
-      if (after && after.needs_orders) continue;
+      continue;
     } else if (!explored && u.orders.includes("explore")) {
       await page.keyboard.press("x"); explored = true;
       log("explore", u.id);

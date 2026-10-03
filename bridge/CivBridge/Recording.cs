@@ -37,7 +37,7 @@ sealed partial class Session {
 			tiles.Add(new JsonArray(
 				t.XCoordinate, t.YCoordinate, t.baseTerrainType.Key,
 				t.overlayTerrainType != t.baseTerrainType ? t.overlayTerrainType.Key : null,
-				owner == null ? -1 : index[owner], t.BordersRiver() ? 1 : 0, mask));
+				owner == null ? -1 : index[owner], RiverMask(t), mask));
 		}
 		return new JsonObject {
 			["schema"] = SnapshotSchema,

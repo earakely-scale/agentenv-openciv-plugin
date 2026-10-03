@@ -177,6 +177,8 @@ NODE_PATH=$(npm root -g) node playtest/play_e2e.mjs /tmp/hv          # waits for
 ```
 
 Open the printed `PLAY` link yourself instead to play; `--human-turn-seconds` sets how long the env waits for you.
+To play in the client's art without the client image, convert it once from a client tree and point the env at it:
+`.venv/bin/python -m agentenv_openciv3.webart <OpenCiv3/C7> /tmp/webart`, then run with `OPENCIV_WEB_ART=/tmp/webart`.
 
 ## Testing the harness without the engine
 

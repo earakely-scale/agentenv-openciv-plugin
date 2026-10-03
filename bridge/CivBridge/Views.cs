@@ -218,25 +218,29 @@ sealed partial class Session {
 			tiles.Add(new JsonArray(
 				t.XCoordinate, t.YCoordinate, t.baseTerrainType.Key,
 				t.overlayTerrainType != t.baseTerrainType ? t.overlayTerrainType.Key : null,
-				t.BordersRiver() ? 1 : 0, owner == null ? -1 : index[owner], visible ? 1 : 0, KnownResource(t),
-				Json.Strings(t.overlays.GetImprovements().Select(i => i.key == "barbarianCamp" ? "barbarian_camp" : i.key))));
+				RiverMask(t), owner == null ? -1 : index[owner], visible ? 1 : 0, KnownResource(t), Json.Strings(ImprovementKeys(t)),
+				BonusGrassland(t) ? 1 : 0));
 			if (!visible || t.unitsOnTile.Count == 0) continue;
 			// As TileUnits: the seat's own units one by one with their ids, everyone else's grouped by owner and type.
 			foreach (MapUnit u in t.unitsOnTile.Where(u => u.owner == human).OrderBy(u => ids.Of(u) is string id ? Ids.Number(id) : int.MaxValue))
-				units.Add(new JsonObject {
+				units.Add(WithHitPoints(new JsonObject {
 					["x"] = t.XCoordinate, ["y"] = t.YCoordinate, ["owner"] = index[human], ["type"] = u.unitType.name, ["count"] = 1, ["id"] = ids.Of(u),
-				});
+				}, u));
+			// A group's hit points are those of the unit the client would draw of it (C7/Map/UnitLayer.cs, selectUnitToDisplay:
+			// the best defender, skipping units aboard a transport). Within one type that is the healthiest, fortified first.
 			foreach (var g in t.unitsOnTile.Where(u => u.owner != human).GroupBy(u => (Owner: index[u.owner], Type: u.unitType.name)))
-				units.Add(new JsonObject {
+				units.Add(WithHitPoints(new JsonObject {
 					["x"] = t.XCoordinate, ["y"] = t.YCoordinate, ["owner"] = g.Key.Owner, ["type"] = g.Key.Type, ["count"] = g.Count(),
-				});
+				}, g.OrderBy(u => u.loadedOnUnitId != null).ThenByDescending(u => u.hitPointsRemaining).ThenByDescending(u => u.isFortified).First()));
 		}
 		var cities = new JsonArray();
 		foreach (City c in gd.cities) {
 			if (!Tile.IsTileValid(c.location) || !knowledge.isTileKnown(c.location) || !index.ContainsKey(c.owner)) continue;
+			// era, walls and disorder are what the client's CityScene draws for every city (C7/Map/CityScene.cs).
 			var o = new JsonObject {
 				["x"] = c.location.XCoordinate, ["y"] = c.location.YCoordinate, ["name"] = c.name, ["owner"] = index[c.owner],
 				["size"] = c.residents.Count, ["capital"] = c.IsCapital(),
+				["era"] = Math.Clamp(c.owner.EraIndex(), 0, EraNames.Length - 1), ["walls"] = c.HasWalls(), ["disorder"] = c.isInCivilDisorder,
 			};
 			if (c.owner == human) {
 				int food = c.FoodGrowthPerTurn();
@@ -244,9 +248,11 @@ sealed partial class Session {
 				o["producing"] = c.itemBeingProduced?.name;
 				o["turns_to_complete"] = ProductionEta(c);
 				o["turns_to_grow"] = food > 0 ? Json.Turns(c.TurnsUntilGrowth()) : null;
+				o["starving"] = food < 0;
 			}
 			cities.Add(o);
 		}
+		int[] colors = ClientColorIndexes();
 		return new JsonObject {
 			["turn"] = gd.turn,
 			["width"] = gd.map.numTilesWide,
@@ -254,6 +260,7 @@ sealed partial class Session {
 			["wrap_x"] = gd.map.wrapHorizontally,
 			["players"] = Json.Array(gd.players, p => new JsonObject {
 				["index"] = index[p], ["civ"] = Owner(p), ["barbarian"] = p.isBarbarians, ["me"] = p == human,
+				["color"] = "#" + ClientCivColors[colors[index[p]]],
 			}),
 			["tiles"] = tiles,
 			["cities"] = cities,
@@ -269,7 +276,7 @@ sealed partial class Session {
 		o["overlay"] = t.overlayTerrainType != t.baseTerrainType ? t.overlayTerrainType.DisplayName : null;
 		o["resource"] = KnownResource(t);
 		o["river"] = t.BordersRiver();
-		o["improvements"] = Json.Strings(t.overlays.GetImprovements().Select(i => i.key == "barbarianCamp" ? "barbarian_camp" : i.key));
+		o["improvements"] = Json.Strings(ImprovementKeys(t));
 		o["owner"] = t.OwningPlayer()?.civilization.name;
 		o["city"] = t.HasCity(out City c)
 			? new JsonObject { ["name"] = c.name, ["owner"] = c.owner.civilization.name, ["size"] = c.residents.Count, ["id"] = ids.Of(c) }
@@ -279,6 +286,66 @@ sealed partial class Session {
 		string why = FoundSite(t);
 		o["city_site"] = why == null ? new JsonObject { ["ok"] = true } : new JsonObject { ["ok"] = false, ["reason"] = why };
 		return o;
+	}
+
+	/// <summary>What the client's UnitLayer draws beside a unit: the hit point bar, only for a unit that can fight, framed when
+	/// it is fortified.</summary>
+	static JsonObject WithHitPoints(JsonObject o, MapUnit u) {
+		o["hp"] = u.hitPointsRemaining;
+		o["hp_max"] = u.maxHitPoints;
+		o["fortified"] = u.isFortified;
+		o["combat"] = u.unitType.attack > 0 || u.unitType.defense > 0;
+		return o;
+	}
+
+	/// <summary>
+	/// A tile's improvement keys, plus "barbarian_camp" for a camp: the engine keeps camps as a tile flag
+	/// (Tile.hasBarbarianCamp, drawn by the client's BuildingLayer in C7/MapView.cs), not as an improvement.
+	/// </summary>
+	static IEnumerable<string> ImprovementKeys(Tile t) {
+		IEnumerable<string> keys = t.overlays.GetImprovements().Select(i => i.key);
+		return t.hasBarbarianCamp ? keys.Append("barbarian_camp") : keys;
+	}
+
+	/// <summary>
+	/// The tile's river edges as a bitmask: NE=1, SE=2, SW=4, NW=8 (the edges the client's RiverLayer draws, C7/MapView.cs),
+	/// then N=16, E=32, S=64, W=128 (the corner flags, which only the client's "oasis" case reads and the map generator never
+	/// sets). The engine flags an edge on the tiles of both banks, so a tile's NE bit is its NE neighbour's SW bit, and so on.
+	/// Non-zero exactly when Tile.BordersRiver().
+	/// </summary>
+	static int RiverMask(Tile t) =>
+		(t.riverNortheast ? 1 : 0) | (t.riverSoutheast ? 2 : 0) | (t.riverSouthwest ? 4 : 0) | (t.riverNorthwest ? 8 : 0)
+		| (t.riverNorth ? 16 : 0) | (t.riverEast ? 32 : 0) | (t.riverSouth ? 64 : 0) | (t.riverWest ? 128 : 0);
+
+	/// <summary>Bonus grassland, when it shows: the client's TntLayer draws the marker, and Tile_Yield adds the shield, only on a
+	/// grassland overlay (a forest on bonus grassland hides it until cleared).</summary>
+	static bool BonusGrassland(Tile t) => t.isBonusShield && t.overlayTerrainType.Key == "grassland";
+
+	// The civ colours of the client's standalone art, color_0 to color_31 (C7/Lua/standalone/textures.lua, civ_colors).
+	static readonly string[] ClientCivColors = [
+		"f0f8ff", "e6194b", "f58231", "ffe119", "3cb44b", "4363d8", "000075", "fabed4", "911eb4", "9a6324", "aaffc3", "42d4f4",
+		"f032e6", "808000", "dcbeff", "a9a9a9", "008080", "ffd700", "800000", "00ff00", "ffc0cb", "4682b4", "d2b48c", "ff7f50",
+		"6a5acd", "2e8b57", "daa520", "c71585", "556b2f", "8b4513", "b0c4de", "696969",
+	];
+
+	/// <summary>
+	/// The colour index the client gives each player, by gd.players index (C7/Textures/PlayerTextureUtil.cs,
+	/// InitializeCivColors): each takes its primary colour, or its secondary when the primary is taken; then, in order, a
+	/// player whose colour is shared drops it and picks again the same way.
+	/// </summary>
+	int[] ClientColorIndexes() {
+		var used = new Dictionary<int, int>();
+		void Load(int i) {
+			Player p = gd.players[i];
+			if (!used.ContainsKey(i)) used[i] = used.ContainsValue(p.primaryColorIndex) ? p.secondaryColorIndex : p.primaryColorIndex;
+		}
+		for (int i = 0; i < gd.players.Count; i++) Load(i);
+		for (int i = 0; i < gd.players.Count; i++)
+			if (used.Values.Count(v => v == used[i]) > 1) {
+				used.Remove(i);
+				Load(i);
+			}
+		return Enumerable.Range(0, gd.players.Count).Select(i => Math.Clamp(used[i], 0, ClientCivColors.Length - 1)).ToArray();
 	}
 
 	JsonArray TileUnits(Tile t) {

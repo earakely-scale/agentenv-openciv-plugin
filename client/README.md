@@ -10,6 +10,7 @@ Mesa's CPU renderer (`--rendering-driver opengl3`), so it needs no GPU. The env 
 | `prepare.sh` | Builds a client tree in a work dir. It copies the pinned `vendor/OpenCiv3` sources, adds the art at the commit the submodule pins for `C7/Assets` (`716625c`, fetched over HTTPS), the `FrameCapture` autoload and standalone mode. Then it runs `dotnet build` and `godot --import`. |
 | `FrameCapture.cs` | The capture autoload, copied into `C7/Capture/`. |
 | `capture.sh` | Runs Godot once over a directory of saves and writes one PNG per save (or per save and seat), under a hard deadline. |
+| (`agentenv_openciv3.webart`) | Run by the Dockerfile after the client is copied in: converts the client's art for the browser's play page into `webart/` next to the client ([docs/play.md](../docs/play.md#6-the-games-art)). |
 | `deadline.sh` | `run_with_deadline`, used by both scripts. macOS has no `timeout(1)`, and a Godot window never exits on its own. |
 
 ## How a capture works
