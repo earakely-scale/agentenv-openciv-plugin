@@ -51,6 +51,70 @@ def test_the_page_embeds_the_app_and_the_data():
     assert json.loads(embedded[1].split(";</script>", 1)[0]) == videos
 
 
+def test_the_page_carries_the_client_art_painter_in_its_own_scope():
+    """The live page brings map.js, art.js and viewart.js inside one function (their helpers share names with
+    app.js's), before app.js, which loads the art from play/art/ when the env has it."""
+    page = viewer.page()
+    kit = page.index("const ArtKit = (() => {")
+    assert kit < page.index("class ViewArt") < page.index("return {Art, ViewArt};") < page.index("class Match {")
+    assert page.count("class ArtPainter") == 1 and 'ArtKit.Art.load("play/art/")' in page
+
+
+def snapshot(turn: int, *, tiles, cities=(), units=(), moves=None, battles=None) -> dict:
+    snap = {"schema": 2, "turn": turn, "seed": 1, "turn_limit": 10, "map": {"width": 8, "height": 4, "wrap_x": True},
+            "seats": [{"index": 1, "civ": "Rome", "label": "opus"}],
+            "players": [{"index": 0, "civ": "Barbarians", "score": {k: 0 for k in matchdata.SCORE_KEYS}},
+                        {"index": 1, "civ": "Rome", "is_human": True, "label": "opus",
+                         "score": {k: 0 for k in matchdata.SCORE_KEYS}}],
+            "tiles": tiles, "cities": list(cities), "units": list(units), "events": []}
+    if moves is not None:
+        snap["moves"], snap["battles"] = moves, battles or []
+    return snap
+
+
+def test_match_data_carries_what_the_client_art_draws():
+    """How tiles look (overlay, resource, improvements, bonus grassland) as per-turn changes, river edges, a city's era
+    and walls, a unit's hit points when they aren't a healthy 3, and the turn's moves and battles (docs/viewer.md)."""
+    tiles0 = [[0, 0, "grassland", "forest", -1, 3, 1, None, [], 0],
+              [2, 0, "plains", None, 1, 0, 1, "Wheat", ["road"], 0],
+              [1, 1, "grassland", None, 1, 0, 0, None, [], 1]]
+    tiles1 = [[0, 0, "grassland", None, -1, 3, 1, None, [], 1],
+              [2, 0, "plains", None, 1, 0, 1, "Wheat", ["road", "irrigation"], 0],
+              [1, 1, "grassland", None, 1, 0, 1, None, [], 1]]
+    city = {"id": "city-1", "x": 2, "y": 0, "name": "Rome", "owner": 1, "size": 1, "capital": True, "production": None,
+            "era": 1, "walls": True}
+    healthy = {"id": "Warrior-1", "x": 1, "y": 1, "owner": 1, "type": "Warrior", "hp": 3, "hp_max": 3,
+               "fortified": False}
+    hurt = {**healthy, "id": "Warrior-2", "hp": 2, "fortified": True}
+    side = {"owner": 1, "type": "Warrior", "x": 1, "y": 1, "hp_before": 3, "hp_after": 2, "hp_max": 3}
+    battle = {"id": 1, "seq": 4, "turn": 0, "kind": "attack", "attacker": side,
+              "defender": {**side, "owner": 0, "type": "Horseman", "x": 2, "y": 0, "hp_after": 0},
+              "rounds": ["a", "d", "a", "a", "a"], "winner": "attacker", "city": None, "captured": False,
+              "razed": False, "seen": 1}
+    walk = {"seq": 3, "unit": "Warrior-1", "owner": 1, "type": "Warrior", "path": [[0, 0], [1, 1]], "seen": 1}
+    snaps = [snapshot(0, tiles=tiles0, cities=[city], units=[healthy], moves=[]),
+             snapshot(1, tiles=tiles1, cities=[city], units=[healthy, hurt], moves=[walk], battles=[battle])]
+    d = matchdata.MatchData.from_snapshots(snaps).document()
+    assert d["meta"]["resources"] == ["Wheat"] and d["meta"]["improvements"] == ["road", "irrigation"]
+    assert [t[4] for t in d["static"]["tiles"]] == [3, 0, 0], "the river's edges"
+    t0, t1 = d["turns"]
+    forest, grass = matchdata.TERRAIN.index("forest"), matchdata.TERRAIN.index("grassland")
+    assert t0["looks"] == [[1, -1, 0, 1, 0], [2, -1, -1, 0, 1]] and forest == d["static"]["tiles"][0][3]
+    assert t1["looks"] == [[0, -1, -1, 0, 1], [1, -1, 0, 3, 0]] and grass != forest, "the forest cleared, irrigation"
+    assert t0["cities"][0][8:] == [1, 1]
+    assert t1["units"] == [[1, 1, 1, 1, 0], [2, 1, 1, 1, 0, 2, 3, 1]]   # id 0 is the city's
+    assert "moves" not in t0 and "battles" not in t0
+    assert t1["moves"] == [[3, 1, 1, 0, 1, 0, 0, 1, 1]]
+    assert t1["battles"] == [[4, 0, "a", "adaaa", 0, 1, 1, 0, 1, 1, 3, 2, 3, 0, 1, 2, 0, 3, 0, 3]]
+    assert d["meta"]["unit_types"] == ["Warrior", "Horseman"]
+    # Snapshots from before the art's fields: no looks, moves or battles, and the rest as it was.
+    old = [snapshot(t, tiles=[r[:7] for r in tiles0], units=[{k: v for k, v in healthy.items() if k in
+                                                               ("id", "x", "y", "owner", "type")}]) for t in (0, 1)]
+    od = matchdata.MatchData.from_snapshots(old).document()
+    assert not {"looks", "moves", "battles"} & {k for t in od["turns"] for k in t}
+    assert od["turns"][1]["units"] == [[0, 1, 1, 1, 0]] and od["meta"]["resources"] == []
+
+
 def test_the_action_log_counts_every_call_per_turn():
     log = ActionLog(None)
     for turn, tool, ok in [(1, "get_turn_brief", True), (1, "unit_order", False), (2, "end_turn", True),

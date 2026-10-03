@@ -38,6 +38,7 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 
 	public async Task<JsonNode> Run(string cmd, Args a) {
 		MapUnit.combatObserver = this;
+		MapUnit.moveObserver = this;
 		if (cmd == "new_game") return NewGame(a);
 		if (cmd == "load") return Load(a);
 		if (!Commands.Contains(cmd))

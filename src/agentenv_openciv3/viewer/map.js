@@ -48,6 +48,7 @@ class World {
     for (const [x, y, terrain, overlay, river, owner, visible, resource, improvements, bonus] of map.tiles)
       this.tiles.set(x * 4096 + y, {x, y, terrain, overlay, river, owner, visible, resource, improvements: improvements || [], bonus: !!bonus});
     this.cities = new Map(map.cities.map(c => [c.x * 4096 + c.y, c]));
+    this.moves = map.moves || null;   // the steps the seat saw (patches/0012); null from an older bridge
     this.units = new Map();
     for (const u of map.units) {
       const k = u.x * 4096 + u.y;

@@ -54,6 +54,8 @@ class Art {
     }
     return u.ready ? u : null;
   }
+  // A unit's animation by name ("run", "attack1", "death", ...), or its default one when its art has no such.
+  static act(u, name) { return u.spec.actions[name] || u.spec.actions.default; }
   // One frame of a unit in a civ's colour, cached: the unit, then its civ-colour pixels tinted with the colour and
   // shaded by the artist's grey (UnitTint.gdshader paints them flat; keeping the shade reads better).
   unitCell(u, action, dir, frame, color) {
@@ -262,14 +264,16 @@ class ArtPainter {
     }
     // the city's workable tiles, while its screen is open
     if (o.cityRadius) this._cityRadius(g, world, o.cityRadius);
-    // cities: the sprite by size and era, the label below
+    // cities: the sprite by size and era, the label below (unless o.labels is false: the viewer places its own)
     const labels = [];
     for (const p of known) { const c = world.city(p.x, p.y); if (c) labels.push(this._city(g, world, c, p, z)); }
+    if (o.labels === false) labels.length = 0;
     // the city screen's tile assignment, while it is open (screens.js)
     if (o.cityScreen) this._cityScreen(g, world, o.cityScreen);
-    // fog of war, at each tile's north corner, over every position in view (unknown land goes black)
+    // fog of war, at each tile's north corner, over every position in view (unknown land goes black); none where the
+    // whole world is in sight (the viewer's spectator view), which would only fringe the map's edges
     const st = t => !t ? 0 : t.visible ? 2 : 1;
-    for (const p of all) {
+    for (const p of world.noFog ? [] : all) {
       const n = st(T(p.x, p.y - 2)), nw = st(T(p.x - 1, p.y - 1)), ne = st(T(p.x + 1, p.y - 1)), me = st(p.t);
       if (n + nw + ne + me === 0 || (n & nw & ne & me) === 2) continue;   // all black already, or all in sight
       const col = n + 3 * nw, row = ne + 3 * me;
@@ -460,62 +464,160 @@ class ArtPainter {
     this._track(world, mine, now);
     ctx.save();
     ctx.imageSmoothingEnabled = z < 0.999;
+    const walks = this._walksNow(world, now);
     const fight = this._battleNow(now), busy = fight ? new Set([fight.a, fight.d].map(s => world.key(s.x, s.y))) : null;
-    const tiles = this.plain._onScreen(world, cam, w, h).filter(([t]) => t.visible && world.unitsAt(t.x, t.y).length)
-      .filter(([t]) => !busy || !busy.has(world.key(t.x, t.y)))
+    const hidden = new Map();   // tile -> the units walking there, not there yet
+    for (const c of walks) {
+      const k = world.key(...c.to);
+      if (!hidden.has(k)) hidden.set(k, []);
+      hidden.get(k).push(c);
+    }
+    const tiles = this.plain._onScreen(world, cam, w, h)
+      .map(([t, sx, sy]) => [t, sx, sy, t.visible ? this._without(world.unitsAt(t.x, t.y), hidden.get(world.key(t.x, t.y))) : []])
+      .filter(([t, , , us]) => us.length && (!busy || !busy.has(world.key(t.x, t.y))))
       .sort((a, b) => a[0].y - b[0].y || a[2] - b[2]);
-    for (const [t, sx, sy] of tiles) {
-      const us = world.unitsAt(t.x, t.y), own = us.filter(u => u.owner === world.me);
+    for (const [t, sx, sy, us] of tiles) {
+      const own = us.filter(u => u.owner === world.me);
       const top = (sel && own.find(u => u.id === sel.id)) || own.find(u => !NONCOMBAT.has(u.type)) || own[0] || us[0];
       const count = us.reduce((n, u) => n + (u.count || 1), 0);
       const st = top.id != null ? mine.get(top.id) : null, mv = top.id != null ? this.moves.get(top.id) : null;
       let ox = 0, oy = 0, action = (st?.status ?? (top.fortified ? "fortified" : "")) === "fortified" ? "fortify" : "default", frame = 0;
-      const facing = (top.id != null && this.facing.get(top.id)) || "SE";
+      const facing = (top.id != null ? this.facing.get(top.id) : this.facing.get(this._fkey(top, t.x, t.y))) || "SE";
       const art = this.art.unit(top.type, () => draw());
       if (mv && art) {
-        const run = art.spec.actions.run, dur = run.frames * run.ms, p = (now - mv.t0) / dur;
+        const run = Art.act(art, "run"), dur = run.frames * run.ms, p = (now - mv.t0) / dur;
         if (p < 1) { ox = -mv.dx * (1 - p) * 64 * z; oy = -mv.dy * (1 - p) * 32 * z; action = "run"; frame = Math.floor(p * run.frames); }
         else this.moves.delete(top.id);
       }
       const cx = sx + ox, cy = sy + oy;
-      // the HUD first, as the client has it under the unit
       const inForeignCity = world.city(t.x, t.y) && top.owner !== world.me;
-      const hp = st ? st.hp : top.hp, hpMax = st ? st.hp_max : top.hp_max, combat = top.combat ?? !NONCOMBAT.has(top.type);
-      let barTop;
-      if (combat && hp != null && hpMax) {
-        const s = hz * z, seg = (hpMax <= 6 ? 4 : hpMax <= 12 ? 2 : 1) * s, total = seg * hpMax + (hpMax - 1) * s;
-        const bx = cx - 26 * z, by = cy - 8 * z - total;
-        ctx.fillStyle = "#000"; ctx.fillRect(bx, by, 2 * s, total);
-        const f = hp / hpMax;
-        ctx.fillStyle = f >= 0.67 ? "#0f0" : f >= 0.34 && hpMax > 2 ? "#ff0" : "#f00";
-        for (let i = 0; i < hp; i++) ctx.fillRect(bx, by + total - seg - (seg + s) * i, 2 * s, seg);
-        if (action === "fortify") { ctx.strokeStyle = "#fff"; ctx.lineWidth = s; ctx.strokeRect(bx - 0.5 * s, by - 0.5 * s, 3 * s, total + s); }
-        barTop = by;
-      } else barTop = cy - 34 * z;
-      if (top.owner === world.me && st && !inForeignCity) {
-        const led = this.art.img("led"), i = !(st.moves_left > 0.01) ? 4 : st.moves_left >= st.moves_max ? 0 : 2, s = hz * z;
-        if (led) ctx.drawImage(led, 1 + 7 * i, 1, 6, 6, cx - 28 * z, barTop - 6 * s, 6 * s, 6 * s);
-      }
-      if (count > 1 && !inForeignCity) {
-        const s = hz * z;
-        for (let k = 0; k < Math.min(count, 8); k++) {
-          const lx = cx - 27 * z, ly = cy - 5 * z + 3 * s * k;
-          ctx.fillStyle = "#fff"; ctx.fillRect(lx, ly, 4 * s, s);
-          ctx.fillStyle = "rgb(75,75,75)"; ctx.fillRect(lx, ly + s, 4 * s, Math.max(1, s * 0.6));
-        }
-      }
-      if (sel && top.id === sel.id) {   // the turning cursor, under the unit
-        const cur = this.art.img("cursor"), f = Math.floor((now - this.t0) / 120) % 18;
-        if (cur) ctx.drawImage(cur, (f % 9) * 100, Math.floor(f / 9) * 50, 100, 50, cx - 50 * z, cy - 25 * z, 100 * z, 50 * z);
-      }
-      if (art) {
-        const cell = this.art.unitCell(art, action, facing, frame, rgb(world.color(top.owner)));
-        const [ax, ay] = art.spec.anchor;
-        ctx.drawImage(cell, cx - ax * z, cy - ay * z, cell.width * z, cell.height * z);
-      } else this.plain.unitMarker(ctx, world, top, count, cx, cy - 10 * z, cam.hw, false);
+      const led = top.owner === world.me && st && !inForeignCity
+        ? (!(st.moves_left > 0.01) ? 4 : st.moves_left >= st.moves_max ? 0 : 2) : null;
+      this._drawUnit(ctx, world, top, art, cx, cy, {z, hz, cam, action, frame, facing, count: inForeignCity ? 1 : count,
+        hp: st ? st.hp : top.hp, hpMax: st ? st.hp_max : top.hp_max, led,
+        cursor: sel && top.id === sel.id ? Math.floor((now - this.t0) / 120) % 18 : null});
+    }
+    for (const c of walks) {   // the units walking, where they are on their way
+      const [sx, sy] = cam.screen(c.x, c.y, w, h, W);
+      if (sx < -80 || sy < -80 || sx > w + 80 || sy > h + 80) continue;
+      const art = this.art.unit(c.type, () => draw());
+      let action = "default", frame = 0;
+      if (c.f != null && art) { const run = Art.act(art, "run"); action = "run"; frame = Math.floor(c.f * run.frames) % run.frames; }
+      this._drawUnit(ctx, world, {owner: c.owner, type: c.type, id: c.id}, art, sx, sy, {z, hz, cam, action, frame, facing: c.facing});
     }
     if (fight) this._drawBattle(ctx, world, cam, w, h, fight, z, hz);
     ctx.restore();
+  }
+
+  // ---- moves: the steps the seat saw (known_map moves, patches/0012), walked in order with the battles ----
+  // A unit's runs of steps make a chain (its id, or for another civ's unit: its owner and type, each run starting where
+  // the last ended). A chain walks its runs one after the other, a step per play of the unit's run; until it has
+  // walked, the unit stands where it started and not where the map has it. Runs before a battle walk before it starts,
+  // runs after it wait for it to end.
+  queueMoves(list) {
+    if (!this.chains) { this.chains = []; this.walked = new Set(); }
+    const same = (a, b) => a[0] === b[0] && a[1] === b[1];
+    for (const m of [...list || []].sort((a, b) => a.seq - b.seq)) {
+      if (this.walked.has(m.seq) || !m.path || m.path.length < 2) continue;
+      this.walked.add(m.seq);
+      const run = {seq: m.seq, path: m.path, t0: 0, done: false}, id = m.id ?? null;
+      const c = this.chains.find(c => c.owner === m.owner && c.type === m.type && c.id === id && c.runs.at(-1).seq < m.seq
+        && (id != null || same(c.runs.at(-1).path.at(-1), m.path[0])));
+      if (c) c.runs.push(run); else this.chains.push({owner: m.owner, type: m.type, id, runs: [run]});
+    }
+  }
+  get walking() { return !!(this.chains && this.chains.length); }
+  // Where each chain's unit is now: {owner, type, id, x, y, facing, f (how far through a step, while walking), to
+  // (where the map has it)}; chains done are dropped, their units facing the way they went.
+  _walksNow(world, now) {
+    if (!this.chains || !this.chains.length) return [];
+    const fightSeq = this.fight ? this.fight.b.seq : null, next = this.battles && this.battles.length ? this.battles[0].seq : null;
+    const out = [];
+    for (const c of this.chains) {
+      let r = c.runs.find(r => !r.done);
+      const art = this.art.unit(c.type, () => draw()), run = art && Art.act(art, "run");
+      const stepMs = run ? clamp(run.frames * run.ms, 250, 700) : 400;
+      if (r && !r.t0) {   // its turn to walk, unless a battle before it has yet to end
+        const waits = (fightSeq != null && r.seq > fightSeq) || (next != null && r.seq > next);
+        if (!waits) r.t0 = now;
+      }
+      let x, y, f = null, facing = (c.id != null ? this.facing.get(c.id) : null) || c.facing || "SE";
+      if (r && r.t0) {
+        const n = r.path.length - 1, p = (now - r.t0) / stepMs, k = Math.floor(p);
+        const step = (a, b) => { let dx = b[0] - a[0]; if (world.wrap) dx = ((dx % world.W) + world.W + world.W / 2) % world.W - world.W / 2; return [dx, b[1] - a[1]]; };
+        if (k >= n) {
+          r.done = true;
+          const [dx, dy] = step(r.path[n - 1], r.path[n]);
+          c.facing = facing = this._toward(dx, dy);
+          if (c.id != null) this.facing.set(c.id, facing);
+          r = c.runs.find(r => !r.done);
+        } else {
+          const a = r.path[k], [dx, dy] = step(a, r.path[k + 1]);
+          c.facing = facing = this._toward(dx, dy);
+          if (c.id != null) this.facing.set(c.id, facing);
+          f = p - k; x = a[0] + dx * f; y = a[1] + dy * f;
+        }
+      }
+      const last = c.runs.at(-1).path.at(-1);
+      if (!r) { if (c.id == null) this.facing.set(this._fkey(c, ...last), c.facing || "SE"); c.gone = true; continue; }
+      if (x == null) { const at = r.t0 ? r.path.at(-1) : r.path[0]; [x, y] = at; }
+      out.push({owner: c.owner, type: c.type, id: c.id, x, y, f, facing, to: last});
+    }
+    this.chains = this.chains.filter(c => !c.gone);
+    return out;
+  }
+  _toward(dx, dy) { return !dy ? (dx > 0 ? "E" : "W") : !dx ? (dy > 0 ? "S" : "N") : (dy < 0 ? "N" : "S") + (dx > 0 ? "E" : "W"); }
+  _fkey(u, x, y) { return `${u.owner}:${u.type}:${x},${y}`; }
+  // A tile's units less those still walking to it: the seat's by id, another civ's one of its group per walker.
+  _without(us, walkers) {
+    if (!walkers) return us;
+    const out = us.map(u => ({...u}));
+    for (const c of walkers) {
+      const i = out.findIndex(u => c.id != null ? u.id === c.id : u.id == null && u.owner === c.owner && u.type === c.type && (u.count || 1) > 0);
+      if (i < 0) continue;
+      if ((out[i].count || 1) > 1) out[i].count--; else out.splice(i, 1);
+    }
+    return out;
+  }
+
+  // One unit as the client draws it at (cx, cy) on the screen: its HUD under it (the HP bar, framed when fortified, for
+  // a unit that fights; the movement light; a mark per unit stacked there; the turning cursor), then the unit in its
+  // civ's colour; a marker while its art loads.
+  _drawUnit(ctx, world, top, art, cx, cy, {z, hz, cam, action = "default", frame = 0, facing = "SE", count = 1, hp, hpMax,
+    led = null, cursor = null}) {
+    const combat = top.combat ?? !NONCOMBAT.has(top.type);
+    let barTop;
+    if (combat && hp != null && hpMax) {
+      const s = hz * z, seg = (hpMax <= 6 ? 4 : hpMax <= 12 ? 2 : 1) * s, total = seg * hpMax + (hpMax - 1) * s;
+      const bx = cx - 26 * z, by = cy - 8 * z - total;
+      ctx.fillStyle = "#000"; ctx.fillRect(bx, by, 2 * s, total);
+      const f = hp / hpMax;
+      ctx.fillStyle = f >= 0.67 ? "#0f0" : f >= 0.34 && hpMax > 2 ? "#ff0" : "#f00";
+      for (let i = 0; i < hp; i++) ctx.fillRect(bx, by + total - seg - (seg + s) * i, 2 * s, seg);
+      if (action === "fortify") { ctx.strokeStyle = "#fff"; ctx.lineWidth = s; ctx.strokeRect(bx - 0.5 * s, by - 0.5 * s, 3 * s, total + s); }
+      barTop = by;
+    } else barTop = cy - 34 * z;
+    if (led != null) {
+      const im = this.art.img("led"), s = hz * z;
+      if (im) ctx.drawImage(im, 1 + 7 * led, 1, 6, 6, cx - 28 * z, barTop - 6 * s, 6 * s, 6 * s);
+    }
+    if (count > 1) {
+      const s = hz * z;
+      for (let k = 0; k < Math.min(count, 8); k++) {
+        const lx = cx - 27 * z, ly = cy - 5 * z + 3 * s * k;
+        ctx.fillStyle = "#fff"; ctx.fillRect(lx, ly, 4 * s, s);
+        ctx.fillStyle = "rgb(75,75,75)"; ctx.fillRect(lx, ly + s, 4 * s, Math.max(1, s * 0.6));
+      }
+    }
+    if (cursor != null) {   // the turning cursor, under the unit
+      const cur = this.art.img("cursor");
+      if (cur) ctx.drawImage(cur, (cursor % 9) * 100, Math.floor(cursor / 9) * 50, 100, 50, cx - 50 * z, cy - 25 * z, 100 * z, 50 * z);
+    }
+    if (art) {
+      const cell = this.art.unitCell(art, action, facing, frame, rgb(world.color(top.owner)));
+      const [ax, ay] = art.spec.anchor;
+      ctx.drawImage(cell, cx - ax * z, cy - ay * z, cell.width * z, cell.height * z);
+    } else this.plain.unitMarker(ctx, world, top, count, cx, cy - 10 * z, cam.hw, false);
   }
 
   // ---- battles: as the client plays them (MapUnit_Actions.cs): both sides play their attack each round, facing each
@@ -529,19 +631,27 @@ class ArtPainter {
     if (!this.battles || !this.battles.length) return null;
     let f = this.fight;
     if (!f || f.b !== this.battles[0]) {
-      const b = this.battles[0];
-      const ua = this.art.unit(b.attacker.type, () => draw()), ud = this.art.unit(b.defender.type, () => draw());
-      if ((!ua && this.art.m.units[b.attacker.type]) || (!ud && this.art.m.units[b.defender.type])) return null;   // loading
-      const roundMs = Math.max(...[ua, ud].map(u => u ? u.spec.actions.attack1.frames * u.spec.actions.attack1.ms : 600), 400);
-      const rounds = (b.rounds || []).slice(-8);   // a long fight shows its last eight rounds
-      const loser = b.winner === "attacker" ? "d" : b.winner === "defender" ? "a" : null;
-      const deathMs = loser ? (() => { const u = loser === "a" ? ua : ud; return u ? u.spec.actions.death.frames * u.spec.actions.death.ms : 700; })() : 0;
-      f = this.fight = {b, t0: now, a: b.attacker, d: b.defender, ua, ud, rounds, roundMs, loser, deathMs,
-        total: rounds.length * roundMs + deathMs + 350};
-      this.onBattle && this.onBattle(b);
+      const seq = this.battles[0].seq;
+      if (seq != null && this.chains && this.chains.some(c => c.runs.some(r => !r.done && r.seq < seq))) return null;
+      f = this.fightOf(this.battles[0], now);
+      if (!f) return null;   // its units' art is loading
+      this.fight = f;
+      this.onBattle && this.onBattle(f.b);
     }
     if (now - f.t0 > f.total) { this.battles.shift(); this.fight = null; return this._battleNow(now); }
     return f;
+  }
+  // How battle `b` plays from `now`: its units' art, its rounds (a long fight shows its last eight) and timings; null
+  // while a unit's art is still loading.
+  fightOf(b, now) {
+    const ua = this.art.unit(b.attacker.type, () => draw()), ud = this.art.unit(b.defender.type, () => draw());
+    if ((!ua && this.art.m.units[b.attacker.type]) || (!ud && this.art.m.units[b.defender.type])) return null;
+    const roundMs = Math.max(...[ua, ud].map(u => u ? Art.act(u, "attack1").frames * Art.act(u, "attack1").ms : 600), 400);
+    const rounds = (b.rounds || []).slice(-8);
+    const loser = b.winner === "attacker" ? "d" : b.winner === "defender" ? "a" : null;
+    const deathMs = loser ? (() => { const u = loser === "a" ? ua : ud; return u ? Art.act(u, "death").frames * Art.act(u, "death").ms : 700; })() : 0;
+    return {b, t0: now, a: b.attacker, d: b.defender, ua, ud, rounds, roundMs, loser, deathMs,
+      total: rounds.length * roundMs + deathMs + 350};
   }
   _drawBattle(ctx, world, cam, w, h, f, z, hz) {
     const now = performance.now(), t = now - f.t0, W = world.wrap ? world.W : 0;
@@ -563,11 +673,11 @@ class ArtPainter {
       if (dying) {
         if (f.loser === side) {
           const p = (t - f.rounds.length * f.roundMs) / f.deathMs;
-          action = "death"; frame = Math.floor(Math.min(0.999, p) * (art?.spec.actions.death.frames || 1));
+          action = "death"; frame = Math.floor(Math.min(0.999, p) * (art ? Art.act(art, "death").frames : 1));
           if (p > 1) alpha = Math.max(0, 1 - (p - 1) * 3);
           if (!art || !art.spec.actions.death || art.spec.actions.death === art.spec.actions.default) alpha = Math.max(0, 1 - p);
         } else action = "default";
-      } else if (art) frame = Math.floor(((t % f.roundMs) / f.roundMs) * art.spec.actions.attack1.frames);
+      } else if (art) frame = Math.floor(((t % f.roundMs) / f.roundMs) * Art.act(art, "attack1").frames);
       // the HP bar, as on the map
       const max = u.hp_max || 3, cur = hp(side), s = hz * z, seg = (max <= 6 ? 4 : max <= 12 ? 2 : 1) * s;
       const total = seg * max + (max - 1) * s, bx = sx - 26 * z, by = sy - 8 * z - total;
@@ -593,7 +703,7 @@ class ArtPainter {
       const was = this.pos.get(id);
       this.pos.set(id, [u.x, u.y]);
       if (u.status === "fortified") this.facing.set(id, "SE");
-      if (!was || (was[0] === u.x && was[1] === u.y)) continue;
+      if (!was || (was[0] === u.x && was[1] === u.y) || world.moves) continue;   // a bridge with moves: walks show it
       let dx = u.x - was[0];
       if (world.wrap) dx = ((dx % world.W) + world.W + world.W / 2) % world.W - world.W / 2;
       const dy = u.y - was[1];

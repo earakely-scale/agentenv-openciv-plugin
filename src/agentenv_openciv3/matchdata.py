@@ -1,8 +1,9 @@
 """The viewer's data (docs/viewer.md): per-turn snapshots folded into one compact document, turn by turn.
 
-The static map is kept once; each turn keeps what changed (tile owners, what each seat knows), the cities, the
-units, the scores and stats, and the events: the bridge's own plus those derived from consecutive snapshots for
-every civ. The agents' actions come from the env's action logs and are merged in when the document is written.
+The static map is kept once; each turn keeps what changed (tile owners, what each seat knows, how tiles look: overlay,
+resource, improvements), the cities, the units, the scores and stats, the units' moves and the battles, and the
+events: the bridge's own plus those derived from consecutive snapshots for every civ. The agents' actions come from
+the env's action logs and are merged in when the document is written.
 """
 
 from __future__ import annotations
@@ -94,6 +95,9 @@ class MatchData:
         self._ids: dict[str | int, int] = {}
         self._owners: list[int] = []
         self._known: list[int] = []
+        self._looks: list[tuple] = []
+        self._resources: dict[str, int] = {}
+        self._improvements: dict[str, int] = {}
         self._prev: dict | None = None
         self._leader: int | None = None
 
@@ -114,7 +118,7 @@ class MatchData:
             self._start(snap)
         self._players(snap)
         seats = self._seat_bits(snap)
-        owners, known = [], []
+        owners, known, looks = [], [], []
         for row in snap["tiles"]:
             i = self._index.get((row[0], row[1]))
             if i is None:
@@ -126,20 +130,31 @@ class MatchData:
             if self._known[i] != mask:
                 self._known[i] = mask
                 known.append([i, mask])
-        self.turns.append({
+            look = self._look(row)
+            if self._looks[i] != look:
+                self._looks[i] = look
+                looks.append([i, *look])
+        turn = {
             "turn": snap["turn"],
             "owners": owners,
             "known": known,
             "cities": [[c["x"], c["y"], c["name"], c["owner"], c["size"], int(bool(c.get("capital"))),
-                        c.get("production"), self._id(c.get("id"))] for c in snap["cities"]],
-            "units": [[self._id(u.get("id")), u["x"], u["y"], u["owner"], self._unit_type(u["type"])]
-                      for u in snap["units"]],
+                        c.get("production"), self._id(c.get("id")), c.get("era", 0), int(bool(c.get("walls")))]
+                       for c in snap["cities"]],
+            "units": [self._unit_row(u) for u in snap["units"]],
             "scores": {str(p["index"]): [p["score"][k] for k in SCORE_KEYS] + [int(bool(p.get("defeated")))]
                        for p in snap["players"] if not is_barbarian(p)},
             "stats": {str(p["index"]): {k: p[k] for k in ("gold", "government", "research", "at_war") if k in p}
                       for p in snap["players"] if not is_barbarian(p)},
             "events": self._events(snap),
-        })
+        }
+        if looks:
+            turn["looks"] = looks
+        if moves := [self._move_row(m, seats) for m in snap.get("moves") or ()]:
+            turn["moves"] = moves
+        if battles := [self._battle_row(b, seats) for b in snap.get("battles") or ()]:
+            turn["battles"] = battles
+        self.turns.append(turn)
         if snap.get("victory"):
             self.meta["victory"] = snap["victory"]
         self._prev = snap
@@ -147,12 +162,14 @@ class MatchData:
     def _start(self, snap: dict) -> None:
         self.meta = {"seed": snap.get("seed"), "turn_limit": snap.get("turn_limit"), "map": snap["map"],
                      "seam": seam(snap), "terrain": list(TERRAIN), "unit_types": [], "civilian": list(CIVILIAN),
-                     "victory": None}
+                     "resources": [], "improvements": [], "victory": None}
         for row in snap["tiles"]:
             self._index[(row[0], row[1])] = len(self.tiles)
             terrain = TERRAIN.index(row[2]) if row[2] in TERRAIN else 0
             overlay = TERRAIN.index(row[3]) if row[3] in TERRAIN else -1
-            self.tiles.append([row[0], row[1], terrain, overlay, int(bool(row[5]))])
+            # The river's edges (NE=1, SE=2, SW=4, NW=8, ...); older snapshots have 0/1. Non-zero: a river.
+            self.tiles.append([row[0], row[1], terrain, overlay, int(row[5] or 0)])
+            self._looks.append((overlay, -1, 0, 0))
         self._owners = [-1] * len(self.tiles)
         self._known = [0] * len(self.tiles)
 
@@ -190,6 +207,48 @@ class MatchData:
         if engine_id is None:
             return -1
         return self._ids.setdefault(engine_id, len(self._ids))
+
+    def _look(self, row: list) -> tuple[int, int, int, int]:
+        """How a tile looks beyond its terrain: (overlay, resource, improvements mask, bonus grassland), indexing
+        TERRAIN, meta.resources and meta.improvements; -1 for no overlay or resource. Snapshots before the art
+        fields (schema 2 without columns 7-9) have no resource, improvements or bonus."""
+        overlay = TERRAIN.index(row[3]) if row[3] in TERRAIN else -1
+        resource = row[7] if len(row) > 7 else None
+        res = -1 if resource is None else self._table(self._resources, "resources", resource)
+        imp = 0
+        for key in (row[8] if len(row) > 8 else None) or ():
+            imp |= 1 << self._table(self._improvements, "improvements", key)
+        return overlay, res, imp, int(bool(row[9])) if len(row) > 9 else 0
+
+    def _table(self, index: dict[str, int], key: str, name: str) -> int:
+        if name not in index:
+            index[name] = len(self.meta[key])
+            self.meta[key].append(name)
+        return index[name]
+
+    def _unit_row(self, u: dict) -> list:
+        """[id, x, y, owner, type], then [hp, hp_max, fortified] unless the unit is a healthy 3-hp unit that isn't
+        fortified (most of them)."""
+        row = [self._id(u.get("id")), u["x"], u["y"], u["owner"], self._unit_type(u["type"])]
+        hp, hp_max, fortified = u.get("hp"), u.get("hp_max"), bool(u.get("fortified"))
+        if hp is not None and hp_max is not None and (hp != hp_max or hp_max != 3 or fortified):
+            row += [hp, hp_max, int(fortified)]
+        return row
+
+    def _move_row(self, m: dict, seats: Callable[[int], int]) -> list:
+        """[seq, unit id, owner, type, seen, x0, y0, x1, y1, ...]: one unit's run of steps."""
+        return [m["seq"], self._id(m.get("unit")), m["owner"], self._unit_type(m["type"]), seats(m.get("seen", 0)),
+                *(v for xy in m["path"] for v in xy)]
+
+    def _battle_row(self, b: dict, seats: Callable[[int], int]) -> list:
+        """[seq, kind, winner, rounds, city, seen, *attacker, *defender]: kind 0 an attack, 1 a bombardment; winner
+        "a", "d" or "r" (a retreat); rounds one letter a round, "a" the attacker won it; city 0 none, 1 it stood, 2
+        taken, 3 destroyed; each side [owner, type, x, y, hp_before, hp_after, hp_max]."""
+        city = 0 if not b.get("city") else 3 if b.get("razed") else 2 if b.get("captured") else 1
+        side = [[s["owner"], self._unit_type(s["type"]), s["x"], s["y"], s["hp_before"], s["hp_after"], s["hp_max"]]
+                for s in (b["attacker"], b["defender"])]
+        return [b["seq"], int(b.get("kind") == "bombard"), {"attacker": "a", "defender": "d"}.get(b["winner"], "r"),
+                "".join(b.get("rounds") or ()), city, seats(b.get("seen", 0)), *side[0], *side[1]]
 
     def _unit_type(self, name: str) -> int:
         if name not in self._unit_types:

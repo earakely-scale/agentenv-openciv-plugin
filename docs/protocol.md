@@ -167,13 +167,16 @@ it is one cheap pass over the map: no yields or city-site checks). Result:
             "hp": 3, "hp_max": 3, "fortified": true, "combat": true},
            {"x": 14, "y": 10, "owner": 0, "type": "Horseman", "count": 2,
             "hp": 2, "hp_max": 3, "fortified": false, "combat": true}],
- "battles": [{"id": 7, "turn": 12, "kind": "attack",
+ "battles": [{"id": 7, "seq": 412, "turn": 12, "kind": "attack",
               "attacker": {"owner": 0, "type": "Horseman", "x": 14, "y": 10, "id": null,
                            "hp_before": 2, "hp_after": 0, "hp_max": 2},
               "defender": {"owner": 1, "type": "Warrior", "x": 12, "y": 10, "id": "u2",
                            "hp_before": 3, "hp_after": 2, "hp_max": 3},
               "rounds": ["a", "d", "d"], "winner": "defender",
-              "city": {"x": 12, "y": 10, "name": "Rome"}, "captured": false, "razed": false}]}
+              "city": {"x": 12, "y": 10, "name": "Rome"}, "captured": false, "razed": false}],
+ "moves": [{"seq": 409, "turn": 12, "owner": 0, "type": "Horseman", "id": null,
+            "path": [[18, 10], [17, 11], [16, 10]]},
+           {"seq": 413, "turn": 12, "owner": 1, "type": "Warrior", "id": "u3", "path": [[12, 12], [12, 10]]}]}
 ```
 
 - `tiles` has one row per tile the seat knows, and none for the rest: `[x, y, terrain, overlay, river, owner,
@@ -215,6 +218,8 @@ it is one cheap pass over the map: no yields or city-site checks). Result:
   when it began; that includes battles fought in other players' turns (an AI's attack on the seat's units, AI
   against AI in sight) and the seat's own. A battle keeps its record and `id` (a count of the game's battles,
   from 1, never reused) while it shows; it goes once its turn is two turns old. Each:
+  - `seq`: its place in the order things happened: battles and `moves` take their numbers from one count (each
+    as it begins), which an autosave keeps, so a page plays both in the order they were made;
   - `turn`: the game turn it was fought in (an AI's attacks after the turn advanced carry the new turn);
   - `kind`: `attack` (`MapUnit.Fight`: a unit moving into an enemy's tile) or `bombard` (`MapUnit.Bombard` on a
     unit; a bombardment of a city, walls or an improvement fights no unit and is not listed);
@@ -236,6 +241,20 @@ it is one cheap pass over the map: no yields or city-site checks). Result:
 
   The engine fights with animations off, so it sends no animation messages; patch 0010 has `MapUnit.Fight` and
   `MapUnit.BombardUnits` tell the bridge each round as they draw it. Recording a battle changes nothing in it.
+- `moves` are the steps of this turn and the last that the seat saw, oldest first, so the play page can show units
+  walking where they went instead of jumping there. A step shows if the unit is the seat's, or if the seat had the
+  tile it left or the one it entered in sight; that includes other players' turns (AI and barbarian units in
+  sight) and the seat's own moves, orders and standing orders alike. A unit's steps with nothing else in between
+  (no other step or battle) make one entry:
+  - `seq`: its first step's place in the order things happened, as a battle's `seq`; its later steps follow on;
+  - `turn`, `owner`, `type`: as for a battle's sides;
+  - `id`: the seat's id of the unit, while it lives, when it is the seat's; else null;
+  - `path`: `[x, y]` where it stood, then each tile it stepped to, each a neighbour of the last. A move into a
+    tile won in an attack is its own step after the battle; a retreat is the loser's step during it. Units aboard
+    a ship move with it and have no steps of their own.
+
+  Patch 0012 has `MapUnit.Move` tell the bridge of every step; that changes nothing in the game. An engine restored
+  from an autosave goes on with the same count, without the steps from before.
 
 ### `city_sites`
 Args: `unit` (a Settler id; default: the first settler, else the capital), `top` (default 5).
@@ -462,6 +481,10 @@ submodule itself stays untouched):
    loser's units in it are lost, its citizens keep their nationality and are put back to work, its borders follow
    the new owner's culture, and the new owner's AI picks what it builds. `MsgCityCaptured` tells the UI. The loser
    is left without a capital (the engine has no palace relocation). Barbarians still take gold.
+12. `0012-moves-are-observable.patch`: `MapUnit.moveObserver` (an `IMoveObserver`) is told of every step a unit
+   takes in `MapUnit.Move` (a move, the last step of a won attack, or a retreat), once the unit is on its new tile
+   and before it enters it (`OnEnterTile`). The bridge records `known_map`'s `moves` and the world snapshot's
+   `moves` with it; like 0010's observer it draws nothing from `GameData.rng` and changes nothing.
 
 Measured over full 540-turn Standard games with 7 AIs at Regent (seeds 1-3), patches 0005-0009 take:
 - mean AI techs at T540 from 32 to 43-45, and civs with an Industrial-era tech from 0 to 3-7;

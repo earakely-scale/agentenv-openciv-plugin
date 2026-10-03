@@ -25,7 +25,8 @@ sealed partial class Session : ICombatObserver {
 	}
 
 	sealed class Battle {
-		public int Id, Turn;
+		/// <summary>Id: the battle's number; Seq: its place among battles and steps (Moves.cs), as the rounds begin.</summary>
+		public int Id, Seq, Turn;
 		public bool Bombard;
 		public Side Attacker, Defender;
 		public readonly List<string> Rounds = [];
@@ -50,7 +51,7 @@ sealed partial class Session : ICombatObserver {
 		SettleBattles();
 		City city = defender.location.HasCity() ? defender.location.cityAtTile : null;
 		var b = new Battle {
-			Id = ++battleCount, Turn = gd.turn, Bombard = bombard, Attacker = Side.Of(attacker), Defender = Side.Of(defender),
+			Id = ++battleCount, Seq = ++eventSeq, Turn = gd.turn, Bombard = bombard, Attacker = Side.Of(attacker), Defender = Side.Of(defender),
 			City = city, CityAt = city == null ? null : (city.location.XCoordinate, city.location.YCoordinate, city.name),
 		};
 		// Who could see it, as it began: the seats whose units fight, or that see either tile.
@@ -103,8 +104,7 @@ sealed partial class Session : ICombatObserver {
 
 	/// <summary>A battle as a seat sees it; `allIds` (for an autosave) keeps every seat's unit ids.</summary>
 	JsonObject BattleJson(Battle b, bool allIds = false) {
-		var index = new Dictionary<Player, int>(ReferenceEqualityComparer.Instance);
-		for (int i = 0; i < gd.players.Count; i++) index[gd.players[i]] = i;
+		var index = PlayerIndex();
 		JsonObject SideJson(Side s) => new() {
 			["owner"] = s.Owner == null ? -1 : index.GetValueOrDefault(s.Owner, -1),
 			["type"] = s.Type,
@@ -117,6 +117,7 @@ sealed partial class Session : ICombatObserver {
 		};
 		var o = new JsonObject {
 			["id"] = b.Id,
+			["seq"] = b.Seq,
 			["turn"] = b.Turn,
 			["kind"] = b.Bombard ? "bombard" : "attack",
 			["attacker"] = SideJson(b.Attacker),
@@ -141,18 +142,34 @@ sealed partial class Session : ICombatObserver {
 		return b == null ? null : BattleJson(b);
 	}
 
-	/// <summary>The battle history and count, for an autosave.</summary>
+	/// <summary>Every battle begun after `since` (in the sequence), whoever saw it (docs/recording.md); `seen` is a mask over
+	/// the seats.</summary>
+	JsonArray SnapshotBattles(int since) {
+		SettleBattles();
+		return Json.Array(battles.Where(b => b.Winner != null && b.Seq > since), b => {
+			JsonObject o = BattleJson(b);
+			foreach (string side in new[] { "attacker", "defender" }) o[side]!.AsObject().Remove("id");
+			o["seen"] = SeatMask(b.Seen);
+			return o;
+		});
+	}
+
+	/// <summary>The battle history and count, and the sequence battles and steps share, for an autosave.</summary>
 	JsonObject BattlesState() {
 		SettleBattles();
 		return new JsonObject {
 			["count"] = battleCount,
+			["seq"] = eventSeq,
 			["list"] = Json.Array(battles.Where(b => b.Winner != null), b => BattleJson(b, allIds: true)),
 		};
 	}
 
 	void RestoreBattles(JsonObject state) {
 		battles.Clear();
+		steps.Clear();
 		battleCount = state == null ? 0 : (int)state["count"];
+		// Saves from before patches/0012 have no sequence: the battles' ids stand in for it.
+		shownSeq = recordedSeq = eventSeq = state == null ? 0 : (int?)state["seq"] ?? battleCount;
 		if (state == null) return;
 		Player PlayerAt(JsonNode i) => (int)i >= 0 && (int)i < gd.players.Count ? gd.players[(int)i] : null;
 		Side SideOf(JsonNode s) => new() {
@@ -161,7 +178,7 @@ sealed partial class Session : ICombatObserver {
 		};
 		foreach (JsonNode o in state["list"]!.AsArray()) {
 			var b = new Battle {
-				Id = (int)o["id"], Turn = (int)o["turn"], Bombard = (string)o["kind"] == "bombard",
+				Id = (int)o["id"], Seq = (int?)o["seq"] ?? (int)o["id"], Turn = (int)o["turn"], Bombard = (string)o["kind"] == "bombard",
 				Attacker = SideOf(o["attacker"]), Defender = SideOf(o["defender"]),
 				Winner = (string)o["winner"], Razed = (bool)o["razed"], Captured = (bool?)o["captured"] ?? false,
 				CityAt = o["city"] is JsonObject c ? ((int)c["x"], (int)c["y"], (string)c["name"]) : null,

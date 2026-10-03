@@ -18,9 +18,15 @@ command returns the same snapshot on demand.
   "players": [{"index": 1, "civ": "Rome", "is_human": true, "label": "opus", "defeated": false, "color": [196, 52, 52],
                "score": {"total": 61, "cities": 2, "pop": 5, "tiles": 21, "techs": 3},
                "gold": 40, "government": "Despotism", "research": "Bronze Working", "at_war": [3], "contacts": [2, 3]}],
-  "tiles": [[13, 9, "grassland", "forest", 0, 1, 1]],
-  "cities": [{"id": "city-1", "x": 12, "y": 10, "name": "Rome", "owner": 1, "size": 3, "capital": true, "production": "Warrior"}],
-  "units": [{"id": "Settler-4", "x": 14, "y": 10, "owner": 1, "type": "Settler"}],
+  "tiles": [[13, 9, "grassland", "forest", 0, 1, 1, null, ["road"], 0]],
+  "cities": [{"id": "city-1", "x": 12, "y": 10, "name": "Rome", "owner": 1, "size": 3, "capital": true, "production": "Warrior",
+              "era": 0, "walls": false}],
+  "units": [{"id": "Settler-4", "x": 14, "y": 10, "owner": 1, "type": "Settler", "hp": 1, "hp_max": 1, "fortified": false}],
+  "moves": [{"seq": 57, "unit": "Settler-4", "owner": 1, "type": "Settler", "path": [[12, 10], [13, 11], [14, 10]], "seen": 1}],
+  "battles": [{"id": 3, "seq": 58, "turn": 11, "kind": "attack",
+               "attacker": {"owner": 1, "type": "Warrior", "x": 14, "y": 12, "hp_before": 3, "hp_after": 3, "hp_max": 3},
+               "defender": {"owner": 0, "type": "Warrior", "x": 15, "y": 13, "hp_before": 2, "hp_after": 0, "hp_max": 3},
+               "rounds": ["a", "a"], "winner": "attacker", "city": null, "captured": false, "razed": false, "seen": 1}],
   "events": [{"turn": 11, "kind": "city_grew", "text": "Rome grew to size 3"}]
 }
 ```
@@ -28,6 +34,18 @@ command returns the same snapshot on demand.
 - **`schema`:** `2`. Snapshots without it are schema 1: no `seats`, `known` is 0/1, and none of the fields below marked (2).
 - **`seats`:** the agent seats in seat order, one in a single-seat game; `index` is the player's. (2)
 - **`tiles`:** every tile of the map, regardless of fog. Each row is `[x, y, base_terrain, overlay or null, owner index or -1, river, known]`, where `known` is a bitmask over `seats`: bit `k` is set when `seats[k]` knows the tile, so non-zero means some seat does (schema 1: 0/1). Terrain names are lower-case engine keys. `river` is the tile's river edges as in `known_map` (`NE=1, SE=2, SW=4, NW=8`, ... in [protocol.md](protocol.md#known_map)), 0 for none; older recordings have 0/1, so read it as a flag unless you need the edges.
+- **What the client's art draws** (columns 7-9 of a tile, a city's `era` and `walls`, a unit's hit points): a tile's
+  `resource` (its name, once some civ knows of it: Iron only once a civ has Bronze Working; else null), its
+  `improvements` (as in `known_map`, with `barbarian_camp`) and `bonus` (1 for bonus grassland, which shows its
+  shield); a city's `era` (its owner's, 0-3) and `walls`; a unit's `hp`, `hp_max` and whether it is `fortified`.
+  Snapshots from before these fields have none of them.
+- **`moves`, `battles`:** what happened since the last snapshot, in the order it happened (patches 0010 and 0012):
+  every unit's runs of steps, whoever saw them, and every battle. A move is `known_map`'s entry for every seat at
+  once: `unit` is the engine's id, `path` the tiles from where it stood, and `seen` the seats that saw it, a mask
+  over `seats` as a tile's `known`; a run is cut where who saw it changes. A battle is `known_map`'s without the
+  sides' ids, plus `seen`. With every snapshot written, each unit's runs lead from where the last snapshot had it
+  to where this one has it (units carried aboard ships aside). The `world` command has the same as the last
+  snapshot, and what happened since.
 - **`players`:** includes the barbarians. `color` is RGB, derived from the civ's primary colour index. `is_human` marks every civ an agent plays (one, or one per seat), and `label` the seat's label from `new_game`. Every player, seat or AI, also has (2) its `gold`, its `government`'s name, the tech it is `research`ing (null if none), the player indices it is `at_war` with and the ones it has met (`contacts`), both ascending and without the barbarians.
 - **`cities`, `units`:** (2) `id` is the engine's own id as a string (`"city-1"`, `"Settler-4"`): unique in the game, kept for the city's or unit's life and through saves. It is not the `c1`/`u1` id a seat's commands use. A city's `production` is the name of what it builds, or null.
 - **`events`:** the human player's events from the turn that just ended. In a game with seats, every seat's, each with `"civ"`.

@@ -555,7 +555,7 @@ class Game:
                 raise Refused("bad_target", f"There is nothing to attack at {target}.", self.attack_targets(u))
             self.barbarian_killed, u["moves"] = True, 0.0
             civs = [self.civ, *self.opponents, "Barbarians"]
-            battle = {"id": len(self.battles) + 1, "turn": self.turn, "kind": "attack",
+            battle = {"id": len(self.battles) + 1, "seq": len(self.battles) + 1, "turn": self.turn, "kind": "attack",
                       "attacker": {"owner": civs.index(a.get("seat", self.civ)), "type": "Warrior", "x": u["pos"][0],
                                    "y": u["pos"][1], "id": u["id"], "hp_before": u["hp"], "hp_after": u["hp"] - 1,
                                    "hp_max": UNIT_STATS["Warrior"][1]},
@@ -853,21 +853,23 @@ class Game:
                 over = OVERLAY.get(p)
                 owner = 0 if self.owned(p) else 1 if dist(p, athens) <= 1 else -1
                 tiles.append([x, y, base, over.lower() if over else None, owner, int(p in RIVER),
-                              int(p in self.explored)])
+                              int(p in self.explored), RESOURCES.get(p), [], 0])
         cities = [{"id": int(c["id"][1:]), "x": c["pos"][0], "y": c["pos"][1], "name": c["name"], "owner": 0,
-                   "size": c["size"], "capital": "Palace" in c["buildings"], "production": c["producing"]}
-                  for c in self.cities.values()]
+                   "size": c["size"], "capital": "Palace" in c["buildings"], "production": c["producing"],
+                   "era": 0, "walls": "Walls" in c["buildings"]} for c in self.cities.values()]
         cities.append({"id": 1000, "x": athens[0], "y": athens[1], "name": "Athens", "owner": 1, "size": 2,
-                       "capital": True, "production": "Warrior"})
-        units = [{"id": int(u["id"][1:]), "x": u["pos"][0], "y": u["pos"][1], "owner": 0, "type": u["type"]}
+                       "capital": True, "production": "Warrior", "era": 0, "walls": False})
+        units = [{"id": int(u["id"][1:]), "x": u["pos"][0], "y": u["pos"][1], "owner": 0, "type": u["type"],
+                  "hp": u["hp"], "hp_max": UNIT_STATS[u["type"]][1], "fortified": u["status"] == "fortified"}
                  for u in self.units.values()]
         if b := self.barbarian():
-            units.append({"id": 1000, "x": b[0], "y": b[1], "owner": len(civs) - 1, "type": "Warrior"})
+            units.append({"id": 1000, "x": b[0], "y": b[1], "owner": len(civs) - 1, "type": "Warrior", "hp": 3,
+                          "hp_max": 3, "fortified": False})
         return {"schema": 2, "turn": self.turn, "turn_limit": self.turn_limit, "seed": self.seed,
                 "map": {"width": WIDTH, "height": HEIGHT, "wrap_x": True},
                 "seats": [{"index": index[c], "civ": c, "label": self.labels.get(c)} for c in self.seats],
                 "players": players, "tiles": tiles,
-                "cities": cities, "units": units, "events": list(self.last_events)}
+                "cities": cities, "units": units, "moves": [], "battles": [], "events": list(self.last_events)}
 
     def known_map(self, a) -> dict:
         """docs/play.md section 3: the explored tiles, the cities on them and the units on visible ones. The seat
@@ -909,7 +911,8 @@ class Game:
                 "players": [{"index": i, "civ": c, "barbarian": c == "Barbarians", "me": i == mine,
                              "color": CLIENT_COLORS[colors[i]]} for i, c in enumerate(civs)],
                 "tiles": tiles, "cities": cities, "units": units,
-                "battles": [b for b in self.battles if b["turn"] >= self.turn - 1]}
+                "battles": [b for b in self.battles if b["turn"] >= self.turn - 1],
+                "moves": []}   # the scripted game's units jump: no steps
 
     def handle(self, cmd, a, on_turn) -> dict:
         if a.get("seat", self.civ) not in self.seats:

@@ -65,12 +65,15 @@ Args: none (plays the request's seat, like every command). Everything the seat k
              "starving": false}],                              // the last five: own cities only
  "units": [{"x", "y", "owner", "type", "count", "id": "u3",   // on visible tiles; id on the seat's own units only
             "hp": 3, "hp_max": 3, "fortified": false, "combat": true}],
- "battles": [{"id": 7, "turn": 12, "kind": "attack" | "bombard",   // this turn's and the last's, that the seat saw
-              "attacker": {"owner", "type", "x", "y", "id": "u3" | null, "hp_before", "hp_after", "hp_max"},
+ "battles": [{"id": 7, "seq": 412, "turn": 12, "kind": "attack" | "bombard",   // this turn's and the last's,
+              "attacker": {"owner", "type", "x", "y", "id": "u3" | null,         // that the seat saw
+                           "hp_before", "hp_after", "hp_max"},
               "defender": {...},                                    // the same
               "rounds": ["a", "d", "a"],                            // who won each round, in order
               "winner": "attacker" | "defender" | "retreat",
-              "city": {"x", "y", "name"} | null, "captured": false, "razed": false}]}
+              "city": {"x", "y", "name"} | null, "captured": false, "razed": false}],
+ "moves": [{"seq": 409, "turn": 12, "owner", "type", "id": "u3" | null,   // the steps the seat saw, this turn's and
+            "path": [[x, y], [x, y], ...]}]}                              // the last's; battles and moves share seq
 ```
 
 Terrain and overlay names are the engine's lower-case keys, as in the world snapshot; a resource shows only once the
@@ -210,6 +213,12 @@ the map with the OpenCiv3 client's own art, the way the client draws it. **T** s
   on the map as the client plays it: both units face each other and play their attack each round while their HP bars
   drop, then the loser plays its death; one battle at a time, in order, the camera following, each once (the page
   remembers the ones it showed, so a reload doesn't replay them). A long fight shows its last eight rounds.
+- **Moves:** every unit the seat saw move (`known_map` `moves`: its own, by order or standing order, and the other
+  civs' and barbarians' in sight, in their turns) walks the way it went, a step at a time with its run animation,
+  facing where it goes, instead of jumping there: the units a battle waits for walk first, then the battle plays,
+  then what came after it (by `seq`); units walking at the same time walk together. Until a unit has walked, it
+  stands where it started, not where the map has it. Each move walks once, like a battle. With an older bridge (no
+  `moves`) the seat's own unit slides one step, as before.
 - **The advisors and the city screen** (`screens.js`) are the client's too, with the art on: its 1024x768 screens,
   scaled to the window, every label and button where the client puts it (UIElements/Advisors, UIElements/CityScreen),
   in its Noto Sans. The advisors' heads are the seat's era's (`state.era`). Esc or the exit button closes a screen;

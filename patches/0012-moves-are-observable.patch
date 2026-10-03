@@ -1,0 +1,46 @@
+Moves are observable: MapUnit.moveObserver (an IMoveObserver, MapUnit.cs) is told of every step a unit takes in MapUnit.Move (a move, the last step of a won attack, or a retreat), after the unit is on its new tile and before it enters it (OnEnterTile). The engine sends no animation messages while animations are off, so without this a headless UI cannot show the other civs' units walking: they jump from where they were to where they end the turn. The observer is called synchronously and changes nothing: no state, no draw from GameData.rng, so games replay as before.
+
+--- a/C7Engine/C7GameData/MapUnit.cs
++++ b/C7Engine/C7GameData/MapUnit.cs
+@@ -8,6 +8,18 @@
+ using static C7GameData.PlayerRelationship;
+ 
+ namespace C7GameData {
++	/// <summary>
++	/// Follows units as they move, a tile at a time, for a UI with no animation messages to follow (the engine sends none
++	/// while animations are off). Calls are synchronous. An observer must not change game state or draw from
++	/// GameData.rng.
++	/// </summary>
++	public interface IMoveObserver {
++		/// <summary>The unit has stepped from one tile to the next (MapUnit.Move: a move, the last step of a won attack, or
++		/// a retreat), before it enters the new tile (OnEnterTile: a city it takes, a hut it opens). Units carried aboard
++		/// move with their transport and are not reported.</summary>
++		void UnitMoved(MapUnit unit, Tile from, Tile to);
++	}
++
+ 	/**
+ 	 * A unit on the map.  Not to be confused with a unit prototype.
+ 	 **/
+--- a/C7Engine/C7GameData/MapUnit_Actions.cs
++++ b/C7Engine/C7GameData/MapUnit_Actions.cs
+@@ -270,8 +270,10 @@
+ 
+ 		// Enter new tile
+ 		// Make sure the unit is on the new location before claiming we have entered the tile
++		Tile oldLoc = location;
+ 		newLoc.unitsOnTile.Add(this);
+ 		location = newLoc;
++		moveObserver?.UnitMoved(this, oldLoc, newLoc);
+ 		OnEnterTile(newLoc);
+ 
+ 		if (wait)
+@@ -287,6 +289,9 @@
+ 	/// <summary>Told of every battle as it is fought; null for none.</summary>
+ 	public static ICombatObserver combatObserver;
+ 
++	/// <summary>Told of every step a unit takes; null for none.</summary>
++	public static IMoveObserver moveObserver;
++
+ 	public async Task<CombatResult> Fight(MapUnit defender) {
+ 		var attacker = this;
+ 
