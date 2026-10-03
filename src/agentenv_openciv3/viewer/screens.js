@@ -153,6 +153,38 @@ function headRow(city, era, x0, y, max) {
   return h;
 }
 
+// The client's SpaceAlignedDotFormat: "a.b", a space before a below 10 and after b below 10.
+const dotted = (a, b) => `${(a | 0) < 10 ? " " : ""}${a | 0}.${b | 0}${(b | 0) < 10 ? " " : ""}`;
+
+// The city screen's heads from its citizens (CityScreen.RenderPopHeads), in their order: laborers by mood, a head's
+// gap between moods and before the specialists, each specialist its own head with what it adds under it (CityIcons:
+// a copy per point, half an icon apart). Centred on x 512.
+const SPEC_ICONS = [["luxuries", [373, 1, 30, 30]], ["taxes", [435, 1, 30, 30]], ["research", [497, 1, 30, 30]],
+  ["corruption", [528, 1, 30, 30]], ["construction", [404, 1, 30, 30]]];
+function citizenHeads(c, era, y) {
+  const MOOD = {happy: 1, content: 0, unhappy: 3}, spec = new Map((c.specialists || []).map(t => [t.type, t]));
+  const items = [];
+  let last = null;
+  for (const z of c.citizens) {
+    const group = z.works === "specialist" ? "specialist" : z.mood;
+    if (last != null && group !== last && (group === "specialist" || last !== "specialist")) items.push(null);
+    last = group;
+    items.push(z);
+  }
+  const width = 48 * items.length;
+  let x = 512 - Math.floor(width / 2), h = "";
+  for (const z of items) {
+    if (z && z.works === "specialist") {
+      const t = spec.get(z.specialist) || {index: 1};
+      h += spr("pop_heads", [50 * era + 1, 800 + 50 * ((t.index || 1) - 1) + 1, 48, 48], x, y, "", `title="${esc(z.specialist)}"`);
+      let k = 0;
+      for (const [key, crop] of SPEC_ICONS) for (let n = 0; n < (t[key] | 0); n++) h += spr("yield_icons", crop, x + 15 * k++, y + 38);
+    } else if (z) h += popHead(MOOD[z.mood] ?? 0, era, x, y);
+    x += 48;
+  }
+  return h;
+}
+
 // The client's rule for one step of a rate (MsgChangeSliders): more science takes a tenth from taxes, else from
 // luxury; less gives it to taxes. The same with science and luxury swapped.
 function rateStep(r, which, up) {
@@ -178,8 +210,16 @@ async function artDomestic() {
   const left = s.anarchy_until ? Math.max(0, s.anarchy_until - g.turn) : 0;
   let h = bg("domestic") + advCommon("head_domestic", "DOMESTIC ADVISOR",
     s.anarchy_until ? `${left} turns of anarchy left` : "You are running OpenCiv3!");
-  // the treasury and the net (the income and expense breakdown is not in the bridge's state: left out)
-  const net = s.gold_per_turn | 0;
+  // the income (green) and expenses (salmon) boxes, the treasury and the net (state.finance: AggregateFlows)
+  const fin = s.finance, net = s.gold_per_turn | 0;
+  if (fin) {
+    const i = fin.income || {}, x = fin.expenses || {};
+    h += `<div class="cs-lb" style="left:84px;top:98px;width:138px;font-size:11px;text-align:right">${esc(
+      `From cities: +${i.cities | 0}\nFrom taxmen: +${i.taxmen | 0}\nFrom other civs: +${i.other_civs | 0}\nFrom interest: +${i.interest | 0}`)}</div>`;
+    h += lab(254, 102, `Income: ${i.total | 0}`) + lab(254, 152, `Expenses: ${x.total | 0}`);
+    h += lab(379, 87, `-${x.science | 0}: Science\n-${x.entertainment | 0}: Entertainment\n-${x.corruption | 0}: Corruption\n` +
+      `-${x.maintenance | 0}: Maintenance\n-${x.unit_costs | 0}: Unit costs\n-${x.other_civs | 0}: To other civs`, 11);
+  }
   h += lab(83, 193, `Treasury: ${s.gold}`);
   h += lab(254, 193, net > 0 ? `Net gain: +${net}` : net < 0 ? `Net loss: ${net}` : "Neutral: 0");
   h += lab(390, 195, net > 0 ? "Growing!" : net < 0 ? "Shrinking!" : "Balanced");
@@ -202,14 +242,20 @@ async function artDomestic() {
   const minus = (x, y, a) => btn("plusminus", [0, 0, 13, 9], [12, 0], [24, 0], x, y, a);
   h += plus(732, 111, `data-rate="science" data-d="1" title="More science"`) + minus(562, 113, `data-rate="science" data-d="-1" title="Less science"`);
   h += plus(732, 125, `data-rate="luxury" data-d="1" title="More luxury"`) + minus(562, 129, `data-rate="luxury" data-d="-1" title="Less luxury"`);
-  // the cities: a row each, 54 px apart (food surplus, useful shields, moods, heads, production: what the state has)
+  // the cities: a row each, 54 px apart: food eaten.surplus, shields corrupt.useful, commerce corrupt.(the rest) at
+  // the row's top; maintenance, happy.content, science and taxes centred; the heads; what it builds
   h += `<div class="cs-rows">${(s.cities || []).map((c, i) => {
     const y = 54 * i, col = (x, text, mid) => `<div class="cs-lb cs-col" style="left:${x - 72}px;top:${mid ? 15 : 0}px">${esc(text)}</div>`;
     const turns = c.turns_to_complete != null && c.turns_to_complete < 9999999 ? c.turns_to_complete : "--";
+    const cm = c.commerce, sh = c.shields;
     return `<div class="cs-row" style="top:${y}px">
       <button class="cs-tbtn cs-dname" data-city="${esc(c.id)}" style="left:${106 - 72}px;top:0;width:127px;height:50px" title="Open ${esc(c.name)}">${esc(c.name)}</button>
-      ${col(237, `${c.food_per_turn > 0 ? "+" : ""}${c.food_per_turn ?? ""}`)}${col(281, c.shields_per_turn ?? "")}
-      ${col(442, `${c.happy | 0}.${c.content | 0}`, true)}
+      ${c.food_eaten != null ? col(237, dotted(c.food_eaten, c.food_per_turn | 0)) : col(237, `${c.food_per_turn > 0 ? "+" : ""}${c.food_per_turn ?? ""}`)}
+      ${sh ? col(281, dotted(sh.corrupt, sh.useful)) : col(281, c.shields_per_turn ?? "")}
+      ${cm ? col(325, dotted(cm.corrupt, (cm.taxes | 0) + (cm.science | 0) + (cm.luxury | 0))) : ""}
+      ${c.maintenance != null ? col(398, String(c.maintenance), true) : ""}
+      ${col(442, dotted(c.happy, c.content), true)}
+      ${cm ? col(486, String(cm.science | 0), true) + col(530, String(cm.taxes | 0), true) : ""}
       ${headRow(c, era, 603 - 72, 0, 220)}
       <div class="cs-lb cs-prod" style="left:${881 - 72}px;top:0">${esc(c.producing || "--")}<br>(${turns} turns)</div></div>`;
   }).join("")}</div>`;
@@ -412,17 +458,20 @@ function optionArt(o, era) {
 
 async function artCity(id, {keepProd = false} = {}) {
   let c;
-  const [, got] = await Promise.all([scrLoad(["city_bg", "city_buttons", "prod_button", "prod_queue", "pop_heads", "units_32", "buildings_small", "buildings_large"]),
+  const [, got] = await Promise.all([scrLoad(["city_bg", "city_buttons", "prod_button", "prod_queue", "pop_heads", "units_32", "buildings_small", "buildings_large", "luxury_icons"]),
     api(`play/api/city?city=${encodeURIComponent(id)}`).then(x => (c = x), e => { toast(e.message, true); return null; })]);
   if (!got) return;
   const was = S.dialog?.kind === "city" && S.dialog.art ? S.dialog : null;
   const saved = was ? was.saved : {cx: S.cam.cx, cy: S.cam.cy, hw: S.cam.hw}, prodOpen = keepProd && !!was?.prodOpen;
   const era = playerEra(), cities = state().cities || [];
-  // yields from the worked tiles, when the bridge sends them: totals, food eaten, shields lost to waste
+  // the yields: the city's own (shields, food_eaten, commerce), else what its worked tiles add up to
   const w = c.worked || null, sum = i => w.reduce((s, t) => s + (t[i] | 0), 0);
-  const food = w ? sum(2) : null, shields = w ? sum(3) : null, commerce = w ? sum(4) : null;
-  const eaten = w ? Math.max(0, food - (c.food_per_turn | 0)) : null, useful = c.shields_per_turn | 0;
-  const wasted = w ? Math.max(0, shields - useful) : 0;
+  const eaten = c.food_eaten ?? (w ? Math.max(0, sum(2) - (c.food_per_turn | 0)) : null);
+  const food = eaten != null ? eaten + (c.food_per_turn | 0) : null;
+  const useful = c.shields ? c.shields.useful | 0 : c.shields_per_turn | 0;
+  const shields = c.shields ? c.shields.total | 0 : w ? sum(3) : null;
+  const wasted = c.shields ? c.shields.corrupt | 0 : w ? Math.max(0, shields - useful) : 0;
+  const commerce = c.commerce ? null : w ? sum(4) : null;
   let h = bg("city_bg");
   h += `<div class="cs-hole" title=""></div>`;   // the map shows through; a click there closes the production list
   h += btn("city_buttons", [1, 1, 48, 48], [1, 50], [1, 99], 359, 31, `data-step="-1" title="Previous city (←)"`);
@@ -431,6 +480,16 @@ async function artCity(id, {keepProd = false} = {}) {
   h += `<div class="cs-lb cs-cityname" style="left:400px;top:18px;width:230px">${esc(c.name)}</div>`;
   if (c.disorder) h += `<div class="cs-lb cs-center" style="left:400px;top:62px;width:230px;color:#b00000">Civil disorder!</div>`;
   h += lab(5, 4, "STRATEGIC RESOURCES") + lab(714, 4, "CULTURE") + lab(7, 514, "IMPROVEMENTS") + lab(162, 514, "LUXURIES");
+  // culture: per turn, and the total against the next border growth
+  if (c.culture) h += lab(790, 4, `${c.culture.per_turn | 0}/turn`) + lab(714, 60, `Total: ${c.culture.total | 0}/${c.culture.next_border | 0}`);
+  // strategic resources: resources.png's icon at 45x45, the count centred under it
+  if (c.strategic) h += `<div class="cs-list cs-strat" style="left:4px;top:24px;width:290px;height:65px">${c.strategic.map(r =>
+    `<div class="cs-res" title="${esc(r.name)}">${sprAt("resources", [50 * (r.icon % 6), 50 * Math.floor(r.icon / 6), 50, 50], 0, 0, 45, 45)}` +
+    `<span>${r.count | 0}</span></div>`).join("")}</div>`;
+  // luxuries: "(count)", then the small icon
+  if (c.luxuries) h += `<div class="cs-list" style="left:158px;top:537px;width:123px;height:167px">${c.luxuries.map(r =>
+    `<div class="cs-lux" title="${esc(r.name)}"><span>(${r.count | 0})</span>${r.icon >= 8
+      ? `<i style="background-image:url('${scrUrl("luxury_icons")}');background-position:${-22 * (r.icon - 8)}px 0"></i>` : ""}</div>`).join("")}</div>`;
   h += `<div class="cs-list" style="left:7px;top:537px;width:146px;height:222px">${(c.buildings || []).map(b => `<div>${esc(b)}</div>`).join("")}</div>`;
   // production: the line, the shield row (wasted from the left, useful from the right), the box, the button
   h += lab(284, 509, `PRODUCTION: ${shields ?? useful} per turn`, 12);
@@ -462,12 +521,17 @@ async function artCity(id, {keepProd = false} = {}) {
   h += `<div class="cs-lb cs-center" style="left:776px;top:563px;width:117px;font-size:10px">${
     (c.food_per_turn | 0) < 0 ? "Starving!" : c.turns_to_grow != null && (c.food_per_turn | 0) > 0 ? `Growth in ${c.turns_to_grow} turns.` : "Not growing."}</div>`;
   h += foodBox(c);
-  if (commerce != null) h += lab(290, 620, `${commerce} commerce per turn from its tiles`, 20);
+  if (c.commerce) {   // where the commerce goes
+    const cm = c.commerce;
+    h += lab(290, 620, `${cm.taxes | 0} gold/turn to taxes`, 20);
+    h += lab(290, 653, `${cm.science | 0} gold/turn to science  (${cm.corrupt | 0} corrupt)`, 20);
+    h += lab(290, 685, `${cm.luxury | 0} gold/turn to happiness`, 20);
+  } else if (commerce != null) h += lab(290, 620, `${commerce} commerce per turn from its tiles`, 20);
   // buying: the bridge's buy (the client has no button for it): in the empty box under the commerce
   const canBuy = prodItem && prodItem !== "Wealth";
   h += `<button class="cs-tbtn" id="buy" style="left:296px;top:728px" ${canBuy ? "" : "disabled"} title="Complete it next turn">Hurry: buy ${esc(prodItem || "nothing")}</button>`;
   // the citizens, at y 433 over the map
-  h += headRow(c, era, null, 433);
+  h += c.citizens ? citizenHeads(c, era, 433) : headRow(c, era, null, 433);
   // the production list
   h += `<div class="cs-pq${prodOpen ? "" : " closed"}" style="background-image:url('${scrUrl("prod_queue")}')"><ul>${(c.options || []).map(o => {
     const a = optionArt(o, era);
@@ -522,11 +586,14 @@ function foodBox(c) {
     + grid([...repeat("full", half - lostGran), ...repeat("no_food", lostGran)], cols, size, x0, y0 + rows * size + 22);
 }
 // The production button's unit: its idle frame facing south-east in the seat's colour, the tile centre at (57, 35).
-function drawProdUnit(c) {
+function drawProdUnit(c, tries = 0) {
   const cv = $("#dialog .cs-produnit"), o = (c.options || []).find(x => x.name === c.producing);
   if (!cv || !c.producing || (o && o.kind !== "unit")) return;
   const ua = S.art.unit(c.producing, () => { if (S.dialog?.city === c) drawProdUnit(c); });
-  if (!ua) return;
+  if (!ua) {   // loading (the art calls back only its first asker, maybe the production list): look again shortly
+    if (tries < 50 && S.art.m.units[c.producing]) setTimeout(() => { if (S.dialog?.city === c) drawProdUnit(c, tries + 1); }, 200);
+    return;
+  }
   const cell = S.art.unitCell(ua, "default", "SE", 0, rgb(S.world.color(S.world.me))), [ax, ay] = ua.spec.anchor, g = cv.getContext("2d");
   g.clearRect(0, 0, 240, 240);
   g.drawImage(cell, 120 - ax, 120 - ay);

@@ -205,17 +205,24 @@ the map with the OpenCiv3 client's own art, the way the client draws it. **T** s
   marks, and the turning cursor under the active unit. The HUD takes the client's art too: the status scroll with
   the next-turn dome (Enter or Space ends the turn when no unit waits), the minimap's frame and colours, and the unit
   order buttons. Colours are the client's (`known_map` `players[].color`).
+- **Battles:** every battle the seat saw (`known_map` `battles`, and its own attack's `result.battle` at once) plays
+  on the map as the client plays it: both units face each other and play their attack each round while their HP bars
+  drop, then the loser plays its death; one battle at a time, in order, the camera following, each once (the page
+  remembers the ones it showed, so a reload doesn't replay them). A long fight shows its last eight rounds.
 - **The advisors and the city screen** (`screens.js`) are the client's too, with the art on: its 1024x768 screens,
   scaled to the window, every label and button where the client puts it (UIElements/Advisors, UIElements/CityScreen),
   in its Noto Sans. The advisors' heads are the seat's era's (`state.era`). Esc or the exit button closes a screen;
   F1, F4 and F6 switch between the advisors; the client's own popups (an advisor's head over the parchment, the
   orb buttons) confirm what changes the game.
-  - **Domestic (F1):** the treasury and the net gold per turn; the science and luxury sliders (drag the beaker or the
+  - **Domestic (F1):** the income and expenses, line by line as the client lists them (`state.finance`), the
+    treasury and the net gold per turn; the science and luxury sliders (drag the beaker or the
     smiley, or press their plus and minus), each step moving a tenth as the client does (more science takes it from
     taxes, else from luxury; less gives it to taxes), sent as `set_rates`; the research and its turns; the
     government button, which starts a revolution ("You say you want a revolution?") and then asks for the new
-    government (`revolution`; the client asks that when the anarchy ends); and a row per city: its food surplus,
-    useful shields, happy and content citizens, the citizens' heads by mood, and what it builds. A city's name opens
+    government (`revolution`; the client asks that when the anarchy ends); and a row per city in the client's
+    columns: food eaten.surplus, shields wasted.useful, commerce corrupt.(taxes + science + luxury), the buildings'
+    upkeep (which the client leaves at 0), happy.content, science, taxes, the citizens' heads by mood, and what it
+    builds. A city's name opens
     its screen.
   - **Foreign (F4):** the client's screen, whose tab panel (Treaties, Trades, Details) is otherwise empty, with the
     seat's `diplomacy` on its parchment: a row per civ met (war or peace, the gold asked for peace, score,
@@ -227,16 +234,18 @@ the map with the OpenCiv3 client's own art, the way the client draws it. **T** s
     (`research`). This art draws only the ancient era's small boxes, so every box is that one stretched to its size.
   - **City screen** (click your city, or its name in the domestic advisor): the map shows through the screen's
     window with the camera on the tile south of the city, as the client puts it, the tiles the city can work
-    outlined and each worked tile's food, shields and commerce on it (`city` `worked`, `workable`); the citizens'
-    heads by mood; the improvements; the production button (the unit or building being built) and its list
-    (`set_production`), the shield box and row (useful shields; the shields its tiles yield beyond them, as waste);
-    the food box (with the granary's half), the food line and row (its tiles' food, the food eaten and the surplus);
-    the growth and completion; its tiles' commerce; and Hurry, which buys the production (`buy`). The arrow
+    outlined and each worked tile's food, shields and commerce on it (`city` `worked`, `workable`); its culture
+    (per turn, and the total against the next border growth), strategic resources (with their counts) and luxuries;
+    the citizens' heads, laborers by mood and specialists with what each adds (`city` `citizens`, `specialists`); the
+    improvements; the production button (the unit or building being built) and its list
+    (`set_production`), the shield box and row (useful shields, and the waste from the left); the food box (with
+    the granary's half), the food line and row (the food eaten and the surplus); the growth and completion; where the
+    commerce goes (gold to taxes, to science with the corruption, to happiness); and Hurry, which buys the production (`buy`). The arrow
     buttons, or ← and →, go to the previous and next city.
-  - **What they leave out**, for want of the data in the bridge's `state` and `city`: the domestic advisor's income
-    and expense breakdown and its per-city commerce, corruption, maintenance, science and taxes; the city screen's
-    culture, strategic resources and luxuries, its split of the commerce into taxes, science and luxury, and its
-    specialists; the client's moving of citizens between tiles; and tiles other cities work.
+  - **What they leave out:** the client's moving of citizens between tiles and cycling of specialists on the city
+    screen (the bridge has no command for them), the tiles other cities work, and the specialists in the domestic
+    advisor's rows (`state`'s cities have mood counts, not `citizens`). Without the bridge's newer fields (an older
+    bridge) the screens show what its tiles' yields and mood counts give.
 - **Where it comes from:** `python -m agentenv_openciv3.webart <C7 dir> <out dir>` converts the client's art
   (C7-Game/Assets) for the browser when the client image is built: the PNG sheets as they are (losslessly smaller),
   and each unit's FLC animations decoded (`civ3flc.py`) into a sheet per unit with a row per action and direction, and

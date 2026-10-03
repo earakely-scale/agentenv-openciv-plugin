@@ -66,6 +66,7 @@ SCREENS = {
     "city_bg": "city screen/background.png", "city_buttons": "city screen/cityMgmtButtons.png",
     "prod_button": "city screen/ProdButton.png", "prod_queue": "city screen/ProductionQueueBox.png",
     "buildings_small": "city screen/buildings-small.png", "buildings_large": "city screen/buildings-large.png",
+    "luxury_icons": "city screen/luxuryicons_small.png",
     "units_32": "Units/units_32.png", "popup": "popupborders.png", "xo": "X-o_ALLstates-sprite.png",
     "orbs": "buttonsFINAL.png",
     "tech_placeholder": "Tech Chooser/Icons/placeholder.png",

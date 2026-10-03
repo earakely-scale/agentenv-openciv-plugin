@@ -204,6 +204,12 @@ body.art .commands button.icon kbd { position: absolute; right: -3px; bottom: -4
 .cs-cityname { font-size: 28px; text-align: center; }
 .cs-list { position: absolute; overflow-y: auto; overflow-x: hidden; }
 .cs-list div { font-size: 14px; line-height: 1.362; margin-bottom: 4px; white-space: nowrap; }
+.cs-strat { display: flex; overflow-x: auto; overflow-y: hidden; }
+.cs-res { flex: none; width: 45px; display: flex; flex-direction: column; align-items: center; position: relative; }
+.cs-res .cs-sp { position: relative; }
+.cs-res span { font-size: 14px; line-height: 1.362; }
+.cs-lux { display: flex; align-items: center; gap: 4px; height: 22px; }
+.cs-lux i { width: 22px; height: 22px; background-repeat: no-repeat; }
 .cs-produnit { position: absolute; left: -63px; top: -85px; width: 240px; height: 240px; pointer-events: none; }
 .cs-prodlb { left: 0; top: 65px; width: 114px; text-align: center; overflow: visible; }
 .cs-pq { position: absolute; left: 814px; top: 135px; width: 203px; height: 360px; background-repeat: no-repeat; }
