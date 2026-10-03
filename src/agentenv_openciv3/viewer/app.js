@@ -1374,7 +1374,8 @@ addEventListener("hashchange", () => {
 
 // The stream's director, on a 90 s loop: the whole map (20 s), three agents in the spotlight (15 s each: the map flies
 // to the civ, its card shows its turn, and with the client its client view sits in the corner), then every agent's
-// panel (25 s). Once the game is over, the summary stays up.
+// panel (25 s). With ?stream&client and the client, it shows the whole map (20 s), then every agent's client view full
+// size in turn (15 s each). Once the game is over, the summary stays up.
 let shot = null;
 function direct() {
   if (!STREAM || !M.ready) return;
@@ -1383,11 +1384,18 @@ function direct() {
     if (shot !== "summary") { shot = "summary"; closeClient(); setView("summary"); }
     return;
   }
-  const now = Math.floor(Date.now() / 1000), loop = Math.floor(now / 90), t = now % 90;
+  const now = Math.floor(Date.now() / 1000);
   let next, p = null;
-  if (t < 20) next = "overview";
-  else if (t < 65) { p = seats[(loop * 3 + Math.floor((t - 20) / 15)) % seats.length]; next = "agent:" + p.index; }
-  else next = "agents";
+  if (STREAM_CLIENT && M.live?.client) {
+    const t = now % (20 + 15 * seats.length);
+    if (t < 20) next = "overview";
+    else { p = seats[Math.floor((t - 20) / 15)]; next = "agent:" + p.index; }
+  } else {
+    const loop = Math.floor(now / 90), t = now % 90;
+    if (t < 20) next = "overview";
+    else if (t < 65) { p = seats[(loop * 3 + Math.floor((t - 20) / 15)) % seats.length]; next = "agent:" + p.index; }
+    else next = "agents";
+  }
   if (next === shot) return;
   shot = next;
   if (next === "agents") { closeClient(); setFocus(null); setView("agents"); return; }
