@@ -112,21 +112,24 @@ def test_an_ini_named_otherwise_is_still_found(tmp_path):
 # A ruleset as the client's Lua/civ3/ruleset.json has it, cut down: two techs, a unit two civs can build, a unit the
 # standalone mode drops (no art), buildings and a terraform.
 RULESET = {
-    "civilizations": [{"name": "Rome"}, {"name": "Greece"}, {"name": "Egypt"}, {"name": "Barbarians", "isBarbarian": True}],
+    "civilizations": [{"name": "Rome"}, {"name": "Greece"}, {"name": "Egypt"},
+                      {"name": "Barbarians", "isBarbarian": True}],
     "techs": [
-        {"id": "tech-2", "name": "Masonry", "eraCivilopediaName": "ERAS_Ancient_Times", "requiredForEraAdvancement": True,
-         "x": 85, "y": 182},
-        {"id": "tech-30", "name": "Education", "eraCivilopediaName": "ERAS_Middle_Ages", "requiredForEraAdvancement": False,
-         "x": 331, "y": 374, "prerequisites": ["tech-2"]}],
+        {"id": "tech-2", "name": "Masonry", "eraCivilopediaName": "ERAS_Ancient_Times",
+         "requiredForEraAdvancement": True, "x": 85, "y": 182},
+        {"id": "tech-30", "name": "Education", "eraCivilopediaName": "ERAS_Middle_Ages",
+         "requiredForEraAdvancement": False, "x": 331, "y": 374, "prerequisites": ["tech-2"]}],
     "unitPrototypes": [
         {"name": "Warrior", "attack": 1, "defense": 1, "movement": 1, "bombard": 0, "requiredTech": "tech-2",
-         "producibleBy": ["Rome", "Greece"], "art": {"thumbnailArt": {"defaultIndex": 4, "variations": {"ERAS_Modern_Era": 70}}}},
-        {"name": "Tank", "attack": 16, "defense": 8, "movement": 2, "requiredTech": "tech-2", "producibleBy": ["Rome"]}],
+         "producibleBy": ["Rome", "Greece"],
+         "art": {"thumbnailArt": {"defaultIndex": 4, "variations": {"ERAS_Modern_Era": 70}}}},
+        {"name": "Tank", "attack": 16, "defense": 8, "movement": 2, "requiredTech": "tech-2",
+         "producibleBy": ["Rome"]}],
     "buildings": [{"name": "Walls", "requiredTech": "tech-2", "iconRowIndex": 7},
                   {"name": "Pyramids", "renderedObsoleteBy": "tech-30", "iconRowIndex": 12}],
-    "terraForms": [{"name": "Outpost", "requiredTech": "tech-2", "buttonTexture": "ui.unit_control.unit_build_outpost"}],
+    "terraForms": [{"name": "Outpost", "requiredTech": "tech-2",
+                    "buttonTexture": "ui.unit_control.unit_build_outpost"}],
 }
-
 
 def client_tree(root: Path) -> Path:
     """A C7 directory with every sheet webart takes (a small PNG each), one unit, the fonts, the ruleset."""

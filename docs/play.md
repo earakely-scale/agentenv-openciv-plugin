@@ -189,11 +189,46 @@ the map with the OpenCiv3 client's own art, the way the client draws it. **T** s
   marks, and the turning cursor under the active unit. The HUD takes the client's art too: the status scroll with
   the next-turn dome (Enter or Space ends the turn when no unit waits), the minimap's frame and colours, and the unit
   order buttons. Colours are the client's (`known_map` `players[].color`).
+- **The advisors and the city screen** (`screens.js`) are the client's too, with the art on: its 1024x768 screens,
+  scaled to the window, every label and button where the client puts it (UIElements/Advisors, UIElements/CityScreen),
+  in its Noto Sans. The advisors' heads are the seat's era's (`state.era`). Esc or the exit button closes a screen;
+  F1, F4 and F6 switch between the advisors; the client's own popups (an advisor's head over the parchment, the
+  orb buttons) confirm what changes the game.
+  - **Domestic (F1):** the treasury and the net gold per turn; the science and luxury sliders (drag the beaker or the
+    smiley, or press their plus and minus), each step moving a tenth as the client does (more science takes it from
+    taxes, else from luxury; less gives it to taxes), sent as `set_rates`; the research and its turns; the
+    government button, which starts a revolution ("You say you want a revolution?") and then asks for the new
+    government (`revolution`; the client asks that when the anarchy ends); and a row per city: its food surplus,
+    useful shields, happy and content citizens, the citizens' heads by mood, and what it builds. A city's name opens
+    its screen.
+  - **Foreign (F4):** the client's screen, whose tab panel (Treaties, Trades, Details) is otherwise empty, with the
+    seat's `diplomacy` on its parchment: a row per civ met (war or peace, the gold asked for peace, score,
+    government) with Declare war or Propose peace, and the treaties, the peace offers and the civs met in the panel.
+  - **Science (F6):** the client's tech tree, an era a page (Previous Era, Next Era), each tech's box where the
+    ruleset places it, sized by what it brings, coloured by its state: known, being researched or queued (with its
+    place in the queue), researchable now (with its turns), or blocked; a tech not needed for the next era is in
+    italics, marked. Clicking a tech of this era or an earlier one researches it, its missing prerequisites first
+    (`research`). This art draws only the ancient era's small boxes, so every box is that one stretched to its size.
+  - **City screen** (click your city, or its name in the domestic advisor): the map shows through the screen's
+    window with the camera on the tile south of the city, as the client puts it, the tiles the city can work
+    outlined and each worked tile's food, shields and commerce on it (`city` `worked`, `workable`); the citizens'
+    heads by mood; the improvements; the production button (the unit or building being built) and its list
+    (`set_production`), the shield box and row (useful shields; the shields its tiles yield beyond them, as waste);
+    the food box (with the granary's half), the food line and row (its tiles' food, the food eaten and the surplus);
+    the growth and completion; its tiles' commerce; and Hurry, which buys the production (`buy`). The arrow
+    buttons, or ← and →, go to the previous and next city.
+  - **What they leave out**, for want of the data in the bridge's `state` and `city`: the domestic advisor's income
+    and expense breakdown and its per-city commerce, corruption, maintenance, science and taxes; the city screen's
+    culture, strategic resources and luxuries, its split of the commerce into taxes, science and luxury, and its
+    specialists; the client's moving of citizens between tiles; and tiles other cities work.
 - **Where it comes from:** `python -m agentenv_openciv3.webart <C7 dir> <out dir>` converts the client's art
   (C7-Game/Assets) for the browser when the client image is built: the PNG sheets as they are (losslessly smaller),
   and each unit's FLC animations decoded (`civ3flc.py`) into a sheet per unit with a row per action and direction, and
-  a mask of its civ-colour pixels. `manifest.json` names them. Out of the image, `OPENCIV_WEB_ART` points the env at
-  a converted directory.
+  a mask of its civ-colour pixels; the screens' art (`screens` in the manifest: backgrounds, heads, buttons, boxes and
+  icons, which the page fetches when a screen first opens), with the tech boxes stretched to their sizes; and, from
+  the client's ruleset (`Lua/civ3/ruleset.json`, the standalone mode's units), the science advisor's tech tree as it
+  lays it out (`techs`), the units' stats and icons (`unit_info`) and the buildings' icons (`building_icons`).
+  `manifest.json` names them. Out of the image, `OPENCIV_WEB_ART` points the env at a converted directory.
 - **Served:** `GET /play/art/<path>` (no token: it is the same for every seat), the manifest revalidated, the rest
   cached for good under the art's id. 404 when the env has no art; the view's `game.art` says whether it has.
 - **Rules followed:** the client's draw order (each layer over every tile before the next; fog over cities, under

@@ -177,8 +177,9 @@ def _ruleset(c7: Path) -> dict:
         tid = t["id"]
         tf = [TERRAFORM_BUTTON[k] for x in r.get("terraForms", []) if x.get("requiredTech") == tid
               for k in [x.get("buttonTexture", "").rsplit(".", 1)[-1]] if k in TERRAFORM_BUTTON]
+        era = t.get("eraCivilopediaName")
         techs.append({
-            "id": tid, "name": t["name"], "era": ERAS.index(t["eraCivilopediaName"]) if t.get("eraCivilopediaName") in ERAS else 0,
+            "id": tid, "name": t["name"], "era": ERAS.index(era) if era in ERAS else 0,
             "x": t.get("x", 0), "y": t.get("y", 0), "required": bool(t.get("requiredForEraAdvancement", True)),
             "prereqs": t.get("prerequisites", []),
             "buildings": sum((b.get("requiredTech") == tid) + (b.get("renderedObsoleteBy") == tid) for b in buildings),

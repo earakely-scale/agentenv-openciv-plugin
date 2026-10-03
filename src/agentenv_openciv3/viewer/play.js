@@ -185,6 +185,7 @@ function centerOnHome() {
   const b = S.world.bounds(); if (b) { S.cam.cx = (b.x0 + b.x1) / 2; S.cam.cy = (b.y0 + b.y1) / 2; }
 }
 function centerOn(x, y, onlyIfOff = false) {
+  if (S.dialog?.kind === "city" && S.dialog.art) return;   // the art city screen holds the camera (screens.js)
   if (onlyIfOff) {
     const r = $("#map").getBoundingClientRect(), [sx, sy] = S.cam.screen(x, y, r.width, r.height, S.world.wrap ? S.world.W : 0);
     if (sx > r.width * 0.15 && sx < r.width * 0.85 && sy > r.height * 0.2 && sy < r.height * 0.75) return;
@@ -406,8 +407,8 @@ function paint() {
   const c = $("#map"); if (!c) return;
   const {ctx, w, h} = sizeCanvas(c);
   const u = unit(S.sel);
-  const dlgCity = S.dialog?.kind === "city" ? S.dialog.city : null;
-  S.painter.draw(ctx, S.world, S.cam, w, h, {
+  const dlgCity = S.dialog?.kind === "city" ? S.dialog.city : null, screen = dlgCity && S.dialog.art;
+  S.painter.draw(ctx, S.world, S.cam, w, h, screen ? {mine: new Map(myUnits().map(x => [x.id, x])), cityScreen: dlgCity} : {
     selected: u, targets: u && !ended() ? u.attack_targets || [] : [], sites: u ? S.sites : null, hover: S.hover,
     mine: new Map(myUnits().map(x => [x.id, x])),
     cityRadius: dlgCity, path: u && S.hover && S.mode ? [[u.x, u.y], S.hover] : null,
@@ -525,6 +526,7 @@ function keys() {
   document.addEventListener("keydown", e => {
     if (!S.view || e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.metaKey || e.ctrlKey || e.altKey) return;
     if (S.dialog) {
+      if (S.dialog.onKey && S.dialog.onKey(e)) return;   // the art screens' own keys (screens.js)
       if (e.key === "Escape") { e.preventDefault(); closeDialog(); }
       return;
     }
@@ -554,6 +556,7 @@ function keys() {
 // ======================================================================== dialogs
 
 function dialog(html, opts = {}) {
+  if (S.dialog?.art && S.dialog.saved) Object.assign(S.cam, S.dialog.saved);   // an art city screen gives the camera back
   S.dialog = opts;
   $("#dialog").innerHTML = `<div class="scrim ${opts.side ? "side" : ""}"><div class="dlg" role="dialog">${html}</div></div>`;
   for (const b of $$("#dialog [data-x]")) b.onclick = closeDialog;
@@ -599,6 +602,7 @@ function turnReport() {
 }
 
 async function openCity(id) {
+  if (artScreensOn()) return artCity(id);   // the client's city screen, in its art (screens.js)
   let c;
   try { c = await api(`play/api/city?city=${encodeURIComponent(id)}`); } catch (e) { toast(e.message, true); return; }
   centerOn(c.x, c.y);
@@ -637,6 +641,7 @@ async function openCity(id) {
 }
 
 async function advisor(which) {
+  if (artScreensOn()) return artAdvisor(which);   // the client's advisors, in its art (screens.js)
   if (which === "science") {
     let t;
     try { t = await api("play/api/techs"); } catch (e) { toast(e.message, true); return; }
