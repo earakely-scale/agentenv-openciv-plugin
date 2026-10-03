@@ -114,8 +114,9 @@ def timeline_from_log(path: str | Path) -> dict[int, list[dict]]:
 
 
 def by_player(per_turn: dict | None, players: list[dict]) -> dict:
-    """Per-turn, per-seat data (actions or calls) keyed by player index. Keys may already be indices, or name a
-    seat's civ or label (multi-seat action logs), or be -1 (a single-seat log: the game's only seat)."""
+    """Per-turn, per-seat data (actions, calls, or texts such as notes) keyed by player index. Keys may already be
+    indices, or name a seat's civ or label (multi-seat action logs), or be -1 (a single-seat log: the game's only
+    seat)."""
     if not per_turn:
         return {}
     seats = [p for p in players if p.get("seat") is not None] or [p for p in players if not p["barbarian"]][:1]
@@ -138,6 +139,8 @@ def by_player(per_turn: dict | None, players: list[dict]) -> dict:
                 cur = out.setdefault(int(t), {})
                 if isinstance(v, list):
                     cur.setdefault(i, []).extend(v)
+                elif isinstance(v, str):
+                    cur[i] = v
                 else:
                     c = cur.setdefault(i, {"ok": 0, "failed": 0})
                     c["ok"] += v.get("ok", 0)
@@ -1029,12 +1032,16 @@ class Mp4Pipe:
 
 def document(snapshots: Iterable[dict], *, seat_actions: matchdata.Actions | None = None,
              calls: matchdata.Calls | None = None, actions: dict | None = None,
-             labels: dict[str, str] | None = None, humans: Iterable[str] = ()) -> dict:
-    """The viewer's document for these snapshots, with the seats' actions and calls keyed by player index. Without
-    `seat_actions`, the old merged `actions` timeline is split by its "name: " prefixes."""
+             labels: dict[str, str] | None = None, humans: Iterable[str] = (),
+             seat_notes: matchdata.Notes | None = None, plans: matchdata.Notes | None = None,
+             messages: matchdata.Messages | None = None) -> dict:
+    """The viewer's document for these snapshots, with the seats' actions, calls, end_turn notes and plans keyed by
+    player index, and their messages. Without `seat_actions`, the old merged `actions` timeline is split by its
+    "name: " prefixes."""
     m = MatchData.from_snapshots(snapshots, labels=labels, humans=humans)
     per_seat = by_player(seat_actions, m.players) if seat_actions else split_timeline(actions, m.players)
-    return m.document(actions=per_seat, calls=by_player(calls, m.players))
+    return m.document(actions=per_seat, calls=by_player(calls, m.players), notes=by_player(seat_notes, m.players),
+                      plans=by_player(plans, m.players), messages=messages)
 
 
 def map_png(snapshots: Iterable[dict], view: str = "spectator") -> bytes:
@@ -1048,16 +1055,19 @@ def render(snapshots: list[dict], *, formats: Iterable[str] = ("mp4", "html"), v
            fps: int = 4, name: str = "openciv3", actions: dict | None = None,
            baselines: dict[str, dict] | None = None, seat_actions: matchdata.Actions | None = None,
            calls: matchdata.Calls | None = None, client_videos: dict[str, dict] | None = None,
-           labels: dict[str, str] | None = None, humans: Iterable[str] = ()) -> tuple[list[File], list[str]]:
+           labels: dict[str, str] | None = None, humans: Iterable[str] = (), seat_notes: matchdata.Notes | None = None,
+           plans: matchdata.Notes | None = None,
+           messages: matchdata.Messages | None = None) -> tuple[list[File], list[str]]:
     """Render the requested formats; returns the files and notes (e.g. that a gif replaced the mp4).
 
-    `seat_actions` and `calls` are per turn and per seat (player index, or the civ's name); without
-    `seat_actions`, `actions` (the merged timeline, "civ: " prefixed with several seats) stands in.
-    `client_videos` goes to the html viewer as is."""
+    `seat_actions`, `calls`, `seat_notes` (end_turn notes) and `plans` are per turn and per seat (player index, or
+    the civ's name); without `seat_actions`, `actions` (the merged timeline, "civ: " prefixed with several seats)
+    stands in. `messages` are per turn, with player indices. `client_videos` goes to the html viewer as is."""
     if not snapshots:
         raise ValueError("no snapshots to render")
     formats = list(dict.fromkeys(formats))
-    doc = document(snapshots, seat_actions=seat_actions, calls=calls, actions=actions, labels=labels, humans=humans)
+    doc = document(snapshots, seat_actions=seat_actions, calls=calls, actions=actions, labels=labels, humans=humans,
+                   seat_notes=seat_notes, plans=plans, messages=messages)
     files, notes = [], []
     drawn = [f for f in formats if f in ("mp4", "gif", "png")]
     if drawn:

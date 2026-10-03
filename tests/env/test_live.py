@@ -61,7 +61,8 @@ def test_the_action_log_counts_every_call_per_turn():
 async def test_data_json_sends_the_turns_after_since_and_the_turn_being_played(env, tools):
     first = await data(env)
     assert first["game"] is None and first["turns"] == [] and first["live"] == {
-        "turn": None, "game_over": False, "victory": None, "client": False, "recording": True, "seats": []}
+        "turn": None, "game_over": False, "victory": None, "client": False, "recording": True, "min_turn_seconds": 0,
+        "messages": [], "seats": []}
 
     await tools("unit_order", unit="u1", order="found_city")
     await tools.error("unit_order", unit="u2", order="explore")
@@ -120,7 +121,8 @@ async def test_the_live_seats_say_who_has_ended_the_turn(env, tools):
     rome, greek = doc["live"]["seats"]
     assert (rome["civ"], rome["label"], rome["ended"]) == ("Rome", None, False)
     assert greek == {"civ": "Greece", "label": "B", "human": False, "ended": True, "seconds": 2.5,
-                     "calls": {"ok": 1, "failed": 0}, "actions": [{"text": "u1 found_city", "ok": True}]}
+                     "calls": {"ok": 1, "failed": 0}, "actions": [{"text": "u1 found_city", "ok": True}],
+                     "note": None, "plan": None, "plan_turn": None}
 
 
 async def test_the_client_view_draws_the_seat_asked_for(env, tools, monkeypatch):

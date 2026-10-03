@@ -19,7 +19,7 @@ pytestmark = pytest.mark.anyio
 SRC = Path(__file__).resolve().parents[2] / "src"
 REAL_CMD = os.environ.get("CIVBRIDGE_CMD", str(SRC.parent / "build" / "bridge" / "CivBridge"))
 TOOLS = {"get_turn_brief", "list_units", "view_map", "find_city_sites", "unit_order", "city_info", "set_production",
-         "research", "set_rates", "buy", "revolution", "diplomacy", "end_turn", "plan"}
+         "research", "set_rates", "buy", "revolution", "diplomacy", "end_turn", "plan", "message"}
 END_TURN = ("end_turn", {"skip_idle": True})
 
 

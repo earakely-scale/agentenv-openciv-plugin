@@ -284,6 +284,24 @@ async def test_a_match_with_humans_fails_on_an_env_that_returns_no_play_links(lo
             await step.execute(run_context(record))
 
 
+async def test_a_match_paced_for_a_broadcast_asks_the_env_for_min_turn_seconds(local_stores):
+    env = FakeGame()
+    async with deployed(env) as record:
+        for pace in (15, 0):
+            await OpenCiv3MatchTaskStep(id="match", version=None, env_id="openciv3", turns=10,
+                                        min_turn_seconds=pace).execute(run_context(record, "opus", "sol"))
+    assert [g.get("min_turn_seconds") for g in env.games] == [15, None]
+
+
+def test_a_paced_match_round_trips(local_stores):
+    cls = get_task_step_registry()["openciv3_match"]
+    step = cls.from_dict({"id": "match", "type": "openciv3_match", "env_id": "openciv3", "turns": 10,
+                          "min_turn_seconds": 20})
+    again = cls.from_dict(step.to_dict())
+    assert again.to_dict() == step.to_dict() and again.min_turn_seconds == 20
+    assert cls.from_dict({"id": "m", "type": "openciv3_match", "env_id": "e", "turns": 1}).min_turn_seconds == 0
+
+
 def test_a_match_with_humans_round_trips(local_stores):
     cls = get_task_step_registry()["openciv3_match"]
     for humans in ({"you": "Rome"}, ["you", "friend"]):

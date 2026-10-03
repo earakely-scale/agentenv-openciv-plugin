@@ -30,11 +30,11 @@ async def settle_everything(tools):
     await tools("unit_order", unit="u4", order="explore")
 
 
-async def test_fourteen_tools_with_descriptions(env):
+async def test_fifteen_tools_with_descriptions(env):
     listed = {t.name: t for t in await env.mcp.list_tools()}
     assert set(listed) == {"get_turn_brief", "list_units", "view_map", "find_city_sites", "unit_order", "city_info",
                            "set_production", "research", "set_rates", "buy", "revolution", "diplomacy", "end_turn",
-                           "plan"}
+                           "plan", "message"}
     assert all(t.description and t.outputSchema is None for t in listed.values())
     assert "Lost context? Call get_turn_brief." in listed["get_turn_brief"].description
 

@@ -6,7 +6,7 @@
 
 AI agents play [OpenCiv3](https://github.com/C7-Game/OpenCiv3), the open-source Civilization III remake, against
 each other or against the game's own AI. Claude Code, Codex and Gemini CLI agents each lead a civilization through
-fourteen MCP tools; every game is graded, recorded, and can be watched live while it plays. This repository is an
+fifteen MCP tools; every game is graded, recorded, and can be watched live while it plays. This repository is an
 environment plugin for the [AgentEnv Framework](https://www.agentenvframework.com), Scale AI's open-source framework
 for building RL environments.
 
@@ -286,7 +286,7 @@ flowchart TB
     gemini["openciv3-gemini<br/>Gemini CLI"]
     you["you, in a browser"]
     subgraph env["The OpenCiv3 env: one container"]
-        server["agentenv_openciv3 (Python)<br/>14 MCP tools · data plane · extensions · live view"]
+        server["agentenv_openciv3 (Python)<br/>15 MCP tools · data plane · extensions · live view"]
         bridge["CivBridge (.NET 8)<br/>runs the game headless"]
         engine["C7Engine<br/>OpenCiv3's engine, patched"]
         server -- "JSON lines" --> bridge --> engine
@@ -331,7 +331,7 @@ a framework concept:
 
 | AgentEnv concept | Here |
 |---|---|
-| [Environment](https://www.agentenvframework.com/docs/environments/creating): MCP tools, a data plane and extensions in one container | `src/agentenv_openciv3/server.py`, an `AgentEnvEnvironment` with 14 tools, `data/get` (the game's summary for verifiers) and the extensions `urn:openciv3:new-game/v1`, `autoplay/v1` and `recording/v1` |
+| [Environment](https://www.agentenvframework.com/docs/environments/creating): MCP tools, a data plane and extensions in one container | `src/agentenv_openciv3/server.py`, an `AgentEnvEnvironment` with 15 tools, `data/get` (the game's summary for verifiers) and the extensions `urn:openciv3:new-game/v1`, `autoplay/v1` and `recording/v1` |
 | [Plugin](https://www.agentenvframework.com/docs/plugins/environment-plugins): a pip package with entry points | `pyproject.toml`: the bundle (`agent_env.bundles`), the `agent-env openciv3` commands (`agent_env.cli_plugins`) and two task steps (`agent_env.task_steps`) |
 | [Task steps](https://www.agentenvframework.com/docs/plugins/task-step-plugins) | `openciv3_match` and `save_env_recording` in `src/agentenv_openciv3/steps.py` |
 | [Tasks](https://www.agentenvframework.com/docs/tasks/creating) and verifiers | `src/agentenv_openciv3/bundles/openciv3/`: the tasks and their verifiers, run with `agent-env run openciv3 --task <task>` |
@@ -343,7 +343,7 @@ Start with the framework's [getting started](https://www.agentenvframework.com/d
 
 ## The environment's tools
 
-Fourteen tools. They return compact text, end every game action with a status footer such as
+Fifteen tools. They return compact text, end every game action with a status footer such as
 `[T23/60 · needs orders: u7, c1]`, and fail with the reason, the valid alternatives and, when one would succeed, the
 call to make instead. Full contract: [docs/tools.md](docs/tools.md).
 
@@ -361,8 +361,9 @@ call to make instead. Full contract: [docs/tools.md](docs/tools.md).
 | `buy` | Rush a city's current production with gold (with citizens, under Despotism) |
 | `revolution` | Change government, after a few turns of anarchy |
 | `diplomacy` | The civilizations you know: war or peace, score, government, military against yours, the price of peace; declare war or propose peace (with another agent's civilization, peace is signed when both propose it) |
-| `end_turn` | End the turn, or several quiet ones until something needs attention; lists blockers instead when something needs orders. With other agents in the game, it waits until every agent has ended the turn |
-| `plan` | Read or replace the agent's plan, which every brief shows back |
+| `end_turn` | End the turn, or several quiet ones until something needs attention; lists blockers instead when something needs orders. With other agents in the game, it waits until every agent has ended the turn. An optional one-line note tells the people watching what the agent did and why |
+| `plan` | Read or replace the agent's plan, which every brief shows back and spectators see |
+| `message` | Talk to the other agents' leaders, one or all of them: alliances, threats, deals. They read it in their next reply and brief, and the live view and recordings show it |
 
 **What the game covers.** Agents found and place cities and choose what they build and research; set the science and
 luxury rates and buy production; move, automate, fortify, attack and bombard; change government; and declare war or

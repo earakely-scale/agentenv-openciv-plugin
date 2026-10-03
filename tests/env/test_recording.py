@@ -113,6 +113,16 @@ def test_the_old_merged_timeline_still_reaches_the_seats(game):
     assert t3["actions"] == {"0": single[2]} and t3["calls"] == {"0": {"ok": 3, "failed": 0}}
 
 
+def test_notes_plans_and_messages_of_a_turn_go_on_the_next_entry(game):
+    snaps = at_war(game)
+    doc = doc_of(snaps, seat_notes={2: {"Rome": "Settling the river."}}, plans={2: {"sol": "Hold the hills."}},
+                 messages={2: [{"from": 1, "to": [0], "text": "Leave."}, {"from": 0, "to": "all", "text": "No."}]})
+    t2, t3 = (next(t for t in doc["turns"] if t["turn"] == n) for n in (2, 3))
+    assert not {"notes", "plans", "messages"} & set(t2)
+    assert t3["notes"] == {"0": "Settling the river."} and t3["plans"] == {"1": "Hold the hills."}
+    assert t3["messages"] == [{"from": 1, "to": [0], "text": "Leave."}, {"from": 0, "to": "all", "text": "No."}]
+
+
 def test_wars_and_captures_are_key_moments(game):
     r = Renderer(doc_of(at_war(game)))
     kinds = [e["kind"] for _, e in r.moments(len(r.turns) - 1, 11)]

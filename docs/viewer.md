@@ -50,13 +50,23 @@ the turns it hasn't seen; a recording embeds the whole document.
     "events": [{"kind": "city_captured", "owner": 1, "from": 3, "x": 10, "y": 12, "text": "...",
                 "source": "derived" | "bridge"}],
     "actions": {"1": [{"text": "u4 settle → (32,28)", "ok": true}]},   // made during turn - 1, by seat civs
-    "calls":   {"1": {"ok": 31, "failed": 2}}                           // tool calls during turn - 1
+    "calls":   {"1": {"ok": 31, "failed": 2}},                          // tool calls during turn - 1
+    // The next three only when there are some (absent otherwise), all from turn - 1:
+    "notes":   {"1": "Settling the river before Greece does."},        // each seat's end_turn note for turn - 1
+    "plans":   {"1": "Expand to 6 cities by T40, …"},                   // the last plan each seat set in turn - 1
+    "messages": [{"from": 1, "to": [3], "text": "Join me against Carthage."},   // sent in turn - 1, oldest first
+                 {"from": 3, "to": "all", "text": "…"}]                 // "to": player indices, or "all"
   }]
 }
 ```
 
 - **Turn entries are final.** Entry `T` is the snapshot written when turn `T` began, plus what led to it: the events
-  between `T - 1` and `T` and the actions the seats took in turn `T - 1`. Nothing in it changes later.
+  between `T - 1` and `T` and the actions the seats took in turn `T - 1`, with their notes, plans and messages.
+  Nothing in it changes later.
+- **What the agents say** is text written for spectators and cleaned for them ([tools.md](tools.md#what-spectators-read)):
+  `notes` (at most 140 characters, the `end_turn` note of the turn the seat ended), `plans` (the first 300
+  characters of a plan, cut with `…`) and `messages` (at most 280; `from` and `to` are player indices, `to` is
+  `"all"` for every other leader). The `live` object has the turn being played's.
 - **Derived events** cover every civ: `city_founded`, `city_captured`, `city_destroyed`, `civ_destroyed`,
   `tech_learned`, `government_changed`, `war_declared`, `peace_signed`, `lead_change`. Bridge events are kept for
   the kinds the snapshots can't show (`unit_lost`, `gold_stolen`, `disorder`, …); per-seat chatter (`city_grew`,
@@ -74,15 +84,22 @@ the turns it hasn't seen; a recording embeds the whole document.
 | `GET /live/client.png?seat=CIV&turn=N` | The real client's view of the game from that seat (default: the first), for the newest turn it has drawn; 503 with `Retry-After` until the first frame, 404 without the client |
 | `GET /live/state.json`, `GET /live/frame.png` | Kept for old pages and scripts |
 
-`live` is the turn being played right now. A seat is `ended` once it has ended the turn, been defeated, or the game is
-over; `end_turn` counts in `calls` once it returns. Before the first game, `game` is null and `turns` is empty.
+`live` is the turn being played right now. A seat is `ended` once it has ended the turn (including while its
+`end_turn` waits for the broadcast pace), been defeated, or the game is over; `end_turn` counts in `calls` once it
+returns. Before the first game, `game` is null, `turns` is empty, and so are `seats` and `messages`.
 
 ```jsonc
 {"turn": 57, "game_over": false, "victory": null, "client": true, "recording": true,
+ "min_turn_seconds": 15,                                          // the broadcast pace: no turn ends sooner; 0: none
+ "messages": [{"from": "Rome", "to": ["Greece"], "text": "Join me against Carthage.",
+               "seconds": 12.4}],                                 // this turn's, oldest first; "to": "all" for everyone
  "seats": [{"civ": "Rome", "label": "opus", "ended": false,      // has ended the turn
             "seconds": 41.2,                                      // playing: since the turn began; ended: how long it took
             "calls": {"ok": 12, "failed": 1},
-            "actions": [{"text": "c3 builds Settler", "ok": true}]}]}   // so far this turn
+            "actions": [{"text": "c3 builds Settler", "ok": true}],    // so far this turn
+            "note": "Settling the river before Greece does.",    // its end_turn note for this turn, or null
+            "plan": "Expand to 6 cities by T40, then …",          // its plan as spectators see it, or null
+            "plan_turn": 12}]}                                    // the turn it set that plan, or null
 ```
 
 ## 4. In a recording

@@ -1,4 +1,4 @@
-"""OpenCiv3 as an AgentEnv environment: fourteen MCP tools over one CivBridge game (docs/tools.md).
+"""OpenCiv3 as an AgentEnv environment: fifteen MCP tools over one CivBridge game (docs/tools.md).
 
 A game may have several seats, one per agent (new-game `seats`): each MCP request plays the seat its
 X-OpenCiv3-Seat header names, and the turn advances once every seat has ended it. A person may play a seat
@@ -45,7 +45,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 
-from . import client, live, matchdata, recording, render, viewer, webart
+from . import client, live, matchdata, moderation, recording, render, viewer, webart
 from .actionlog import ActionLog
 from .baselines import POLICIES, Baselines
 from .bridge import DEAD, Bridge, BridgeError
@@ -53,16 +53,20 @@ from .bridge import DEAD, Bridge, BridgeError
 log = logging.getLogger(__name__)
 
 SCENARIO_KEYS = ("seed", "civ", "opponents", "size", "difficulty", "barbarians", "landform", "ocean", "turn_limit",
-                 "seats", "labels", "humans", "human_turn_seconds")
+                 "seats", "labels", "humans", "human_turn_seconds", "min_turn_seconds")
 SCENARIO_INTS = {"seed": (0, None), "opponents": (1, 11), "ocean": (0, 100), "turn_limit": (1, 1000),
-                 "human_turn_seconds": (0, None)}
-ENV_ONLY = ("humans", "human_turn_seconds")    # scenario keys the env keeps for itself, not new_game args
+                 "human_turn_seconds": (0, None), "min_turn_seconds": (0, 600)}
+ENV_ONLY = ("humans", "human_turn_seconds", "min_turn_seconds")    # the env's own scenario keys, not new_game args
 ENV_SCENARIO = (("size", "OPENCIV_SIZE", str), ("opponents", "OPENCIV_OPPONENTS", int),
                 ("difficulty", "OPENCIV_DIFFICULTY", str), ("barbarians", "OPENCIV_BARBARIANS", str))
 AUTOPLAY_POLICIES = Literal["null", "found_capital", "engine_ai", "settler_bot"]
 CALLS_BEFORE_NUDGE = 25
 REPEATS_BEFORE_HINT = 3
 PLAN_LIMIT = 1000
+PUBLIC_PLAN_LIMIT = 300       # what spectators see of a plan
+NOTE_LIMIT = 140
+MESSAGE_LIMIT = 280
+MESSAGES_PER_TURN = 3
 SITE_LOOKUPS = 2
 AUTOPLAY_CHUNK = 10
 RESTARTS_PER_TURN = 3
@@ -142,6 +146,21 @@ def resolve_name(given: str, options: list[str]) -> str | None:
     return next(o for o in options if _norm(o) == close[0]) if len(close) == 1 else None
 
 
+def leader_named(name: str, seats: list[Seat]) -> Seat | None:
+    """The seat `name` plainly means, by civ or by label (as resolve_name forgives), or None."""
+    wanted = name.strip().lower()
+    if not wanted:
+        return None
+    names = (lambda s: s.civ, lambda s: s.label or "")
+    for key in names:
+        if exact := next((s for s in seats if key(s).lower() == wanted), None):
+            return exact
+    for key in names:
+        if match := resolve_name(name, [key(s) for s in seats if key(s)]):
+            return next(s for s in seats if key(s) == match)
+    return None
+
+
 def clean(text: str) -> str:
     """Text the MCP transport can always encode: lone surrogates (from agent input echoed back) become '?'."""
     return text.encode("utf-8", "replace").decode("utf-8")
@@ -167,8 +186,11 @@ class Seat:
     ready: bool = False
     turn_result: asyncio.Future | None = None
     auto_ended_turns: int = 0
-    ended_at: float | None = None    # when the seat ended the turn (time.monotonic), while `ready`
+    ended_at: float | None = None    # when the seat ended the turn (time.monotonic), while `ready` or `pacing`
     ended_itself: bool = False       # a human seat ended the turn (rather than the env, for it), while `ready`
+    pacing: bool = False             # its end_turn waits for the broadcast pace (min_turn_seconds); ended_at is set
+    notes: dict[int, str] = field(default_factory=dict)    # turn -> its end_turn note, as spectators see it
+    plans: dict[int, str] = field(default_factory=dict)    # turn -> the last plan it set then, as spectators see it
 
     @property
     def name(self) -> str:
@@ -207,6 +229,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
         self.lock = asyncio.Lock()
         self.game: dict | None = None
         self.seats: list[Seat] = [Seat(self.scenario.get("civ", "Rome"), None, ActionLog(self.action_log))]
+        self.messages: list[dict] = []    # {"turn", "from": civ, "to": [civ] | "all", "text", "seconds"}
         self.turn: int | None = None
         self.turn_started = time.monotonic()
         self.game_id: str | None = None
@@ -307,6 +330,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
             if old.turn_result and not old.turn_result.done():
                 old.turn_result.set_exception(BridgeError("new_game", "a new game started; this one is over."))
         self.bridge, self.game_dir, self.game, self.scenario, self.seats = bridge, game_dir, game, scenario, seats
+        self.messages = []
         self.game_id, self.turn = f"g-{uuid.uuid4().hex[:8]}", None
         for seat, state in zip(seats, states, strict=True):
             self._keep(state, seat)
@@ -434,13 +458,13 @@ class OpenCiv3Env(AgentEnvEnvironment):
     async def _end_stalled_turns(self) -> None:
         """While seats wait for the turn to end, end it for any seat that has made no call for SEAT_STALL_SECONDS (an
         agent between sessions, or one that stopped; a person: human_turn_seconds, 0 for never), so one seat cannot
-        hold up the others."""
+        hold up the others. A seat waiting for the broadcast pace is not silent."""
         while any(s.ready for s in self.seats):
             await asyncio.sleep(STALL_CHECK_SECONDS)
             async with self.lock:
                 for seat in self.seats:
                     limit = self._stall_seconds(seat)
-                    if seat.human and not limit:
+                    if (seat.human and not limit) or seat.pacing:
                         continue
                     if not (seat.ready or seat.over or time.monotonic() - seat.last_call < limit or self.failed):
                         await self._end_turn_for(seat)
@@ -490,6 +514,26 @@ class OpenCiv3Env(AgentEnvEnvironment):
             self._advanced(res["seats"])
         else:
             seat.ready, seat.ended_at = True, time.monotonic()
+
+    async def _pace(self, seat: Seat) -> None:
+        """The broadcast pace (new-game min_turn_seconds): in a game with several seats, the last seat still playing a
+        turn ends it no sooner than that long after it began, so spectators can follow every turn. It waits with the
+        env free, as _seat_turn does; a new game meanwhile fails the call."""
+        pace = self.scenario.get("min_turn_seconds") or 0
+        while self.multi and pace and all(s.ready or s.over for s in self.seats if s is not seat):
+            left = self.turn_started + pace - time.monotonic()
+            if left <= 0:
+                return
+            game = self.game_id
+            seat.pacing, seat.ended_at = True, time.monotonic()
+            self.lock.release()
+            try:
+                await asyncio.sleep(left)
+            finally:
+                await self.lock.acquire()
+                seat.pacing, seat.last_call = False, time.monotonic()
+            if self.game_id != game:
+                raise BridgeError("new_game", "a new game started; this one is over.")
 
     async def close(self) -> None:
         if self.stall_watch:
@@ -584,9 +628,19 @@ class OpenCiv3Env(AgentEnvEnvironment):
 
     @staticmethod
     def _notices(seat: Seat, text: str) -> list[str]:
-        """What happened to the seat since its last call (an engine restart, a turn ended for it) and `text` omits."""
+        """What happened to the seat since its last call (an engine restart, a turn ended for it, a message from
+        another leader) and `text` omits."""
         fresh, seat.notices_shown = seat.notices[seat.notices_shown:], len(seat.notices)
-        return [f"!! {n['text']}." for n in fresh if n["text"] not in text]
+        lines = []
+        for n in fresh:
+            if n["kind"] == "message":
+                said = render.message_line(render.leader(n["from"], n["label"]), "all" if n["to_all"] else "you",
+                                           n["text"])
+                if said not in text:
+                    lines.append(f"✉ {said}")
+            elif n["text"] not in text:
+                lines.append(f"!! {n['text']}.")
+        return lines
 
     def _nudge(self, calls: int) -> str:
         return f"\n({calls} calls this turn — consider end_turn(skip_idle=true))" if calls > CALLS_BEFORE_NUDGE else ""
@@ -615,9 +669,28 @@ class OpenCiv3Env(AgentEnvEnvironment):
                     if b.get("kind") == "idle_unit" and "settle" in units.get(b["id"], {}).get("orders", [])]
         sites = {uid: site for uid in settlers[:SITE_LOOKUPS] if (site := await self._site_for(uid, s))}
         seat = self.seat
-        notices = [n for n in seat.notices if n["turn"] == s["turn"]]
+        notices = [n for n in seat.notices if n["turn"] == s["turn"] and n["kind"] != "message"]
         return render.brief(s, start_techs=seat.start_techs, plan=seat.plan_text, plan_turn=seat.plan_turn,
-                            baselines=self._vs(s["turn"]), sites=sites, events=events, notices=notices)
+                            baselines=self._vs(s["turn"]), sites=sites, events=events, notices=notices,
+                            messages=self._message_lines(seat, s["turn"]))
+
+    def _leader(self, civ: str) -> str:
+        """A seat's civ as messages name it: `Greece (sonnet)`."""
+        return render.leader(civ, next((s.label for s in self.seats if s.civ == civ), None))
+
+    def _message_lines(self, seat: Seat, turn: int) -> list[str]:
+        """The messages `seat` sent or was sent in `turn` and the turn before, oldest first, as its brief lists them."""
+        lines = []
+        for m in self.messages:
+            mine, to_all = m["from"] == seat.civ, m["to"] == "all"
+            if not (turn - 1 <= m["turn"] <= turn and (mine or to_all or seat.civ in m["to"])):
+                continue
+            if mine:
+                sender, recipient = "you", "all" if to_all else ", ".join(m["to"])
+            else:
+                sender, recipient = self._leader(m["from"]), "all" if to_all else "you"
+            lines.append(f"T{m['turn']} {render.message_line(sender, recipient, m['text'])}")
+        return lines
 
     async def _footer(self) -> str:
         return render.footer(await self._state())
@@ -884,7 +957,10 @@ class OpenCiv3Env(AgentEnvEnvironment):
                 description="Hold idle units and accept the engine's picks instead of being blocked.")] = False,
             until_attention: Annotated[bool, Field(
                 description="Keep ending turns until something needs you (or max_turns).")] = False,
-            max_turns: Annotated[int, Field(ge=1, le=20, description="Cap for until_attention, 1-20.")] = 5):
+            max_turns: Annotated[int, Field(ge=1, le=20, description="Cap for until_attention, 1-20.")] = 5,
+            note: Annotated[str | None, Field(description=(
+                "One line for the people watching: what you did this turn and why. At most 140 characters; shown on "
+                "the live broadcast and in recordings."))] = None):
         """End your turn. If decisions are pending, returns END TURN BLOCKED with the call that resolves each one;
         skip_idle=true holds idle units, auto-picks research and accepts the engine's picks instead. Otherwise
         returns the events and the next turn's brief. until_attention stops at anything that needs you: a decision,
@@ -896,7 +972,11 @@ class OpenCiv3Env(AgentEnvEnvironment):
             seat = self.seat
             before = await self._state()
             extra["idle_units"] = sum(b.get("kind") == "idle_unit" for b in before.get("blockers", []))
+            if note is not None and (said := moderation.public(note, NOTE_LIMIT)):
+                seat.notes[before["turn"]] = said
             if seat.turn_result is None:
+                if skip_idle or not before.get("blockers"):
+                    await self._pace(seat)
                 seat.cache = None
                 try:
                     res = await self._call("end_turn", skip_idle=skip_idle, until_attention=until_attention,
@@ -922,7 +1002,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
                 return f"{report}\n{render.game_over(s, self._vs(s['turn']))}\n{render.footer(s)}"
             return f"{report}\n---\n{await self._brief(events=False)}\n{render.footer(s)}"
         return await self._run("end_turn", {"skip_idle": skip_idle, "until_attention": until_attention,
-                                            "max_turns": max_turns}, body, mutating=True, extra=extra)
+                                            "max_turns": max_turns, "note": note}, body, mutating=True, extra=extra)
 
     @tool()
     async def plan(self, text: Annotated[str | None, Field(
@@ -939,8 +1019,69 @@ class OpenCiv3Env(AgentEnvEnvironment):
                 raise BridgeError("plan_too_long", f"the plan is {len(plain):,} characters; the limit is "
                                   f"{PLAN_LIMIT:,}. Shorten it and call plan(text=...) again.")
             seat.plan_text, seat.plan_turn = plain, self.turn
+            seat.plans[self.turn] = moderation.public(plain, PUBLIC_PLAN_LIMIT)
             return f"Plan saved at T{self.turn} ({len(seat.plan_text)}/{PLAN_LIMIT} chars); every brief shows it."
         return await self._run("plan", {"text": text}, body)
+
+    @tool()
+    async def message(
+            self, to: Annotated[str, Field(description='"all", or another leader\'s civ (or name), e.g. "Greece".')],
+            text: Annotated[str, Field(description="What you say, at most 280 characters.")]):
+        """Send a message to another leader in this match, or to all of them: they read it in their next tool reply
+        and their brief, and everyone watching the match sees it. Alliances, threats, deals: diplomacy is talk. At
+        most 280 characters, 3 messages a turn. The game's AI civilizations don't read messages; diplomacy() deals
+        with them."""
+        async def body():
+            seat = self.seat
+            if not self.multi:
+                raise BridgeError("no_one_to_message", "you are the only leader in this game, so no one reads "
+                                  "messages; diplomacy() deals with the AI civilizations.",
+                                  suggest='diplomacy(action="status")')
+            sent = sum(m["from"] == seat.civ and m["turn"] == self.turn for m in self.messages)
+            if sent >= MESSAGES_PER_TURN:
+                raise BridgeError("message_limit", f"you have sent {MESSAGES_PER_TURN} messages this turn, the "
+                                  "limit; you can send more next turn.", suggest="end_turn(skip_idle=true)")
+            recipients, to_all = self._recipients(seat, to)
+            if len(text) > MESSAGE_LIMIT:
+                raise BridgeError("message_too_long", f"the message is {len(text):,} characters; the limit is "
+                                  f"{MESSAGE_LIMIT}. Shorten it and send it again.")
+            said = moderation.public(text, MESSAGE_LIMIT)
+            if not said:
+                raise BridgeError("empty_message", "the message is empty: put what you want to say in text.")
+            self.messages.append({"turn": self.turn, "from": seat.civ,
+                                  "to": "all" if to_all else [r.civ for r in recipients], "text": said,
+                                  "seconds": round(time.monotonic() - self.turn_started, 1)})
+            for r in recipients:
+                r.notices.append({"turn": self.turn, "kind": "message", "from": seat.civ, "label": seat.label,
+                                  "to_all": to_all, "text": said})
+            if to_all:
+                whom = "all: " + (", ".join(self._leader(r.civ) for r in recipients) or "no other leader is left")
+            else:
+                whom = self._leader(recipients[0].civ)
+            return f'Sent to {whom} · message {sent + 1} of {MESSAGES_PER_TURN} this turn: "{said}"'
+        return await self._run("message", {"to": to, "text": text}, body)
+
+    def _recipients(self, seat: Seat, to: str) -> tuple[list[Seat], bool]:
+        """The seats a message from `seat` reaches, and whether it went to all: "all" is every other seat still in the
+        game, else `to` names one by civ or label (case, plural or a close spelling forgiven)."""
+        others = [s for s in self.seats if s is not seat and not s.over]
+        if to.strip().lower() == "all":
+            return others, True
+        if (named := leader_named(to, others)) is not None:
+            return [named], False
+        seats = {s.civ for s in self.seats}
+        ai = resolve_name(to, [r["civ"] for r in (seat.last_state or {}).get("rivals", []) if r["civ"] not in seats])
+        if leader_named(to, [seat]):
+            why = f"{seat.civ} is you"
+        elif out := leader_named(to, [s for s in self.seats if s.over]):
+            why = f"{out.civ} is out of the game"
+        elif ai:
+            why = f"{ai} is an AI civilization: it doesn't read messages, diplomacy() deals with it"
+        else:
+            why = f"{to!r} is no leader in this match"
+        options = ", ".join(self._leader(s.civ) for s in others)
+        raise BridgeError("not_a_leader", f"{why}. You can message {options + ' or ' if options else ''}\"all\".",
+                          [s.civ for s in others] + ["all"])
 
     # ---- data plane ----
 
@@ -1021,16 +1162,20 @@ class OpenCiv3Env(AgentEnvEnvironment):
                            "header; labels: a name per civ for recordings and reports, e.g. the agent's model; "
                            "humans: civs (among civ and seats) that people play in the browser, each through the "
                            "link in the result's `play` (none when omitted); human_turn_seconds: how long a human "
-                           "seat may idle while others wait before the env ends its turn (0: never).")
+                           "seat may idle while others wait before the env ends its turn (0: never); "
+                           "min_turn_seconds: with several seats, the shortest a turn lasts (0-600, default 0), so "
+                           "people can follow a broadcast: the last seat to end a turn waits until then.")
     async def new_game(self, seed: int | None = None, civ: str | None = None, opponents: int | None = None,
                        size: str | None = None, difficulty: str | None = None, barbarians: str | None = None,
                        landform: str | None = None, ocean: int | None = None, turn_limit: int | None = None,
                        seats: list[str] | None = None, labels: dict[str, str] | None = None,
-                       humans: list[str] | None = None, human_turn_seconds: int = HUMAN_TURN_SECONDS) -> dict:
+                       humans: list[str] | None = None, human_turn_seconds: int = HUMAN_TURN_SECONDS,
+                       min_turn_seconds: int = 0) -> dict:
         self.harness["extension_calls"] += 1
         args = {"seed": seed, "civ": civ, "opponents": opponents, "size": size, "difficulty": difficulty,
                 "barbarians": barbarians, "landform": landform, "ocean": ocean, "turn_limit": turn_limit,
-                "seats": seats, "labels": labels, "humans": humans or [], "human_turn_seconds": human_turn_seconds}
+                "seats": seats, "labels": labels, "humans": humans or [], "human_turn_seconds": human_turn_seconds,
+                "min_turn_seconds": min_turn_seconds}
         async with self.lock:
             await self._new_game(merge_scenario(self.scenario, args))
             return {**self.game, "scenario": self.scenario,
@@ -1085,6 +1230,16 @@ class OpenCiv3Env(AgentEnvEnvironment):
                  for s in self.seats}
         return actions, calls
 
+    def _talk(self, since: int | None = None) -> tuple[dict[str, dict[int, str]], dict[str, dict[int, str]],
+                                                       list[dict]]:
+        """What spectators read of the seats (docs/viewer.md): each seat's end_turn notes and plans by turn (from
+        `since` on), keyed by civ, and the game's messages; copies, safe to hand to a thread."""
+        def kept(t: int) -> bool:
+            return since is None or t >= since
+        notes = {s.civ: {t: n for t, n in s.notes.items() if kept(t)} for s in self.seats}
+        plans = {s.civ: {t: p for t, p in s.plans.items() if kept(t) and p} for s in self.seats}
+        return notes, plans, [dict(m) for m in self.messages if kept(m["turn"])]
+
     def _client_seats(self, names: list[str] | None) -> list[Seat]:
         if not names or not self.multi:
             return list(self.seats)
@@ -1114,12 +1269,15 @@ class OpenCiv3Env(AgentEnvEnvironment):
             snapshots = recording.load_snapshots(self.game_dir / "record") or [await self._call("world")]
             actions = self._timeline()
             seat_actions, calls = self._per_seat()
+            seat_notes, plans, messages = self._talk()
             baselines = self.baselines.trajectories() if self.baselines else {}
             name = f"openciv3-seed{self.game['seed']}" + ("-seats" if multi else "") + (
                 "-agent" if view == "agent" else "")
             saves = self.game_dir / "saves"
         players = snapshots[-1]["players"]
         seat_actions, calls = live.by_player(seat_actions, players), live.by_player(calls, players)
+        seat_notes, plans = live.by_player(seat_notes, players), live.by_player(plans, players)
+        messages = live.messages_by_turn(messages, players)
         notes: list[str] = []
         videos: list[recording.File] = []
         client_videos: dict[str, dict] = {}
@@ -1146,7 +1304,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
             files, rendered_notes = await asyncio.to_thread(
                 recording.render, snapshots, formats=own, view=view, fps=fps, name=name, actions=actions,
                 baselines=baselines, seat_actions=seat_actions, calls=calls, client_videos=client_videos or None,
-                humans=[s.civ for s in self.seats if s.human])
+                humans=[s.civ for s in self.seats if s.human], seat_notes=seat_notes, plans=plans, messages=messages)
             notes = rendered_notes + notes
         return {"turns": len(snapshots), "notes": notes,
                 "files": [{"name": f.name, "content_type": f.content_type, "bytes": len(f.data),
@@ -1173,22 +1331,32 @@ class OpenCiv3Env(AgentEnvEnvironment):
         return HTMLResponse(viewer.page(), headers={"Cache-Control": "no-cache"})
 
     def _live_now(self) -> dict:
-        """The turn being played (docs/viewer.md, `live`): who has ended it, for how long each has played it, and
-        each seat's calls and actions so far."""
+        """The turn being played (docs/viewer.md, `live`): who has ended it, for how long each has played it, each
+        seat's calls, actions, note and plan so far, and the messages of the turn."""
+        pace = self.scenario.get("min_turn_seconds", 0)
         if self.game is None:
             return {"turn": None, "game_over": False, "victory": None, "client": self.client,
-                    "recording": self.record, "seats": []}
+                    "recording": self.record, "min_turn_seconds": pace, "messages": [], "seats": []}
         now, turn = time.monotonic(), self.turn
         states = [s.last_state for s in self.seats if s.last_state]
         victory = next((st["victory"] for st in states if st.get("victory")), None)
         return {
             "turn": turn, "game_over": victory is not None or any(st.get("game_over") for st in states),
-            "victory": victory, "client": self.client, "recording": self.record,
-            "seats": [{"civ": s.civ, "label": s.label, "human": s.human, "ended": s.ready or s.over,
-                       "seconds": round(max(0.0, (s.ended_at if s.ready and s.ended_at else now) - self.turn_started),
-                                        1),
+            "victory": victory, "client": self.client, "recording": self.record, "min_turn_seconds": pace,
+            "messages": [{k: m[k] for k in ("from", "to", "text", "seconds")} for m in self.messages
+                         if m["turn"] == turn],
+            "seats": [{"civ": s.civ, "label": s.label, "human": s.human, "ended": s.ready or s.pacing or s.over,
+                       "seconds": round(max(0.0, (s.ended_at if (s.ready or s.pacing) and s.ended_at else now)
+                                            - self.turn_started), 1),
                        "calls": dict(s.actions.calls.get(turn) or {"ok": 0, "failed": 0}),
-                       "actions": list(s.actions.timeline.get(turn) or [])} for s in self.seats]}
+                       "actions": list(s.actions.timeline.get(turn) or []),
+                       "note": s.notes.get(turn), **self._public_plan(s)} for s in self.seats]}
+
+    @staticmethod
+    def _public_plan(seat: Seat) -> dict:
+        """The seat's plan as spectators see it, and the turn it was set."""
+        plan = seat.plans.get(seat.plan_turn)
+        return {"plan": plan or None, "plan_turn": seat.plan_turn if plan else None}
 
     async def _live_data(self, request: Request) -> Response:
         """GET /live/data.json?since=N: the viewer's data with the turns after N, and the turn being played. Reads
@@ -1203,10 +1371,11 @@ class OpenCiv3Env(AgentEnvEnvironment):
             doc = matchdata.MatchData(game=None).document(since)
             return JSONResponse({**doc, "live": now}, headers=headers)
         actions, calls = self._per_seat(since)
+        notes, plans, messages = self._talk(since)
         match = self.live.match_of(self.game_dir / "record", self.game_id,
                                    {s.civ: s.label for s in self.seats if s.label},
                                    [s.civ for s in self.seats if s.human])
-        body = await match.document(since, actions, calls, now)
+        body = await match.document(since, actions, calls, now, notes=notes, plans=plans, messages=messages)
         return Response(body, media_type="application/json", headers=headers)
 
     async def _live_state(self, request: Request) -> Response:
@@ -1481,6 +1650,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
             extra["idle_units"] = sum(b.get("kind") == "idle_unit" for b in before.get("blockers", []))
             if seat.ready:
                 return None
+            await self._pace(seat)
             seat.cache = None
             try:
                 res = await self._call("end_turn", skip_idle=True)

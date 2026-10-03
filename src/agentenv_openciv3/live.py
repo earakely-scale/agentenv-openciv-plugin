@@ -75,14 +75,31 @@ def render_frame(record: Path, turn: int, view: str) -> bytes | None:
     return recording.map_png((s for s in map(read, paths) if s is not None), view=view)
 
 
+def player_index(players: list[dict]) -> dict[str, int]:
+    """Each civ's player index; barbarians are no one's."""
+    return {p["civ"]: p["index"] for p in players if not p.get("barbarian") and not recording.is_barbarian(p)}
+
+
 def by_player(per_civ: dict[str, dict[int, T]], players: list[dict]) -> dict[int, dict[int, T]]:
     """{civ: {turn: x}} as matchdata wants it, {turn: {player index: x}}; civs that are no player are left out."""
-    index = {p["civ"]: p["index"] for p in players if not p.get("barbarian") and not recording.is_barbarian(p)}
+    index = player_index(players)
     out: dict[int, dict[int, T]] = {}
     for civ, turns in per_civ.items():
         if civ in index:
             for t, x in turns.items():
                 out.setdefault(t, {})[index[civ]] = x
+    return out
+
+
+def messages_by_turn(messages: list[dict], players: list[dict]) -> matchdata.Messages:
+    """The env's messages ({"turn", "from": civ, "to": [civ] | "all", "text", ...}) as matchdata wants them: by turn,
+    with player indices for civs; one from a civ that is no player is left out."""
+    index = player_index(players)
+    out: matchdata.Messages = {}
+    for m in messages:
+        if m["from"] in index:
+            to = "all" if m["to"] == "all" else [index[c] for c in m["to"] if c in index]
+            out.setdefault(m["turn"], []).append({"from": index[m["from"]], "to": to, "text": m["text"]})
     return out
 
 
@@ -112,13 +129,16 @@ class LiveMatch:
                 return
 
     async def document(self, since: int, actions: dict[str, matchdata.Actions], calls: dict[str, matchdata.Calls],
-                       live: dict) -> bytes:
-        """GET /live/data.json: the turns after `since` with `live`, as JSON. `actions` and `calls` are keyed by civ,
-        then turn: the players' indices come from the snapshots."""
+                       live: dict, *, notes: dict[str, dict[int, str]] | None = None,
+                       plans: dict[str, dict[int, str]] | None = None, messages: list[dict] | None = None) -> bytes:
+        """GET /live/data.json: the turns after `since` with `live`, as JSON. `actions`, `calls`, `notes` and `plans`
+        are keyed by civ, then turn, and `messages` name civs: the players' indices come from the snapshots."""
         def build() -> bytes:
             self.update()
             players = self.data.players
-            doc = self.data.document(since, actions=by_player(actions, players), calls=by_player(calls, players))
+            doc = self.data.document(since, actions=by_player(actions, players), calls=by_player(calls, players),
+                                     notes=by_player(notes or {}, players), plans=by_player(plans or {}, players),
+                                     messages=messages_by_turn(messages or [], players))
             return json.dumps({**doc, "live": live}, ensure_ascii=False, separators=(",", ":")).encode()
         async with self.lock:
             return await asyncio.to_thread(build)

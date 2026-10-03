@@ -23,7 +23,7 @@ TERRAIN = {"grassland": "g", "plains": "p", "desert": "d", "tundra": "t", "flood
 TERRAIN_NAMES = {"g": "grassland", "p": "plains", "d": "desert", "t": "tundra", "f": "flood plain", "h": "hills",
                  "m": "mountains", "F": "forest", "j": "jungle", "s": "marsh", "v": "volcano", "~": "water"}
 BASELINE_LABELS = {"engine_ai": "built-in AI", "settler_bot": "settler bot", "null": "do-nothing"}
-MAX_UNIT_LINES, MAX_STANDING, MAX_CITY_LINES, MAX_EVENTS, MAX_AUTO = 5, 6, 6, 5, 3
+MAX_UNIT_LINES, MAX_STANDING, MAX_CITY_LINES, MAX_EVENTS, MAX_AUTO, MAX_MESSAGES = 5, 6, 6, 5, 3, 12
 # An item is delivered only when the city is bigger than its population cost (Settler 2, Worker 1 in the ruleset).
 MIN_SIZE = {"Settler": 3, "Worker": 2}
 IDLE_GOLD = 100
@@ -381,7 +381,7 @@ def rates_text(state: dict) -> str | None:
 
 def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: int | None = None,
           baselines: dict[str, dict | str | None] | None = None, sites: dict[str, dict] | None = None,
-          events: bool = True, notices: list[dict] | None = None) -> str:
+          events: bool = True, notices: list[dict] | None = None, messages: list[str] | None = None) -> str:
     s = state
     head = [f"T{s['turn']}/{s['turn_limit']}", s.get("civ", "?"), s.get("government", "?")]
     if s.get("anarchy_until"):
@@ -460,6 +460,10 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
 
     if events and s.get("last_events"):
         lines.append("EVENTS " + " | ".join(events_lines(s["last_events"])))
+    if messages:
+        lines.append("MESSAGES" + (f" (the last {MAX_MESSAGES} of {len(messages)})"
+                                   if len(messages) > MAX_MESSAGES else ""))
+        lines += ["  " + m for m in messages[-MAX_MESSAGES:]]
     lines.append(f"PLAN (T{plan_turn}) {plan}" if plan else "PLAN none — record your strategy with plan(text=...)")
     return "\n".join(lines)
 
@@ -582,7 +586,8 @@ def match_line(s: dict) -> str | None:
     return (f"MATCH vs agents {', '.join(agents)}" + (f" and the AI's {', '.join(ai)}" if ai else "")
             + " · every agent plays each turn at once; end_turn waits for the others"
             + f" · it ends at T{s['turn_limit']}, or once one agent's civilization is the last an agent plays"
-            + " (conquest) or holds 2/3 of the world's land and population (domination); else the top score wins")
+            + " (conquest) or holds 2/3 of the world's land and population (domination); else the top score wins"
+            + " · message() talks to the other agents")
 
 
 def game_over(state: dict, baselines: dict[str, dict | str | None] | None) -> str:
@@ -598,6 +603,16 @@ def game_over(state: dict, baselines: dict[str, dict | str | None] | None) -> st
         lines.append(vs_line(s["turn"], baselines))
     lines.append("The game is over; no further actions are possible.")
     return "\n".join(lines)
+
+
+def leader(civ: str, label: str | None) -> str:
+    """A leader in a match, as messages name it: `Greece (sonnet)`."""
+    return f"{civ} ({label})" if label else civ
+
+
+def message_line(sender: str, recipient: str, text: str) -> str:
+    """A message as its reader sees it: `Greece (sonnet) to you: "…"`, `you to all: "…"`."""
+    return f'{sender} to {recipient}: "{text}"'
 
 
 # ---- research and rates ----

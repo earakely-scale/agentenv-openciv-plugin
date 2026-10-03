@@ -107,6 +107,19 @@ def test_brief_sections():
     assert lines[-1].startswith("PLAN (T30) Expand to the river;")
 
 
+def test_the_brief_lists_this_and_last_turns_messages_before_the_plan():
+    said = ['T33 Greece (sonnet) to you: "Join me against Egypt."', 'T34 you to Greece: "Deal."']
+    lines = render.brief(state(2, idle=1, standing=0, n_events=0), start_techs=2, messages=said).splitlines()
+    assert lines[-4:] == ["MESSAGES", f"  {said[0]}", f"  {said[1]}",
+                          "PLAN none — record your strategy with plan(text=...)"]
+    assert "MESSAGES" not in render.brief(state(2, idle=1, standing=0, n_events=0), start_techs=2, messages=[])
+    many = render.brief(state(2, idle=1, standing=0, n_events=0), start_techs=2,
+                        messages=[f'T34 Egypt to all: "{n}"' for n in range(20)]).splitlines()
+    assert many[-14:-12] == ["MESSAGES (the last 12 of 20)", '  T34 Egypt to all: "8"']
+    assert render.message_line(render.leader("Greece", "sonnet"), "you", "Hi.") == 'Greece (sonnet) to you: "Hi."'
+    assert render.message_line(render.leader("Egypt", None), "all", "Hi.") == 'Egypt to all: "Hi."'
+
+
 def test_pace_milestones():
     s = state(1, 0, 0, 0, turn=20)
     assert render.pace_line(s, start_techs=2) == "PACE cities 1 BEHIND (2 by T15) · techs 5 ok (next: 6 by T40)"
@@ -393,6 +406,7 @@ def test_a_match_brief_states_its_rules_and_game_over_names_the_victor():
     rivals = [{"civ": "Greece", "agent": True}, {"civ": "Egypt", "agent": True}, {"civ": "Zululand", "agent": False}]
     line = render.match_line({"turn_limit": 300, "rivals": rivals})
     assert line.startswith("MATCH vs agents Greece, Egypt and the AI's Zululand · every agent plays each turn at once")
+    assert line.endswith("else the top score wins · message() talks to the other agents")
     assert render.match_line({"turn_limit": 300, "rivals": rivals[2:]}) is None
     over = {"turn": 120, "turn_limit": 300, "civ": "Rome", "score": {"total": 9, "cities": 1, "pop": 1, "tiles": 1,
                                                                      "techs": 1}}

@@ -241,6 +241,28 @@ async def test_end_turn_answers_at_once_and_the_turn_advances_when_every_seat_ha
     assert (await asyncio.wait_for(waiting, 5)).startswith("TURN T2 → T3")
 
 
+async def test_a_persons_end_turn_keeps_the_broadcast_pace_too(env):
+    game = await env.new_game(**MATCH, min_turn_seconds=1)
+    player = Player(env, token_of(game, "Greece"))
+    started = env.turn_started
+    waiting = asyncio.create_task(mcp(env, "end_turn", "Rome", skip_idle=True))
+    await asyncio.sleep(0.1)
+    assert await player.act("end_turn") == {"ok": True, "advanced": True, "turn": 2, "waiting_for": []}
+    assert env.turn_started - started >= 1
+    assert (await asyncio.wait_for(waiting, 5)).startswith("TURN T1 → T2")
+
+
+async def test_a_person_gets_the_agents_messages_as_notices(match):
+    env, player = match
+    await mcp(env, "message", "Rome", to="you", text="Stay out of my way.")
+    await mcp(env, "message", "Rome", to="all", text="Hello, world.")
+    view = await player("view")
+    assert view["notices"] == [
+        {"turn": 1, "kind": "message", "from": "Rome", "label": "opus", "to_all": False, "text": "Stay out of my way."},
+        {"turn": 1, "kind": "message", "from": "Rome", "label": "opus", "to_all": True, "text": "Hello, world."}]
+    assert (await mcp(env, "message", "Rome", to="Greece", text="a")).startswith("Sent to Greece (you)")
+
+
 async def test_an_idle_human_seat_has_its_turn_ended_after_human_turn_seconds(env, monkeypatch):
     monkeypatch.setattr(server, "STALL_CHECK_SECONDS", 0.05)
     monkeypatch.setattr(server, "SEAT_STALL_SECONDS", 0.05)    # agents' limit: not the human's

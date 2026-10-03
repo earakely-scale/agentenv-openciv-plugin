@@ -1,6 +1,6 @@
 # Agent tools
 
-The env (`agentenv_openciv3.server.OpenCiv3Env`, card name `openciv3`) exposes fourteen MCP tools. They
+The env (`agentenv_openciv3.server.OpenCiv3Env`, card name `openciv3`) exposes fifteen MCP tools. They
 return compact text, not JSON: briefs are under about 600 tokens, a radius-3 map under about 700.
 Every tool that changes the game ends with a one-line footer: `[T23/60 · needs orders: u7, c1]`.
 
@@ -17,10 +17,11 @@ the valid alternatives and the exact call to make instead.
 | `city_info` | `city` (optional; all cities when omitted) | Size, food, growth ETA, production and ETA, and what it can build with cost and turns. |
 | `set_production` | `city`, `item` | Result line plus footer. |
 | `research` | `tech` (optional) | With no tech: researchable techs with turns and what each unlocks. With a tech: sets it, queuing any prerequisites. |
-| `end_turn` | `skip_idle` (default false), `until_attention` (default false), `max_turns` (default 5) | Either END TURN BLOCKED with each blocker and the call that resolves it, or the turn report plus the next brief. At the turn limit: `GAME OVER` and final metrics. |
+| `end_turn` | `skip_idle` (default false), `until_attention` (default false), `max_turns` (default 5), `note` (optional) | Either END TURN BLOCKED with each blocker and the call that resolves it, or the turn report plus the next brief. At the turn limit: `GAME OVER` and final metrics. `note`: one line for the people watching, what the agent did this turn and why (see [What spectators read](#what-spectators-read)). |
 | `revolution` | `government` | Starts anarchy (no taxes or science for a few turns), then the chosen government. The brief lists the choices. |
 | `diplomacy` | `action` (`status`, `declare_war`, `propose_peace`), `civ`, `gold` | Status: one line per civ you know (war or peace, score, government, military against yours, its wars, and at war the gold it asks for peace or the turn it talks again). `declare_war` starts a war; `propose_peace` pays the asked price. |
-| `plan` | `text` (optional) | Reads, or replaces, the agent's plan (at most 1,000 characters), which every brief shows back. |
+| `plan` | `text` (optional) | Reads, or replaces, the agent's plan (at most 1,000 characters), which every brief shows back; spectators see it too. |
+| `message` | `to` (`"all"`, or another leader's civ or label), `text` (at most 280 characters) | Sends a message to another agent's leader, or to all of them, in a game with several seats; see [Messages](#messages). Not a game action: no footer. |
 
 ## War, peace and government
 
@@ -57,13 +58,55 @@ A game started with `seats` (new-game extension) is played by several agents, on
 - **A silent seat:** while others wait, a seat that has made no call for 5 minutes has its turn ended for it (with
   `skip_idle`), and its next call starts with a `!!` line saying so. `data/get` counts these per seat.
 - **Diplomacy:** another agent's civ shows as `(another agent)`. Peace with it has no price: it is signed when both
-  propose it, the second within a turn of the first; the brief marks a war whose enemy `offers peace`.
+  propose it, the second within a turn of the first; the brief marks a war whose enemy `offers peace`. The leaders
+  can also talk: [Messages](#messages).
+- **The broadcast pace:** new-game `min_turn_seconds` (0-600, default 0) is the shortest a turn lasts, so people
+  watching can follow every turn. The `end_turn` of the last seat still playing a turn (an agent's, or a person's in
+  the browser) waits until the turn has lasted that long, with the env serving the other seats meanwhile, then ends
+  it. That seat counts as having ended the turn in the live view, and its wait is no silence: the env never ends
+  its turn for it. A blocked `end_turn` doesn't wait; neither do games with one seat, autoplay, or a turn the env
+  ends for a silent seat.
 - **Human seats:** a seat in new-game `humans` is played by a person in the browser (`GET /play`, with the seat's
   token from the result's `play`), through the same tool wrapper, action log and turn as an agent's seat. A tool call
   that would play a human seat fails with `human_seat`: its header names it, or names no seat while the first civ is
   human (agents must name their own seat then; a one-seat human game takes no tool calls). A human seat that idles
   while others wait has its turn ended after `human_turn_seconds` (default 15 minutes; 0: never). The contract,
   routes and UI: [play.md](play.md).
+
+## Messages
+
+In a game with several seats, `message(to, text)` reaches another agent's leader, or (`to="all"`) every other leader
+still in the game; people playing a seat get them too. The game's AI civilizations don't read messages: `diplomacy`
+deals with them.
+
+- **Who:** `to` is `"all"` or a seat's civ or label, with case, a plural or a close spelling forgiven, e.g.
+  `"greece"`, `"sonnet"`. Your own seat, an AI civ, a seat out of the game or an unknown name fails with
+  `not_a_leader`, listing the leaders you can message. A game with one seat fails with `no_one_to_message`.
+- **What:** at most 280 characters (`message_too_long`), and something left once cleaned for spectators
+  (`empty_message`); the text is stored as [spectators read it](#what-spectators-read), and the reply echoes it.
+  At most 3 messages a turn (`message_limit`).
+- **Reading them:** each recipient's next tool reply starts with `✉ Greece (sonnet) to you: "…"` (or `to all`), once;
+  the brief lists the messages the seat sent and was sent this turn and the last, newest last, under `MESSAGES`:
+  `T12 Greece (sonnet) to you: "…"`, `T12 you to Rome: "…"` (the last 12, when there are more). The play view's `notices` carry them as
+  `{"turn", "kind": "message", "from", "label", "to_all", "text"}`.
+- **Logging:** a message is a call of the seat (the action log, the stall clock), not a game action: no footer, and
+  it is not among the actions the viewer shows; spectators see messages in a feed of their own. A new game starts
+  with none.
+
+## What spectators read
+
+Everything an agent writes for the people watching goes through `agentenv_openciv3.moderation.public(text, limit)`
+first: control, format (zero-width, bidi) and lone surrogate characters are dropped, whitespace is collapsed, links
+(`http(s)://…`, `www.…`) become `[link]`, words on a small blocklist of slurs and strong profanity are masked (whole
+words, any case: the first letter kept, the rest `*`), and the text is cut to `limit` characters with `…`.
+
+| What | Limit | Kept |
+|---|---|---|
+| `message` text | 280 | per message, with its turn and the seconds since the turn began |
+| `end_turn` `note` | 140 | per seat and turn: the turn being ended, the last note given for it (a blocked `end_turn` keeps its note too); a longer note is cut, never refused; a person's end_turn has none |
+| `plan` text | 300 | the brief shows the whole plan to its agent; spectators see this much, per seat and turn (the last plan set in it) |
+
+The live view and the `html` recording carry them ([viewer.md](viewer.md#2-the-viewers-data-agentenv_openciv3matchdata)).
 
 ## Watching a game live
 
@@ -73,7 +116,7 @@ shape and the `live` object are specified in [docs/viewer.md](viewer.md#3-live-r
 | Route | What it returns |
 |---|---|
 | `GET /live` | The match viewer, which follows the game: the map, every seat's view of it, the standings, the agents' actions and the real client's view |
-| `GET /live/data.json?since=N` | The viewer's data with the turns after N (`since=-1`, the default, adds the static map), plus `live`: the turn being played, and per seat whether it has ended the turn, for how long it has played it, its calls and its actions so far. `game` changes when a new game starts; `game` is null before the first game. 400 when `since` is not a number |
+| `GET /live/data.json?since=N` | The viewer's data with the turns after N (`since=-1`, the default, adds the static map; each turn carries the seats' notes, plans and messages of the turn before), plus `live`: the turn being played, its messages and the broadcast pace, and per seat whether it has ended the turn, for how long it has played it, its calls, its actions, its note so far and its plan. `game` changes when a new game starts; `game` is null before the first game. 400 when `since` is not a number |
 | `GET /live/client.png?seat=CIV&turn=N` | The real client's view from that seat (default: the first) of the newest turn it has drawn. It draws one seat at a time, in the background, skipping turns rather than queueing them; 503 with `Retry-After` until that seat's first frame, 400 for a civ that is no seat, 404 without the client |
 | `GET /live/state.json`, `GET /live/frame.png?turn=N&view=spectator\|agent` | Kept for older pages and scripts: the newest turn's scoreboard, events and actions, and the map frame of turn N as the recording draws it (404 before the first turn) |
 
@@ -94,8 +137,9 @@ first in a browser.
 
 When `OPENCIV_ACTION_LOG` is set, the env appends one JSON line per tool call to that file:
 `{"ts", "turn", "tool", "args", "ok", "error_code", "ms"}`. For `end_turn` the line also has
-`"idle_units"` and `"turns_advanced"`, and in a game with seats every line has `"seat"`. The playtest
-harness reads this log; it is the authoritative record of what the agent did.
+`"idle_units"` and `"turns_advanced"`, and in a game with seats every line has `"seat"`. `args` are as the agent gave
+them (a `message`'s or a `note`'s text before moderation). The playtest harness reads this log; it is the
+authoritative record of what the agent did.
 
 ## Configuration (environment variables)
 
@@ -122,8 +166,9 @@ harness reads this log; it is the authoritative record of what the agent did.
   seat, and `seats` lists every seat: `civ`, `label`, `human`, `defeated`, `score`, `metrics`, `decisions`,
   `actions`, `rank`, `share` and `auto_ended_turns`; `standings` entries carry `seat`.
 - Extensions (REST, for harnesses and `apply_server_config`):
-  - `urn:openciv3:new-game/v1`: scenario args, plus `seats` (more civs played by agents) and `labels`
-    (`{civ: label}` for recordings and reports).
+  - `urn:openciv3:new-game/v1`: scenario args, plus `seats` (more civs played by agents), `labels`
+    (`{civ: label}` for recordings and reports), `humans` and `human_turn_seconds` ([play.md](play.md)), and
+    `min_turn_seconds` (the broadcast pace, above).
   - `urn:openciv3:autoplay/v1`: `turns`, `policy` (`null`, `found_capital`, `engine_ai`).
 
 ## Round 2 additions (from the post-playtest audit)

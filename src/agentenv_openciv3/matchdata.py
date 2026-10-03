@@ -29,6 +29,8 @@ SCORE_KEYS = ("total", "cities", "pop", "tiles", "techs")
 
 Actions = dict[int, dict[int, list[dict]]]     # turn -> player index -> [{"text", "ok"}]
 Calls = dict[int, dict[int, dict[str, int]]]   # turn -> player index -> {"ok", "failed"}
+Notes = dict[int, dict[int, str]]              # turn -> player index -> text (an end_turn note, or a plan)
+Messages = dict[int, list[dict]]               # turn -> [{"from": player index, "to": [index] | "all", "text"}]
 
 
 def load_snapshots(directory: str | Path) -> list[dict]:
@@ -258,17 +260,25 @@ class MatchData:
 
     # ---- writing ----
 
-    def document(self, since: int = -1, *, actions: Actions | None = None, calls: Calls | None = None) -> dict:
+    def document(self, since: int = -1, *, actions: Actions | None = None, calls: Calls | None = None,
+                 notes: Notes | None = None, plans: Notes | None = None, messages: Messages | None = None) -> dict:
         """The document with the turns after `since`; `static` only when since < 0. `actions[t]` are the actions
-        of turn t, shown on entry t + 1 (docs/viewer.md)."""
+        of turn t, shown on entry t + 1, as are the calls, end_turn notes, plans and messages (docs/viewer.md);
+        notes, plans and messages only when there are some."""
         turns = []
         for entry in self.turns:
             if entry["turn"] <= since:
                 continue
             made = entry["turn"] - 1
-            turns.append({**entry,
-                          "actions": {str(i): a for i, a in ((actions or {}).get(made) or {}).items()},
-                          "calls": {str(i): c for i, c in ((calls or {}).get(made) or {}).items()}})
+            turn = {**entry,
+                    "actions": {str(i): a for i, a in ((actions or {}).get(made) or {}).items()},
+                    "calls": {str(i): c for i, c in ((calls or {}).get(made) or {}).items()}}
+            for key, by_turn in (("notes", notes), ("plans", plans)):
+                if said := (by_turn or {}).get(made):
+                    turn[key] = {str(i): text for i, text in said.items()}
+            if said := (messages or {}).get(made):
+                turn["messages"] = list(said)
+            turns.append(turn)
         doc = {"schema": SCHEMA, "game": self.game, "meta": self.meta, "players": self.players, "turns": turns}
         if since < 0:
             doc["static"] = {"tiles": self.tiles}
