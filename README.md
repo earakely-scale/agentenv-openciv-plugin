@@ -176,19 +176,19 @@ variable `OPENCIV3_STREAM_KEY`) and never appears in a command line or in the ou
 RTMP server (YouTube's is `rtmp://a.rtmp.youtube.com/live2`), `--size 1280x720 --bitrate 3000k` suits a slower
 uplink, `--test` sends to Twitch without going live (its bandwidth test, visible only in Twitch Inspector), `--client-view`
 shows the real OpenCiv3 client's view of each agent full size (the env needs `setup --client`), and the first run
-builds the streamer image (`streamer/`, about 1.5 GB).
+builds the streamer image (`streamer/`, about 1.5 GB; a change to `streamer/` builds it again, in seconds).
 
 **Cast it.** `--cast` puts two AI casters on the stream: Max calls the play and Ada, the analyst, says what it means.
 They read the match data the viewer shows (the events, the standings, the agents' plans, notes and messages, who is
 still thinking), open the show, call wars, captured cities and lead changes as they happen, and sign off at GAME
 OVER. A model writes their lines (`--cast-model`, default `anthropic/claude-haiku-4-5`) and `openai/gpt-4o-mini-tts`
 voices them, both through agent-env's model endpoint (`[model]` in `.agentenv/config.toml`); the stream carries their
-voices and shows their lines as captions. `--title` names the broadcast, `--record DIR` also writes it to
+voices and shows their lines as captions. `--title` names the broadcast, `--record DIR` also writes the stream to
 `DIR/stream-<UTC time>.mkv`, and `--offline --record DIR` only records, with no stream key, for a dry run:
 
 ```bash
-agent-env openciv3 stream --cast --title "Battle of the Labs" &
-agent-env openciv3 stream --cast --offline --record ~/broadcasts &   # the same show, into a file
+agent-env openciv3 stream --cast --title "Battle of the Labs" --record ~/broadcasts &   # stream it and keep a copy
+agent-env openciv3 stream --cast --title "Battle of the Labs" --offline --record ~/broadcasts &   # or only record it
 ```
 
 When the game ends, its recording is saved with the run:

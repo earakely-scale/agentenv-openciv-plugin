@@ -1,6 +1,7 @@
 """`agent-env openciv3`: register the OpenCiv3 env, serve it locally without Docker, watch a game live, play in one,
 and fetch game recordings."""
 
+import hashlib
 import json
 import os
 import re
@@ -31,7 +32,7 @@ ENV_PORT = re.compile(r":(\d+)->18765/tcp")
 # `PLAY <civ> (<label>) game <id> /play#token=<token>`.
 PLAY_LINK = re.compile(r"\bPLAY (?P<civ>.+?) \((?P<label>.*)\):?(?: game \S+)? \S*?(?P<path>/play#token=\w+)")
 NEW_GAME_LINE = re.compile(r"\bNEW GAME \S+")
-STREAMER_IMAGE = "openciv3-streamer:2"   # the tag changes with streamer/, so an older image is rebuilt
+STREAMER_IMAGE = "openciv3-streamer"
 STREAM_KEY = "OPENCIV3_STREAM_KEY"
 
 
@@ -51,6 +52,20 @@ def _checkout(source: Path | None) -> Path:
     if source:
         raise click.UsageError(f"{source} is not a checkout of agentenv-openciv-plugin (no Dockerfile and bridge/)")
     raise click.UsageError(f"no checkout of agentenv-openciv-plugin found; clone {REPO} and pass --source")
+
+
+def _streamer_image(source: Path | None) -> tuple[str, Path]:
+    """The streamer image for a checkout's streamer/, and that directory: the tag is a digest of its files, so a
+    changed streamer builds a new image instead of running an older one."""
+    roots = [source] if source else [Path(__file__).resolve().parents[2], Path.cwd()]
+    context = next((root / "streamer" for root in roots if (root / "streamer/Dockerfile").is_file()), None)
+    if context is None:
+        raise click.UsageError(f"no checkout of agentenv-openciv-plugin with streamer/ found; clone {REPO} and pass "
+                               "--source")
+    digest = hashlib.sha256()
+    for path in sorted(p for p in context.iterdir() if p.is_file()):
+        digest.update(path.name.encode() + b"\0" + path.read_bytes())
+    return f"{STREAMER_IMAGE}:{digest.hexdigest()[:12]}", context
 
 
 def _docker(*args: str) -> str:
@@ -320,7 +335,8 @@ def _playing(url: str) -> bool:
 @click.option("--test", "bandwidth_test", is_flag=True,
               help="Send to Twitch without going live (its bandwidth test): the stream shows only in Twitch Inspector.")
 @click.option("--source", type=click.Path(exists=True, file_okay=False, path_type=Path),
-              help="Checkout to build the streamer image from when it isn't built yet.")
+              help="Checkout whose streamer/ to run, built into an image on first use. Default: the one an editable "
+                   "install runs from, or the cwd.")
 def stream(url: str | None, server: str, key_secret: str, size: str, fps: int, bitrate: str, linger: int,
            client_view: bool, cast: bool, cast_model: str, title: str | None, record_dir: Path | None, offline: bool,
            bandwidth_test: bool, source: Path | None):
@@ -343,10 +359,10 @@ def stream(url: str | None, server: str, key_secret: str, size: str, fps: int, b
             env["CAST_BASE_URL"], env["CAST_API_KEY"] = config.get_litellm_base_url(), config.get_litellm_api_key()
         except ConfigError as e:
             raise click.ClickException(f"--cast needs agent-env's model endpoint: {e}") from e
-    if subprocess.run(["docker", "image", "inspect", STREAMER_IMAGE], capture_output=True).returncode:
-        context = _checkout(source) / "streamer"
-        click.echo(f"Building {STREAMER_IMAGE} from {context}")
-        if subprocess.run(["docker", "build", "-t", STREAMER_IMAGE, str(context)]).returncode:
+    image, context = _streamer_image(source)
+    if subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode:
+        click.echo(f"Building {image} from {context}")
+        if subprocess.run(["docker", "build", "-t", image, str(context)]).returncode:
             raise click.ClickException("docker build of the streamer failed")
     if url is None:
         click.echo("Waiting for an OpenCiv3 game to start (agent-env run openciv3 --task ...)")
@@ -369,7 +385,7 @@ def stream(url: str | None, server: str, key_secret: str, size: str, fps: int, b
     where += [f"into {record_dir}"] if record_dir is not None else []
     click.echo(f"Streaming {url} {' and '.join(where)}{', with the casters' if cast else ''}; Ctrl-C ends the stream")
     cmd = ["docker", "run", "--rm", "--shm-size", "1g", *network, *mount,
-           *[arg for name in env for arg in ("-e", name)], STREAMER_IMAGE,
+           *[arg for name in env for arg in ("-e", name)], image,
            "--url", page, "--size", size, "--fps", str(fps), "--bitrate", bitrate, "--linger", str(linger),
            *(["--client-view"] if client_view else []), *(["--cast", "--cast-model", cast_model] if cast else []),
            *(["--title", title] if title else []), *(["--record", "/rec"] if record_dir is not None else [])]

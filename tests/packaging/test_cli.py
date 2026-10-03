@@ -14,6 +14,7 @@ from agentenv_openciv3 import cli
 from agentenv_openciv3.cli import _check_bridge, openciv3
 
 STREAMER = Path(__file__).resolve().parents[2] / "streamer" / "stream.py"
+STREAMER_IMAGE = cli._streamer_image(None)[0]
 
 FAKE_BRIDGE = Path(__file__).resolve().parents[1] / "env" / "fake_bridge.py"
 
@@ -192,7 +193,7 @@ def test_stream_sends_the_newest_game_under_way_without_showing_the_key(tmp_path
     assert result.exit_code == 0, result.output
     assert "live_123_secret" not in result.output
     args, url = log.read_text().splitlines()
-    assert "--network host -e STREAM_URL openciv3-streamer:2 --url http://127.0.0.1:42000/live" in args
+    assert f"--network host -e STREAM_URL {STREAMER_IMAGE} --url http://127.0.0.1:42000/live" in args
     assert "live_123_secret" not in args and args.endswith("--linger 30")
     assert url == "rtmp://live.twitch.tv/app/live_123_secret"
     assert CliRunner().invoke(openciv3, ["stream", "--test", "--client-view"]).exit_code == 0
@@ -214,7 +215,7 @@ def test_stream_records_offline_with_the_casters_without_showing_any_key(tmp_pat
     assert rec.is_dir() and f"into {rec}, with the casters" in result.output
     args, env = log.read_text().splitlines()
     assert args.startswith(f"run --rm --shm-size 1g -v {rec.resolve()}:/rec -e STREAM_URL -e CAST_BASE_URL "
-                           "-e CAST_API_KEY openciv3-streamer:2 --url http://host.docker.internal:41589/live")
+                           f"-e CAST_API_KEY {STREAMER_IMAGE} --url http://host.docker.internal:41589/live")
     assert args.endswith("--linger 60 --cast --cast-model anthropic/claude-haiku-4-5 --title Battle of the Labs "
                          "--record /rec")
     assert env == "[] http://host.docker.internal:4000 sk-model-key-456"   # values in the environment only
@@ -226,8 +227,35 @@ def test_stream_records_offline_with_the_casters_without_showing_any_key(tmp_pat
     assert result.exit_code == 0, result.output
     args, env = log.read_text().splitlines()
     assert (f"--network host -v {rec.resolve()}:/rec --user {os.getuid()}:{os.getgid()} -e HOME=/tmp -e STREAM_URL "
-            "openciv3-streamer:2 --url http://127.0.0.1:41589/live") in args
+            f"{STREAMER_IMAGE} --url http://127.0.0.1:41589/live") in args
     assert env == "[]  " and "--cast" not in args
+
+
+def test_stream_builds_a_new_streamer_image_when_streamer_changes(tmp_path, monkeypatch):
+    _config(monkeypatch)
+    checkout = tmp_path / "checkout"
+    (checkout / "streamer").mkdir(parents=True)
+    for name in ("Dockerfile", "stream.py", "caster.py"):
+        (checkout / "streamer" / name).write_text(f"{name} v1\n")
+    log = tmp_path / "docker.log"
+    fake_docker(tmp_path, monkeypatch, '  "image inspect") exit 1 ;;\n'
+                                       f'  "build -t") echo "$@" >> {log} ;;\n'
+                                       f'  "run --rm") echo "$@" >> {log} ;;\n')
+    stream = ["stream", "--url", "http://127.0.0.1:41589/live", "--offline", "--record", str(tmp_path / "rec"),
+              "--source", str(checkout)]
+    first = CliRunner().invoke(openciv3, stream)
+    (checkout / "streamer" / "caster.py").write_text("caster.py v2\n")
+    second = CliRunner().invoke(openciv3, stream)
+    assert first.exit_code == second.exit_code == 0, first.output + second.output
+    built, ran, built_again, ran_again = log.read_text().splitlines()
+    image = built.split()[2]
+    assert image.startswith("openciv3-streamer:") and built == f"build -t {image} {checkout / 'streamer'}"
+    assert f" {image} --url " in ran and built_again.split()[2] != image
+    assert f" {built_again.split()[2]} --url " in ran_again
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "__file__", str(tmp_path / "site-packages" / "agentenv_openciv3" / "cli.py"))
+    result = CliRunner().invoke(openciv3, stream[:-2])
+    assert result.exit_code == 2 and "no checkout of agentenv-openciv-plugin with streamer/ found" in result.output
 
 
 def test_stream_explains_what_offline_and_cast_need(tmp_path, monkeypatch):
@@ -260,8 +288,9 @@ def test_the_streamer_hides_the_keys_and_ends_after_the_game():
 def test_the_streamer_page_asks_for_the_casters_and_the_title():
     streamer = _streamer()
     assert streamer.page_url("http://h:1/live") == "http://h:1/live?stream"
-    assert streamer.page_url("http://h:1/live?seat=Rome", client_view=True, cast=True, title="Battle of the Labs") == (
-        "http://h:1/live?seat=Rome&stream&client&cast=http://127.0.0.1:8790&title=Battle%20of%20the%20Labs")
+    assert streamer.page_url("http://h:1/live?seat=Rome", client_view=True, cast_port=41000,
+                             title="Battle of the Labs") == (
+        "http://h:1/live?seat=Rome&stream&client&cast=http://127.0.0.1:41000&title=Battle%20of%20the%20Labs")
 
 
 def test_the_streamer_encodes_once_for_the_stream_and_the_recording():

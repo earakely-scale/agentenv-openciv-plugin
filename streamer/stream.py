@@ -9,6 +9,7 @@ import argparse
 import datetime
 import json
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -19,7 +20,6 @@ from pathlib import Path
 
 DISPLAY = ":99"
 SINK = "broadcast"
-CAST_PORT = 8790
 CASTER = Path(__file__).with_name("caster.py")
 POLL_SECONDS = 5
 GONE_SECONDS = 60
@@ -53,10 +53,19 @@ def stop_at(game_over_since: float | None, gone_since: float | None, linger: flo
     return gone_since is not None and now - gone_since >= GONE_SECONDS
 
 
-def page_url(url: str, *, client_view: bool = False, cast: bool = False, title: str | None = None) -> str:
-    params = ["stream", *(["client"] if client_view else []), *([f"cast=http://127.0.0.1:{CAST_PORT}"] if cast else []),
+def page_url(url: str, *, client_view: bool = False, cast_port: int | None = None, title: str | None = None) -> str:
+    params = ["stream", *(["client"] if client_view else []),
+              *([f"cast=http://127.0.0.1:{cast_port}"] if cast_port else []),
               *([f"title={urllib.parse.quote(title)}"] if title else [])]
     return f"{url}{'&' if '?' in url else '?'}{'&'.join(params)}"
+
+
+def free_port() -> int:
+    """A loopback port nothing listens on, for the casters: with --network host, two streams on one machine share the
+    host's ports."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 def ffmpeg_command(size: str, fps: int, bitrate: str, target: str, record: str | None) -> list[str]:
@@ -124,7 +133,8 @@ def main() -> int:
     procs = [start_pulseaudio(env),
              subprocess.Popen(["Xvfb", DISPLAY, "-screen", "0", f"{width}x{height}x24", "-nolisten", "tcp"])]
     time.sleep(2)
-    page = page_url(args.url, client_view=args.client_view, cast=args.cast, title=args.title)
+    cast_port = free_port() if args.cast else None
+    page = page_url(args.url, client_view=args.client_view, cast_port=cast_port, title=args.title)
     procs.append(subprocess.Popen(
         ["chromium", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--no-first-run", "--noerrdialogs",
          "--disable-infobars", "--hide-scrollbars", "--kiosk", "--window-position=0,0",
@@ -138,7 +148,7 @@ def main() -> int:
     threading.Thread(target=relay, args=(ffmpeg.stderr, secrets), daemon=True).start()
     if args.cast:   # after ffmpeg, so the recording has the intro
         caster = subprocess.Popen(
-            [sys.executable, str(CASTER), "--data", args.url.split("?")[0], "--port", str(CAST_PORT),
+            [sys.executable, str(CASTER), "--data", args.url.split("?")[0], "--port", str(cast_port),
              "--model", args.cast_model, *(["--title", args.title] if args.title else [])],
             env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         threading.Thread(target=relay, args=(caster.stdout, secrets), daemon=True).start()
