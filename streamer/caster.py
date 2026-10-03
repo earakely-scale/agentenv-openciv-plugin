@@ -512,7 +512,13 @@ class Caster:
         out += self.standings()
         if leader := self.leader_since():
             out.append(f"Leader: {m.who(leader[0])}, on top since turn {leader[1]}")
-        if events := [f"- turn {t['turn']}: {e['text']}" for t in m.turns[-5:] for e in t.get("events") or ()]:
+        else:
+            scores = {i: s[0] for i, s in (m.turns[-1].get("scores") or {}).items()}
+            top = max(scores.values(), default=0)
+            out.append(f"No leader: {' and '.join(m.who(i) for i, s in scores.items() if s == top)} are level on {top}")
+        events = [f"- turn {t['turn']}: {e['text']}" for t in m.turns[-5:] for e in t.get("events") or ()
+                  if e["kind"] != "lead_change"]   # the data calls a tie a lead; the Leader line has it right
+        if events:
             out.append("Recent events:\n" + "\n".join(events[-12:]))
         if self.messages:
             out.append("Recent messages between the players:\n" + "\n".join(f"- {x.text}" for x in self.messages[-6:]))

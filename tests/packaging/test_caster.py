@@ -391,6 +391,16 @@ def test_a_lead_change_is_called_once_the_new_leader_still_leads(fake):
     c.tick()
     said = fake.prompts[1].split("NOW\n")[1]
     assert "claude-opus takes it back" in said and "gpt-sol takes the lead" not in said
+    assert "Leader: claude-opus (Rome), on top since turn 7" in fake.prompts[1]
+
+    level = {"1": [50, 1, 3, 9, 2, 0], "2": [50, 1, 3, 9, 2, 0]}
+    fake.turns.append(entry(8, scores=level, events=[event("lead_change", 2, "gpt-sol takes the lead", **{"from": 1})]))
+    fake.live["turn"] = 8
+    until_quiet(c, clock)
+    c.tick()
+    assert c.lines[-1]["kind"] == "color"   # a tie is no lead change, whatever the data calls it
+    assert "No leader: claude-opus (Rome) and gpt-sol (Greece) are level on 50" in fake.prompts[2]
+    assert "takes the lead" not in fake.prompts[2]
 
 
 def test_lines_are_cleaned_up_for_speech():
