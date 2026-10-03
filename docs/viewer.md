@@ -70,12 +70,13 @@ the turns it hasn't seen; a recording embeds the whole document.
 | `GET /live/client.png?seat=CIV&turn=N` | The real client's view of the game from that seat (default: the first), for the newest turn it has drawn; 503 with `Retry-After` until the first frame, 404 without the client |
 | `GET /live/state.json`, `GET /live/frame.png` | Kept for old pages and scripts |
 
-`live` is the turn being played right now:
+`live` is the turn being played right now. A seat is `ended` once it has ended the turn, been defeated, or the game is
+over; `end_turn` counts in `calls` once it returns. Before the first game, `game` is null and `turns` is empty.
 
 ```jsonc
 {"turn": 57, "game_over": false, "victory": null, "client": true, "recording": true,
  "seats": [{"civ": "Rome", "label": "opus", "ended": false,      // has ended the turn
-            "seconds": 41.2,                                      // since the turn began
+            "seconds": 41.2,                                      // playing: since the turn began; ended: how long it took
             "calls": {"ok": 12, "failed": 1},
             "actions": [{"text": "c3 builds Settler", "ok": true}]}]}   // so far this turn
 ```

@@ -12,38 +12,53 @@ command returns the same snapshot on demand.
 
 ```json
 {
-  "turn": 12, "turn_limit": 60, "seed": 3,
+  "schema": 2, "turn": 12, "turn_limit": 60, "seed": 3,
   "map": {"width": 60, "height": 60, "wrap_x": true},
-  "players": [{"index": 0, "civ": "Rome", "is_human": true, "label": null, "defeated": false, "color": [196, 52, 52],
-               "score": {"total": 61, "cities": 2, "pop": 5, "tiles": 21, "techs": 3}}],
+  "seats": [{"index": 1, "civ": "Rome", "label": "opus"}],
+  "players": [{"index": 1, "civ": "Rome", "is_human": true, "label": "opus", "defeated": false, "color": [196, 52, 52],
+               "score": {"total": 61, "cities": 2, "pop": 5, "tiles": 21, "techs": 3},
+               "gold": 40, "government": "Despotism", "research": "Bronze Working", "at_war": [3], "contacts": [2, 3]}],
   "tiles": [[13, 9, "grassland", "forest", 0, 1, 1]],
-  "cities": [{"x": 12, "y": 10, "name": "Rome", "owner": 0, "size": 3, "capital": true}],
-  "units": [{"x": 14, "y": 10, "owner": 0, "type": "Settler"}],
+  "cities": [{"id": "city-1", "x": 12, "y": 10, "name": "Rome", "owner": 1, "size": 3, "capital": true, "production": "Warrior"}],
+  "units": [{"id": "Settler-4", "x": 14, "y": 10, "owner": 1, "type": "Settler"}],
   "events": [{"turn": 11, "kind": "city_grew", "text": "Rome grew to size 3"}]
 }
 ```
 
-- **`tiles`:** every tile of the map, regardless of fog. Each row is `[x, y, base_terrain, overlay or null, owner index or -1, river 0|1, known_by_human 0|1]`, where `known_by_human` is any seat's knowledge. Terrain names are lower-case engine keys.
-- **`players`:** includes the barbarians. `color` is RGB, derived from the civ's primary colour index. `is_human` marks every civ an agent plays (one, or one per seat), and `label` the seat's label from `new_game`.
+- **`schema`:** `2`. Snapshots without it are schema 1: no `seats`, `known` is 0/1, and none of the fields below marked (2).
+- **`seats`:** the agent seats in seat order, one in a single-seat game; `index` is the player's. (2)
+- **`tiles`:** every tile of the map, regardless of fog. Each row is `[x, y, base_terrain, overlay or null, owner index or -1, river 0|1, known]`, where `known` is a bitmask over `seats`: bit `k` is set when `seats[k]` knows the tile, so non-zero means some seat does (schema 1: 0/1). Terrain names are lower-case engine keys.
+- **`players`:** includes the barbarians. `color` is RGB, derived from the civ's primary colour index. `is_human` marks every civ an agent plays (one, or one per seat), and `label` the seat's label from `new_game`. Every player, seat or AI, also has (2) its `gold`, its `government`'s name, the tech it is `research`ing (null if none), the player indices it is `at_war` with and the ones it has met (`contacts`), both ascending and without the barbarians.
+- **`cities`, `units`:** (2) `id` is the engine's own id as a string (`"city-1"`, `"Settler-4"`): unique in the game, kept for the city's or unit's life and through saves. It is not the `c1`/`u1` id a seat's commands use. A city's `production` is the name of what it builds, or null.
 - **`events`:** the human player's events from the turn that just ended. In a game with seats, every seat's, each with `"civ"`.
 - **Several agents:** the renderers outline and bold every seat, name each as `civ (label)` in the scoreboard and on the chart, title the frame `Rome (Opus) vs Greece (Sonnet) vs …`, and prefix each action and event with its seat.
 - **Cost:** reading a snapshot never draws from the engine RNG.
 
 ## 2. The env renders on demand
 
-The env starts the bridge with `--record` unless `OPENCIV_RECORD=0`, and keeps the agent's tool calls
-in memory, per turn. The extension `urn:openciv3:recording/v1` renders the recording so far:
+The env starts the bridge with `--record` unless `OPENCIV_RECORD=0`, and keeps each seat's tool calls
+in memory, per turn: its game actions and how many calls succeeded and failed. The extension
+`urn:openciv3:recording/v1` renders the recording so far:
 
 - **Args:**
   - `formats`: list, default `["mp4", "html"]`, plus `client_mp4` in an image with the client (section 5); any of
     `mp4`, `gif`, `html`, `png` (the last turn) and `client_mp4`.
   - `view`: `spectator` (default, everything) or `agent` (only tiles the player has explored).
   - `fps`: default 4.
-- **Result:** `{"turns": n, "files": [{"name": "openciv3-seed3.mp4", "content_type": "video/mp4", "bytes": n, "base64": "..."}]}`.
+  - `client_seats`: the seats (civ or label) whose client view `client_mp4` renders; default: every seat.
+- **Result:** `{"turns": n, "notes": [...], "files": [{"name": "openciv3-seed3.mp4", "content_type": "video/mp4", "bytes": n, "base64": "..."}]}`.
+  A game with several seats names its files `openciv3-seed3-seats.*`; the `agent` view adds `-agent`.
 
 **Formats:**
 - **`mp4`:** needs `ffmpeg` on `PATH` (the image ships it). Without it the env falls back to an animated `gif` and says so.
-- **`html`:** a single self-contained file. It has a turn slider, play and pause, the map frame, the scoreboard, and that turn's agent actions and events.
+- **`html`:** the match viewer ([docs/viewer.md](viewer.md)) as one self-contained file that works offline: the
+  live view's app with the whole game's data embedded (`MatchData.document()`, every seat's actions and call
+  counts per turn). With `client_mp4` in the same call, it also knows each seat's client video (file name, fps,
+  and the turn of each frame) and plays the files that sit next to it, as `agent-env openciv3 recordings --out`
+  leaves them.
+- **`client_mp4`:** the real client's view (section 5). One seat: `<name>.client.mp4`. Several seats: one video
+  per seat, `<name>.client-<label or civ>.mp4` (e.g. `openciv3-seed1-seats.client-opus.mp4`), each a frame per
+  kept turn from that seat's point of view; `client_seats` limits it to some seats.
 
 **What a frame shows:**
 - **The map:** the diamond grid drawn as diamonds. Terrain is coloured; borders are tinted with the owner's colour; rivers are blue lines. Cities are discs in the owner's colour with name and size. Units are small dots.
@@ -114,10 +129,12 @@ Mac for debugging.
 
 ## 6. Watching a game live
 
-The same per-turn snapshots (and, with the client, the per-turn saves) feed a live view while the game plays:
-`GET /live` on the env, which `agent-env openciv3 watch` finds for envs running locally. It draws each new turn's
-map frame as the mp4 does, keeps only the players of earlier turns in memory for the score chart (it still reads
-each earlier snapshot), and asks the real client for the newest save only, so a slow client skips turns instead of
-falling behind. With `OPENCIV_RECORD=0` there are no snapshots, and the page says so.
-Routes and the state's shape: [docs/tools.md](tools.md#watching-a-game-live).
-
+The same per-turn snapshots (and, with the client, the per-turn saves) feed the match viewer while the game plays:
+`GET /live` on the env, which `agent-env openciv3 watch` finds for envs running locally. It is the app the `html`
+format embeds; live, it asks `GET /live/data.json?since=N` for the turns it has not seen, plus the turn being
+played: which seats have ended it, for how long each has played it, and their calls and actions so far. The env
+keeps one viewer document per game and adds each snapshot once, when the bridge has written it whole, so a request
+never reads the game again. The real client draws the seat the viewer asks for, one render at a time and the
+newest save only, so a slow client skips turns instead of falling behind. With `OPENCIV_RECORD=0` there are no
+snapshots, and the viewer says so. The older page's routes (`/live/state.json`, `/live/frame.png`) still work.
+Routes: [docs/tools.md](tools.md#watching-a-game-live); the data and the `live` object: [docs/viewer.md](viewer.md).

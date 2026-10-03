@@ -168,20 +168,29 @@ def serve(bridge: str | None, host: str, port: int, seed: int | None, turn_limit
 def recordings(instance: str | None, out: Path | None):
     """List the game recordings the save_env_recording step stored, or copy them out with --out.
 
-    INSTANCE keeps one run's: the instance id `agent-env run` prints.
+    INSTANCE keeps one run's: the instance id `agent-env run` prints. Files keep the names the env gave them, so the
+    HTML viewer finds the client videos next to it; with several runs, each run's files go into a directory of its own.
     """
     saved = [a for a in FileArtifact.query().type("file").execute()
              if "-recording-" in a.id and a.id.rpartition("-recording-")[2].startswith(instance or "")]
     if not saved:
         raise click.ClickException("no recordings" + (f" for instance {instance}" if instance else ""))
+    runs = {_run_of(a.id) for a in saved}
     for a in saved:
         line = f"{a.id} v{a.version}  {a.content_type}  {a.object_url}"
         if out:
-            out.mkdir(parents=True, exist_ok=True)
-            path = out / a.id.rpartition("/")[2]
+            folder = out / _run_of(a.id) if len(runs) > 1 else out
+            folder.mkdir(parents=True, exist_ok=True)
+            path = folder / Path(a.filename or a.id.rpartition("/")[2]).name
             path.write_bytes(a.load())
             line += f"  -> {path}"
         click.echo(line)
+
+
+def _run_of(artifact_id: str) -> str:
+    """`smoke-recording-<instance>`: the artifact id without the file's suffix."""
+    task, _, rest = artifact_id.rpartition("/")[2].rpartition("-recording-")
+    return f"{task}-recording-{rest.partition('.')[0]}"
 
 
 @openciv3.command()

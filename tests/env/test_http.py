@@ -162,7 +162,9 @@ async def test_the_live_view_follows_the_game(env_vars):
     try:
         async with httpx.AsyncClient(base_url=base) as http:
             page = await http.get("/live")
-            assert page.headers["content-type"].startswith("text/html") and 'fetch("live/state.json"' in page.text
+            assert page.headers["content-type"].startswith("text/html") and "window.OPENCIV_DATA = null;" in page.text
+            empty = (await http.get("/live/data.json")).json()
+            assert (empty["game"], empty["turns"], empty["live"]["turn"]) == (None, [], None)
             assert (await http.get("/live/state.json")).json() == {
                 "game": None, "turn": None, "turn_limit": None, "game_over": False, "victory": None, "players": [],
                 "events": [], "actions": [], "client": False, "recording": True}
@@ -181,10 +183,37 @@ async def test_the_live_view_follows_the_game(env_vars):
             assert (await http.get("/live/frame.png", params={"turn": 1})).status_code == 404
             assert (await http.get("/live/frame.png", params={"view": "god"})).status_code == 400
             assert (await http.get("/live/client.png")).status_code == 404
+            doc = (await http.get("/live/data.json")).json()
+            assert [t["turn"] for t in doc["turns"]] == [0] and doc["static"]["tiles"]
+            assert [(p["civ"], p["label"], p["seat"]) for p in doc["players"] if p["seat"] is not None] == [
+                ("Rome", "A", 0), ("Greece", "B", 1), ("Egypt", "C", 2)]
 
             async with anyio.create_task_group() as tg:
-                for civ in ("Rome", "Greece", "Egypt"):
+                tg.start_soon(play, base, "Greece", ("unit_order", {"unit": "u1", "order": "found_city"}), END_TURN)
+                with anyio.fail_after(20):
+                    while True:
+                        now = (await http.get("/live/data.json", params={"since": 0})).json()
+                        if any(s["ended"] for s in now["live"]["seats"]):
+                            break
+                        await anyio.sleep(0.1)
+                assert "static" not in now and now["turns"] == [] and now["live"]["turn"] == 0
+                seats = {s["civ"]: s for s in now["live"]["seats"]}
+                assert seats["Greece"]["ended"] and not seats["Rome"]["ended"]
+                assert seats["Greece"]["calls"] == {"ok": 1, "failed": 0}    # end_turn counts once it returns
+                assert seats["Rome"]["calls"] == {"ok": 0, "failed": 0}
+                assert seats["Greece"]["actions"] == [{"text": "u1 found_city", "ok": True}]
+                assert (await http.get("/live/data.json", params={"since": "x"})).status_code == 400
+                for civ in ("Rome", "Egypt"):
                     tg.start_soon(play, base, civ, ("unit_order", {"unit": "u1", "order": "found_city"}), END_TURN)
+            after = (await http.get("/live/data.json", params={"since": 0})).json()
+            [turn1] = after["turns"]
+            assert turn1["turn"] == 1 and after["live"]["turn"] == 1
+            index = {p["civ"]: str(p["index"]) for p in doc["players"]}
+            assert {civ: turn1["actions"][index[civ]] for civ in ("Rome", "Greece", "Egypt")} == {
+                civ: [{"text": "u1 found_city", "ok": True}] for civ in ("Rome", "Greece", "Egypt")}
+            assert turn1["calls"][index["Greece"]] == {"ok": 2, "failed": 0}
+            assert any(e["kind"] == "city_founded" for e in turn1["events"])
+            assert not any(s["ended"] for s in after["live"]["seats"])
             state = (await http.get("/live/state.json")).json()
             assert state["turn"] == 1
             assert sorted(a["text"] for a in state["actions"]) == ["A: u1 found_city", "B: u1 found_city",
@@ -200,6 +229,9 @@ async def test_the_live_view_follows_the_game(env_vars):
             await play(base, "Rome", END_TURN)
             won = (await http.get("/live/state.json")).json()
             assert won["victory"] == {"kind": "conquest", "civ": "Rome", "label": "A", "turn": 1} and won["game_over"]
+            data = (await http.get("/live/data.json")).json()
+            assert data["game"] != doc["game"] and data["live"]["game_over"]
+            assert data["live"]["victory"] == won["victory"] and data["meta"]["victory"] == won["victory"]
             assert won["game"] != state["game"] and [(p["label"], p["defeated"]) for p in won["players"]] == [
                 ("A", False), ("B", True)]
             assert (await http.get("/live/frame.png")).content.startswith(b"\x89PNG")

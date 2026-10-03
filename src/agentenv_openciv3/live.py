@@ -1,5 +1,6 @@
-"""Watch a game while it plays (GET /live): a page that follows the newest turn, drawn by the recording's renderer
-from the bridge's per-turn snapshots, or by the real client from its per-turn saves."""
+"""Watch a game while it plays (GET /live, docs/viewer.md): the viewer's data, kept up to date from the bridge's
+per-turn snapshots, and the real client's view of each seat from its per-turn saves. The older page's routes
+(state.json, frame.png) draw with the recording's renderer."""
 
 from __future__ import annotations
 
@@ -8,14 +9,18 @@ import gzip
 import json
 import logging
 import subprocess
+import time
 from pathlib import Path
+from typing import TypeVar
 
-from . import client, recording
+from . import client, matchdata, recording
 
 log = logging.getLogger(__name__)
 
 VIEWS = ("spectator", "agent")
 FRAMES_KEPT = 64
+STUCK_SECONDS = 60
+T = TypeVar("T")
 
 
 def turn_of(path: Path) -> int:
@@ -61,25 +66,78 @@ def state(snap: dict | None, timeline: dict[int, list[dict]], *, game: str | Non
 
 
 def render_frame(record: Path, turn: int, view: str) -> bytes | None:
-    """The map and score chart of `turn`, as the HTML replay shows them; None until its snapshot is written. Of the
-    turns before, only the players are kept for the chart: a long game's whole snapshots take hundreds of MB."""
+    """The map and score chart of `turn`, as the recording draws them; None until its snapshot is written. The
+    snapshots before it stream through, never all in memory: a long game's take hundreds of MB."""
     paths = [p for p in sorted(record.glob("turn-*.json.gz")) if turn_of(p) <= turn]
-    if not paths or turn_of(paths[-1]) != turn or (last := read(paths[-1])) is None:
+    if not paths or turn_of(paths[-1]) != turn or read(paths[-1]) is None:
         return None
-    before = [{"turn": s["turn"], "turn_limit": s["turn_limit"], "players": s["players"]}
-              for s in map(read, paths[:-1]) if s is not None]
-    r = recording.Renderer([*before, last], view=view)
-    return recording._png(r.frame(last).crop(r.map_box), colors=128)
+    return recording.map_png((s for s in map(read, paths) if s is not None), view=view)
+
+
+def by_player(per_civ: dict[str, dict[int, T]], players: list[dict]) -> dict[int, dict[int, T]]:
+    """{civ: {turn: x}} as matchdata wants it, {turn: {player index: x}}; civs that are no player are left out."""
+    index = {p["civ"]: p["index"] for p in players if not p.get("barbarian") and not recording.is_barbarian(p)}
+    out: dict[int, dict[int, T]] = {}
+    for civ, turns in per_civ.items():
+        if civ in index:
+            for t, x in turns.items():
+                out.setdefault(t, {})[index[civ]] = x
+    return out
+
+
+class LiveMatch:
+    """The viewer's data of the game being played, added to as the bridge writes snapshots: each is read once,
+    when it is whole, so a request never reads the whole game again."""
+
+    def __init__(self, record: Path, game: str, labels: dict[str, str] | None = None):
+        self.record = record
+        self.data = matchdata.MatchData(game=game, labels=labels)
+        self.lock = asyncio.Lock()
+
+    def update(self) -> None:
+        """Add the snapshots written since the last call, in turn order. One still being written stops the update
+        until a later call; one that stays cut short (a crash) while later ones read is skipped after STUCK_SECONDS."""
+        last = self.data.last_turn()
+        paths = sorted((p for p in self.record.glob("turn-*.json.gz") if turn_of(p) > last), key=turn_of)
+        for i, path in enumerate(paths):
+            if (snap := matchdata.read_snapshot(path)) is not None:
+                self.data.add(snap)
+                continue
+            try:
+                stuck = time.time() - path.stat().st_mtime > STUCK_SECONDS
+            except OSError:
+                stuck = False
+            if not (stuck and i + 1 < len(paths)):
+                return
+
+    async def document(self, since: int, actions: dict[str, matchdata.Actions], calls: dict[str, matchdata.Calls],
+                       live: dict) -> bytes:
+        """GET /live/data.json: the turns after `since` with `live`, as JSON. `actions` and `calls` are keyed by civ,
+        then turn: the players' indices come from the snapshots."""
+        def build() -> bytes:
+            self.update()
+            players = self.data.players
+            doc = self.data.document(since, actions=by_player(actions, players), calls=by_player(calls, players))
+            return json.dumps({**doc, "live": live}, ensure_ascii=False, separators=(",", ":")).encode()
+        async with self.lock:
+            return await asyncio.to_thread(build)
 
 
 class Live:
-    """The live view's images: map frames per (game, turn, view), and the client's newest frame."""
+    """The live view's images: map frames per (game, turn, view), and the client's newest frame of each seat."""
 
     def __init__(self) -> None:
         self.frames: dict[tuple[Path, int, str], bytes] = {}
-        self.client_frame: tuple[Path, int, bytes] | None = None
-        self.client_tried: tuple[Path, int] | None = None
+        self.client_frames: dict[str | None, tuple[Path, int, bytes]] = {}
+        self.client_tried: dict[str | None, tuple[Path, int]] = {}
         self.client_task: asyncio.Task | None = None
+        self.match: LiveMatch | None = None
+
+    def match_of(self, record: Path, game: str, labels: dict[str, str] | None = None) -> LiveMatch:
+        """The viewer's data of `game`; a new game starts it over."""
+        if self.match is None or self.match.data.game != game or self.match.record != record:
+            self.match = LiveMatch(record, game, labels)
+        return self.match
 
     async def frame(self, record: Path, turn: int | None, view: str) -> bytes | None:
         """The frame of `turn` (default: the newest), or None when the game has not reached it."""
@@ -96,141 +154,26 @@ class Live:
                 del self.frames[next(iter(self.frames))]
         return png
 
-    def client_view(self, saves: Path) -> tuple[int, bytes] | None:
-        """The turn and PNG of the client's newest frame of this game. When a newer save is waiting and no render
-        runs, renders the newest save in the background, skipping any turns in between."""
+    def client_view(self, saves: Path, seat: str | None = None) -> tuple[int, bytes] | None:
+        """The turn and PNG of the client's newest frame of this game from `seat` (a civ; None in a game with one
+        seat). When that seat's newest save is not drawn yet and no render runs, draws it in the background: one
+        render at a time, for the seat asked for, skipping any turns in between."""
         newest = max(saves.glob("turn-*.json.gz"), key=turn_of, default=None)
         idle = self.client_task is None or self.client_task.done()
-        if newest is not None and idle and self.client_tried != (saves, turn_of(newest)):
-            self.client_tried = (saves, turn_of(newest))
-            self.client_task = asyncio.create_task(self._render_client(saves, newest))
-        if self.client_frame is None or self.client_frame[0] != saves:
+        if newest is not None and idle and self.client_tried.get(seat) != (saves, turn_of(newest)):
+            self.client_tried[seat] = (saves, turn_of(newest))
+            self.client_task = asyncio.create_task(self._render_client(saves, newest, seat))
+        shown = self.client_frames.get(seat)
+        if shown is None or shown[0] != saves:
             return None
-        return self.client_frame[1], self.client_frame[2]
+        return shown[1], shown[2]
 
-    async def _render_client(self, saves: Path, save: Path) -> None:
+    async def _render_client(self, saves: Path, save: Path, seat: str | None) -> None:
         try:
-            png = await asyncio.to_thread(client.frame, save)
+            png = await asyncio.to_thread(client.frame, save, **({"seat": seat} if seat else {}))
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
-            log.warning("the client could not render %s: %s", save, e)
+            log.warning("the client could not render %s%s: %s", save, f" for {seat}" if seat else "", e)
             return
-        self.client_frame = (saves, turn_of(save), png)
-
-
-PAGE = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>OpenCiv3 live</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-[hidden]{display:none!important}
-body{margin:0;background:#12161c;color:#e6e9ee;font:14px/1.4 system-ui,-apple-system,Segoe UI,sans-serif}
-main{display:flex;gap:16px;padding:16px;align-items:flex-start}
-#stage{flex:1;min-width:0} #stage img{display:block;max-width:100%;height:auto;border-radius:6px}
-#waiting{padding:160px 0;text-align:center;color:#8c94a2;font-size:18px}
-aside{width:360px;flex:none}
-h1{font-size:24px;margin:0 0 4px} h2{font-size:12px;letter-spacing:.06em;color:#8c94a2;margin:16px 0 6px}
-.controls{display:flex;gap:8px;align-items:center;margin:12px 0 4px}
-button{background:#2e3746;color:#e6e9ee;border:0;border-radius:4px;padding:6px 12px;cursor:pointer}
-button.on{background:#4b5a72}
-table{width:100%;border-collapse:collapse} td{padding:2px 4px} td.n{text-align:right;color:#8c94a2}
-tr.me{background:#2e3746;font-weight:600} tr.out td{color:#8c94a2}
-.sw{display:inline-block;width:11px;height:11px;margin-right:6px;vertical-align:-1px}
-ul{list-style:none;padding:0;margin:0} li{padding:1px 0} .bad,.urgent{color:#f08060} .none{color:#8c94a2}
-#banner{margin:12px 0 0;padding:10px 12px;border-radius:6px;background:#2e3746;font-weight:600}
-#banner.win{background:#4d4120;color:#ffe08a}
-</style></head><body><main>
-<div id="stage"><div id="waiting">Waiting for the game to start…</div>
-<img id="map" alt="the map" hidden><img id="client" alt="the OpenCiv3 client's view" hidden></div>
-<aside><h1 id="turn">OpenCiv3</h1><div class="none" id="sub">live</div><div id="banner" hidden></div>
-<div class="controls"><button id="v-spectator" class="on">Map</button><button id="v-agent">Agents' view</button>
-<button id="v-client" hidden>Client</button></div><div class="none" id="note"></div>
-<h2>SCORE</h2><table id="score"></table>
-<h2 id="acts-h">AGENT ACTIONS</h2><ul id="acts"></ul><h2 id="evts-h">EVENTS</h2><ul id="evts"></ul>
-</aside></main>
-<script>
-const URGENT = new Set(__URGENT__), $ = id => document.getElementById(id);
-const COLS = [["score", "total"], ["cities", "cities"], ["pop", "pop"], ["techs", "techs"]];
-const esc = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"})[c]);
-const list = (items, cls, text) => items.length ? items.map(i => `<li class="${cls(i)}">${esc(text(i))}</li>`).join("")
-  : '<li class="none">none</li>';
-const named = (civ, label) => label ? `${civ} (${label})` : civ;
-const VIEWS = ["spectator", "agent", "client"];
-let s = null, view = VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : "spectator";
-let mapUrl = null, clientAt = null, clientBusy = false;
-
-function show() {
-  const started = s.turn !== null;
-  $("waiting").hidden = started;
-  $("waiting").textContent = s.recording === false
-    ? "Recording is off (OPENCIV_RECORD=0), so there is nothing to show." : "Waiting for the game to start…";
-  $("v-client").hidden = !s.client;
-  $("turn").textContent = started ? `Turn ${s.turn} / ${s.turn_limit}` : "OpenCiv3";
-  document.title = started ? `T${s.turn} · OpenCiv3 live` : "OpenCiv3 live";
-  const agents = s.players.filter(p => p.is_agent).map(p => named(p.civ, p.label));
-  $("sub").textContent = (agents.length ? agents.join(" vs ") + " · " : "") + "live, every 2 s";
-  const v = s.victory, top = s.players[0];
-  $("banner").hidden = !s.game_over && !v;
-  $("banner").className = v ? "win" : "";
-  $("banner").textContent = v ? `${named(v.civ, v.label)} wins by ${v.kind} on turn ${v.turn}` : top ?
-    `Game over at turn ${s.turn}: ${named(top.civ, top.label)} has the top score, ${top.score.total}` : "";
-  $("score").innerHTML = (started ? `<tr><td></td>${COLS.map(([h]) => `<td class="n">${h}</td>`).join("")}</tr>` : "")
-    + s.players.map(p => `<tr class="${p.is_agent ? "me" : ""}${p.defeated ? " out" : ""}"><td><span class="sw" ` +
-    `style="background:${p.color}"></span>${esc(named(p.civ, p.label))}${p.defeated ? " (out)" : ""}</td>` +
-    COLS.map(([, k]) => `<td class="n">${p.score[k]}</td>`).join("") + "</tr>").join("");
-  const at = started && s.turn > 0 ? ` T${s.turn - 1}` : "";
-  const seat = civ => (s.players.find(p => p.civ === civ) || {}).label || civ;
-  $("acts-h").textContent = "AGENT ACTIONS" + at; $("evts-h").textContent = "EVENTS" + at;
-  $("acts").innerHTML = list(s.actions, a => a.ok === false ? "bad" : "", a => a.text);
-  $("evts").innerHTML = list(s.events, e => URGENT.has(e.kind) ? "urgent" : "",
-    e => (e.civ ? seat(e.civ) + ": " : "") + (e.text || e.kind));
-  for (const w of VIEWS) $("v-" + w).classList.toggle("on", w === view);
-  $("map").hidden = !started || view === "client";
-  $("client").hidden = !started || view !== "client" || clientAt === null;
-  if (!started) return;
-  if (view === "client") return clientFrame();
-  $("note").textContent = "";
-  const url = `live/frame.png?turn=${s.turn}&view=${view}&game=${s.game}`;
-  if (url !== mapUrl) $("map").src = mapUrl = url;
-}
-
-async function clientFrame() {
-  if (clientBusy || clientAt === `${s.game}/${s.turn}`) return;
-  clientBusy = true;
-  try {
-    const r = await fetch(`live/client.png?turn=${s.turn}&game=${s.game}`, {cache: "no-store"});
-    if (!r.ok) {
-      clientAt = null;
-      $("client").hidden = true;
-      $("note").textContent = await r.text();
-      return;
-    }
-    const turn = +r.headers.get("X-OpenCiv3-Turn"), img = $("client"), old = img.src;
-    img.src = URL.createObjectURL(await r.blob());
-    if (old) URL.revokeObjectURL(old);
-    clientAt = `${s.game}/${turn}`;
-    img.hidden = view !== "client";
-    $("note").textContent = turn < s.turn ? `The client shows turn ${turn}; it is drawing turn ${s.turn}.` : "";
-  } finally {
-    clientBusy = false;
-  }
-}
-
-for (const w of VIEWS) {
-  $("v-" + w).onclick = () => {
-    view = w;
-    history.replaceState(null, "", "#" + w);
-    if (s) show();
-  };
-}
-
-async function poll() {
-  try {
-    s = await (await fetch("live/state.json", {cache: "no-store"})).json();
-    show();
-  } catch (e) {
-    $("sub").textContent = "Lost the env; retrying every 2 s";
-  }
-  setTimeout(poll, 2000);
-}
-poll();
-</script></body></html>
-""".replace("__URGENT__", json.dumps(sorted(recording.URGENT)))
+        for key in [k for k, v in self.client_frames.items() if v[0] != saves]:
+            del self.client_frames[key]
+        self.client_frames[seat] = (saves, turn_of(save), png)

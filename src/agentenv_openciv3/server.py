@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 import weakref
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
@@ -41,7 +42,7 @@ from pydantic import Field
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
-from . import client, live, recording, render
+from . import client, live, matchdata, recording, render, viewer
 from .actionlog import ActionLog
 from .baselines import POLICIES, Baselines
 from .bridge import DEAD, Bridge, BridgeError
@@ -144,6 +145,7 @@ class Seat:
     ready: bool = False
     turn_result: asyncio.Future | None = None
     auto_ended_turns: int = 0
+    ended_at: float | None = None    # when the seat ended the turn (time.monotonic), while `ready`
 
     @property
     def name(self) -> str:
@@ -183,6 +185,8 @@ class OpenCiv3Env(AgentEnvEnvironment):
         self.game: dict | None = None
         self.seats: list[Seat] = [Seat(self.scenario.get("civ", "Rome"), None, ActionLog(self.action_log))]
         self.turn: int | None = None
+        self.turn_started = time.monotonic()
+        self.game_id: str | None = None
         self.harness = {"autoplay_turns": 0, "new_games": 0, "extension_calls": 0, "engine_restarts": 0}
         self.restarts: dict[int | None, int] = {}
         self.failed: str | None = None
@@ -247,6 +251,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
             if old.turn_result and not old.turn_result.done():
                 old.turn_result.set_exception(BridgeError("new_game", "a new game started; this one is over."))
         self.bridge, self.game_dir, self.game, self.scenario, self.seats = bridge, game_dir, game, scenario, seats
+        self.game_id, self.turn = f"g-{uuid.uuid4().hex[:8]}", None
         for seat, state in zip(seats, states, strict=True):
             self._keep(state, seat)
             seat.start_techs = state["score"]["techs"]
@@ -304,7 +309,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
     def _keep(self, state: dict, seat: Seat | None = None) -> None:
         seat = seat or self.seat
         seat.cache = seat.last_state = state
-        self.turn = state["turn"]
+        self._set_turn(state["turn"])
         seat.over = state["game_over"] or state["defeated"]
 
     async def _state(self, seat: Seat | None = None) -> dict:
@@ -312,6 +317,11 @@ class OpenCiv3Env(AgentEnvEnvironment):
         if seat.cache is None:
             self._keep(await self._call("state", seat=seat), seat)
         return seat.cache
+
+    def _set_turn(self, turn: int) -> None:
+        """The game is at `turn`; a new turn starts its clock (the live view's seconds)."""
+        if turn != self.turn:
+            self.turn, self.turn_started = turn, time.monotonic()
 
     def _vs(self, turn: int) -> dict | None:
         return self.baselines.scores_at(turn) if self.baselines and not self.multi else None
@@ -327,7 +337,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
             if seat.turn_result and not seat.turn_result.done():
                 seat.last_call = now
                 seat.turn_result.set_result(results[seat.civ])
-        self.turn = next(iter(results.values()))["turn"]
+        self._set_turn(next(iter(results.values()))["turn"])
 
     async def _seat_turn(self, seat: Seat, res: dict | None) -> dict | None:
         """This seat's result of the turn: at once when its end_turn advanced the game, else when the other seats
@@ -336,7 +346,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
             self._advanced(res["seats"])
             return res["seats"][seat.civ]
         if seat.turn_result is None:
-            seat.ready = True
+            seat.ready, seat.ended_at = True, time.monotonic()
             seat.turn_result = asyncio.get_running_loop().create_future()
             self._watch_stalls()
         result = seat.turn_result
@@ -405,7 +415,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
         if "seats" in res:
             self._advanced(res["seats"])
         else:
-            seat.ready = True
+            seat.ready, seat.ended_at = True, time.monotonic()
 
     async def close(self) -> None:
         if self.stall_watch:
@@ -934,11 +944,29 @@ class OpenCiv3Env(AgentEnvEnvironment):
                 out.setdefault(t, []).extend({**a, "text": f"{seat.name}: {a['text']}"} for a in lines)
         return out
 
+    def _per_seat(self, since: int | None = None) -> tuple[dict[str, matchdata.Actions], dict[str, matchdata.Calls]]:
+        """Each seat's actions and call counts by turn (from `since` on), keyed by civ; copies, safe to hand to a
+        thread."""
+        actions = {s.civ: {t: list(a) for t, a in s.actions.timeline.items() if since is None or t >= since}
+                   for s in self.seats}
+        calls = {s.civ: {t: dict(c) for t, c in s.actions.calls.items() if since is None or t >= since}
+                 for s in self.seats}
+        return actions, calls
+
+    def _client_seats(self, names: list[str] | None) -> list[Seat]:
+        if not names or not self.multi:
+            return list(self.seats)
+        try:
+            return list(dict.fromkeys(self._seat_named(n) for n in names))
+        except BridgeError as e:
+            raise ValueError(f"client_seats: {e.message}") from None
+
     @extension("urn:openciv3:recording/v1",
-               description="Render the game so far: mp4 (gif without ffmpeg), html replay, png of the last turn, or "
-                           "client_mp4 (the real OpenCiv3 client's view, in images built with --target client).")
+               description="Render the game so far: mp4 (gif without ffmpeg), html (the match viewer, one file), png "
+                           "of the last turn, or client_mp4 (the real OpenCiv3 client's view, one video per seat, in "
+                           "images built with --target client; client_seats limits it to those seats).")
     async def recording(self, formats: list[str] | None = None, view: Literal["spectator", "agent"] = "spectator",
-                        fps: int = 4) -> dict:
+                        fps: int = 4, client_seats: list[str] | None = None) -> dict:
         self.harness["extension_calls"] += 1
         formats = formats or ["mp4", "html", *([client.FORMAT] if self.client else [])]
         valid = [*recording.FORMATS, client.FORMAT]
@@ -950,40 +978,96 @@ class OpenCiv3Env(AgentEnvEnvironment):
             raise ValueError("recording is off (OPENCIV_RECORD=0)")
         async with self.lock:
             await self._ensure_game()
+            seats, multi = self._client_seats(client_seats), self.multi
             snapshots = recording.load_snapshots(self.game_dir / "record") or [await self._call("world")]
             actions = self._timeline()
+            seat_actions, calls = self._per_seat()
             baselines = self.baselines.trajectories() if self.baselines else {}
-            name = f"openciv3-seed{self.game['seed']}" + ("-seats" if self.multi else "") + (
+            name = f"openciv3-seed{self.game['seed']}" + ("-seats" if multi else "") + (
                 "-agent" if view == "agent" else "")
             saves = self.game_dir / "saves"
-        own = [f for f in formats if f in recording.FORMATS]
-        files, notes = await asyncio.to_thread(recording.render, snapshots, formats=own, view=view, fps=fps, name=name,
-                                               actions=actions, baselines=baselines) if own else ([], [])
+        players = snapshots[-1]["players"]
+        seat_actions, calls = live.by_player(seat_actions, players), live.by_player(calls, players)
+        notes: list[str] = []
+        videos: list[recording.File] = []
+        client_videos: dict[str, dict] = {}
         if client.FORMAT in formats:
             if not self.client:
                 notes.append(f"{client.FORMAT} skipped: {self.client_missing}")
             else:
+                turns = sorted(live.turn_of(p) for p in saves.glob("turn-*.json.gz"))
                 try:
-                    video = await asyncio.to_thread(client.render, saves, fps=fps)
-                    files.append(recording.File(f"{name}.client.mp4", "video/mp4", video))
+                    if multi:
+                        named = {s.civ: f"{name}.client-{file_part(s.name)}.mp4" for s in seats}
+                        rendered = await asyncio.to_thread(client.render_seats, saves, list(named), fps=fps)
+                    else:
+                        named = {seats[0].civ: f"{name}.client.mp4"}
+                        rendered = {seats[0].civ: await asyncio.to_thread(client.render, saves, fps=fps)}
+                    for civ, video in rendered.items():
+                        videos.append(recording.File(named[civ], "video/mp4", video))
+                        client_videos[civ] = {"file": named[civ], "fps": fps, "turns": turns}
                 except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
                     notes.append(f"{client.FORMAT} failed: {e}")
+        own = [f for f in formats if f in recording.FORMATS]
+        files: list[recording.File] = []
+        if own:
+            files, rendered_notes = await asyncio.to_thread(
+                recording.render, snapshots, formats=own, view=view, fps=fps, name=name, actions=actions,
+                baselines=baselines, seat_actions=seat_actions, calls=calls, client_videos=client_videos or None)
+            notes = rendered_notes + notes
         return {"turns": len(snapshots), "notes": notes,
                 "files": [{"name": f.name, "content_type": f.content_type, "bytes": len(f.data),
-                           "base64": base64.b64encode(f.data).decode()} for f in files]}
+                           "base64": base64.b64encode(f.data).decode()} for f in [*files, *videos]]}
 
     # ---- live view: GET /live follows the game while it plays ----
 
     def create_app(self) -> FastMCP:
         app = super().create_app()
         self.live = live.Live()
-        for path, handler in (("/live", self._live_page), ("/live/state.json", self._live_state),
-                              ("/live/frame.png", self._live_frame), ("/live/client.png", self._live_client)):
+        for path, handler in (("/live", self._live_page), ("/live/data.json", self._live_data),
+                              ("/live/state.json", self._live_state), ("/live/frame.png", self._live_frame),
+                              ("/live/client.png", self._live_client)):
             app.custom_route(path, methods=["GET"])(handler)
         return app
 
     async def _live_page(self, request: Request) -> Response:
-        return HTMLResponse(live.PAGE)
+        return HTMLResponse(viewer.page(), headers={"Cache-Control": "no-cache"})
+
+    def _live_now(self) -> dict:
+        """The turn being played (docs/viewer.md, `live`): who has ended it, for how long each has played it, and
+        each seat's calls and actions so far."""
+        if self.game is None:
+            return {"turn": None, "game_over": False, "victory": None, "client": self.client,
+                    "recording": self.record, "seats": []}
+        now, turn = time.monotonic(), self.turn
+        states = [s.last_state for s in self.seats if s.last_state]
+        victory = next((st["victory"] for st in states if st.get("victory")), None)
+        return {
+            "turn": turn, "game_over": victory is not None or any(st.get("game_over") for st in states),
+            "victory": victory, "client": self.client, "recording": self.record,
+            "seats": [{"civ": s.civ, "label": s.label, "ended": s.ready or s.over,
+                       "seconds": round(max(0.0, (s.ended_at if s.ready and s.ended_at else now) - self.turn_started),
+                                        1),
+                       "calls": dict(s.actions.calls.get(turn) or {"ok": 0, "failed": 0}),
+                       "actions": list(s.actions.timeline.get(turn) or [])} for s in self.seats]}
+
+    async def _live_data(self, request: Request) -> Response:
+        """GET /live/data.json?since=N: the viewer's data with the turns after N, and the turn being played. Reads
+        the env's state without its lock (no awaits in between), so a long end_turn never holds the page up."""
+        try:
+            since = int(request.query_params.get("since", "-1"))
+        except ValueError:
+            return PlainTextResponse("since is a turn number; -1 (the default) for the whole game", 400)
+        now = self._live_now()
+        headers = {"Cache-Control": "no-store"}
+        if self.game_dir is None or self.game_id is None:
+            doc = matchdata.MatchData(game=None).document(since)
+            return JSONResponse({**doc, "live": now}, headers=headers)
+        actions, calls = self._per_seat(since)
+        match = self.live.match_of(self.game_dir / "record", self.game_id,
+                                   {s.civ: s.label for s in self.seats if s.label})
+        body = await match.document(since, actions, calls, now)
+        return Response(body, media_type="application/json", headers=headers)
 
     async def _live_state(self, request: Request) -> Response:
         async with self.lock:
@@ -1004,15 +1088,26 @@ class OpenCiv3Env(AgentEnvEnvironment):
         return Response(png, media_type="image/png")
 
     async def _live_client(self, request: Request) -> Response:
+        """GET /live/client.png?seat=CIV: the client's newest frame from that seat (default: the first)."""
         if not self.client:
             return PlainTextResponse(f"no client view here: {self.client_missing}", 404)
-        async with self.lock:
-            game_dir = self.game_dir
-        shown = self.live.client_view(game_dir / "saves") if game_dir else None
+        game_dir, seat = self.game_dir, self.seats[0]
+        if wanted := request.query_params.get("seat"):
+            try:
+                seat = self._seat_named(wanted)
+            except BridgeError as e:
+                return PlainTextResponse(e.message, 400)
+        shown = self.live.client_view(game_dir / "saves", seat.civ if self.multi else None) if game_dir else None
         if shown is None:
             return PlainTextResponse("The client is drawing its first frame.", 503, headers={"Retry-After": "2"})
         turn, png = shown
-        return Response(png, media_type="image/png", headers={"X-OpenCiv3-Turn": str(turn)})
+        return Response(png, media_type="image/png", headers={"X-OpenCiv3-Turn": str(turn), "X-OpenCiv3-Seat": seat.civ,
+                                                              "Cache-Control": "no-store"})
+
+
+def file_part(name: str) -> str:
+    """A seat's name as part of a file name: `Claude Opus 4` -> `Claude-Opus-4`."""
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-.") or "seat"
 
 
 def main() -> None:

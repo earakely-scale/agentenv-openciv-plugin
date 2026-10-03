@@ -1,5 +1,6 @@
 import base64
 import io
+import json
 import re
 import shutil
 
@@ -592,8 +593,10 @@ async def test_recording_extension(env, tools):
     files = {f["name"]: f for f in res["files"]}
     assert set(files) == {"openciv3-seed3.html", "openciv3-seed3.png", "openciv3-seed3.gif"}
     page = base64.b64decode(files["openciv3-seed3.html"]["base64"]).decode()
-    assert '<input id="slider" type="range"' in page and "u3 settle → (16,12)" in page
-    assert '"text":"u2 explore (invalid_order)","ok":false' not in page and "u2 explore ✗ invalid_order" in page
+    doc = json.loads(page.split("window.OPENCIV_DATA = ", 1)[1].split("; window.OPENCIV_VIDEOS = ", 1)[0])
+    assert [t["turn"] for t in doc["turns"]] == [1, 2, 3] and doc["static"]["tiles"]
+    assert {"text": "u3 settle → (16,12)", "ok": True} in doc["turns"][1]["actions"]["0"]
+    assert {"text": "u2 explore ✗ invalid_order", "ok": False} in doc["turns"][1]["actions"]["0"]
     png = Image.open(io.BytesIO(base64.b64decode(files["openciv3-seed3.png"]["base64"])))
     assert png.size[0] % 2 == 0 and png.size[1] >= 720
     assert files["openciv3-seed3.gif"]["content_type"] == "image/gif"

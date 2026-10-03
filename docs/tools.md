@@ -61,14 +61,17 @@ A game started with `seats` (new-game extension) is played by several agents, on
 
 ## Watching a game live
 
-The env serves, over plain HTTP next to the MCP endpoint:
+The env serves, over plain HTTP next to the MCP endpoint, the match viewer and its data. The routes, the data's
+shape and the `live` object are specified in [docs/viewer.md](viewer.md#3-live-routes-the-env-next-to-mcp):
 
 | Route | What it returns |
 |---|---|
-| `GET /live` | A page that follows the game: the map, the scores and score chart, the last turn's agent actions and events, a banner at a victory or GAME OVER, and buttons for the spectator map, the agents' explored view and the real client's view (when the image has the client) |
-| `GET /live/state.json` | `{"turn", "turn_limit", "game_over", "victory", "players": [{"civ", "label", "is_agent", "defeated", "score"}], "events", "actions", "client", "recording", ...}`; `turn` is null before the first turn, and stays null with `OPENCIV_RECORD=0` (`recording` false), since the view draws from the per-turn snapshots |
-| `GET /live/frame.png?turn=N&view=spectator\|agent` | The map frame of turn N (default: the newest), as the recording draws it; 404 before the first turn |
-| `GET /live/client.png?turn=N` | The real client's view of the newest turn it has drawn; it draws the newest save in the background, answers 503 with `Retry-After` until the first frame, and 404 without the client |
+| `GET /live` | The match viewer, which follows the game: the map, every seat's view of it, the standings, the agents' actions and the real client's view |
+| `GET /live/data.json?since=N` | The viewer's data with the turns after N (`since=-1`, the default, adds the static map), plus `live`: the turn being played, and per seat whether it has ended the turn, for how long it has played it, its calls and its actions so far. `game` changes when a new game starts; `game` is null before the first game. 400 when `since` is not a number |
+| `GET /live/client.png?seat=CIV&turn=N` | The real client's view from that seat (default: the first) of the newest turn it has drawn. It draws one seat at a time, in the background, skipping turns rather than queueing them; 503 with `Retry-After` until that seat's first frame, 400 for a civ that is no seat, 404 without the client |
+| `GET /live/state.json`, `GET /live/frame.png?turn=N&view=spectator\|agent` | Kept for older pages and scripts: the newest turn's scoreboard, events and actions, and the map frame of turn N as the recording draws it (404 before the first turn) |
+
+With `OPENCIV_RECORD=0` there are no snapshots: the data has no turns and `live.recording` is false.
 
 `agent-env openciv3 watch` lists the live URL of every OpenCiv3 env running in local Docker; `--open` opens the
 first in a browser.
