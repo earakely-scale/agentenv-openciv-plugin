@@ -618,7 +618,7 @@ def test_battles_the_seat_saw_this_turn_and_the_last(launch):
     for x in records.values():
         if me not in (x["attacker"]["owner"], x["defender"]["owner"]):
             known = {(t[0], t[1]) for t in km["tiles"]}
-            assert (x["attacker"]["x"], x["attacker"]["y"]) in known or (x["defender"]["x"], x["defender"]["y"]) in known
+            assert {(x[side]["x"], x[side]["y"]) for side in ("attacker", "defender")} & known
 
 
 def test_saves_keeps_every_turn_as_a_loadable_save(launch, tmp_path):
@@ -840,14 +840,15 @@ def check_battle(x: dict, me: int, km: dict) -> None:
         if x["winner"] == "retreat":  # the last round's loser withdrew instead of losing its last hit point
             lost_a, lost_d = (lost_a - 1, lost_d) if rounds[-1] == "d" else (lost_a, lost_d - 1)
         assert (a["hp_before"] - a["hp_after"], d["hp_before"] - d["hp_after"]) == (lost_a, lost_d)
-        assert {"attacker": (a["hp_after"] > 0, d["hp_after"] == 0), "defender": (a["hp_after"] == 0, d["hp_after"] > 0),
-                "retreat": (a["hp_after"] > 0, d["hp_after"] > 0)}[x["winner"]] == (True, True)
+        alive = (a["hp_after"] > 0, d["hp_after"] > 0)
+        assert alive == {"attacker": (True, False), "defender": (False, True), "retreat": (True, True)}[x["winner"]]
         if x["winner"] != "retreat":
             assert rounds[-1] == x["winner"][0]
     else:  # each round is a shot: "a" a hit, "d" a miss
         assert a["hp_after"] == a["hp_before"] and d["hp_before"] - d["hp_after"] == rounds.count("a")
         assert x["winner"] == ("attacker" if d["hp_after"] == 0 else "defender")
-    assert x["city"] is None or (set(x["city"]) == {"x", "y", "name"} and (x["city"]["x"], x["city"]["y"]) == (d["x"], d["y"]))
+    if x["city"] is not None:
+        assert set(x["city"]) == {"x", "y", "name"} and (x["city"]["x"], x["city"]["y"]) == (d["x"], d["y"])
     assert not x["razed"] or (x["winner"] == "attacker" and x["city"] is not None and x["kind"] == "attack")
 
 

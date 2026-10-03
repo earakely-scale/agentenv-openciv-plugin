@@ -10,6 +10,10 @@ and the sheets it names:
   client's PNGs as they are (only the variants this art set really has: many of its variant sheets are identical);
 - units: from each unit's FLC animations, its idle and fortified poses and its moving (`Run`) animation, as one
   sheet with a row per action and direction, plus a mask of its civ-colour pixels to tint for each civ (civ3flc.py);
+- the advisor screens' and the city screen's art (SCREENS: backgrounds, heads, buttons, boxes, icons), which the
+  page loads when a screen opens, and from the client's ruleset (Lua/civ3/ruleset.json) the science advisor's tech
+  tree as the client lays it out, the units' stats and icons and the buildings' icons (`techs`, `unit_info`,
+  `building_icons`: _ruleset);
 - the Noto Sans fonts the client's labels use, with their licence.
 
 The play page draws them the way the client does (map.js, ArtPainter); without them it draws its own map.
@@ -44,7 +48,40 @@ SHEETS = {
     "status_box": "interface/box right color.png", "next_turn": "interface/nextturn states color.png",
     "minimap_box": "interface/box left color.png", "buttons": "interface/NormButtons.png",
     "buttons_hover": "interface/rolloverbuttons.png", "buttons_pressed": "interface/highlightedbuttons.png",
+    # the city screen's yield icons, which the map draws on the worked tiles while the screen is open
+    "yield_icons": "city screen/CityIcons.png",
 }
+# The advisors' and the city screen's art (screens.js), from the client's Assets/Art: name -> path. The page loads
+# these when a screen opens (the backgrounds are large), so the manifest lists them apart from the map's sheets.
+SCREENS = {
+    "domestic": "Advisors/domestic.png", "foreign": "Advisors/foreign.png", "foreign_tab": "Advisors/foreignTAB.png",
+    "science_0": "Advisors/science_ancient.png", "science_1": "Advisors/science_middle.png",
+    "science_2": "Advisors/science_industrial_new.png", "science_3": "Advisors/science_modern.png",
+    "dialogbox": "Advisors/dialogbox.png", "domestic_button": "Advisors/domesticBUTTON.png",
+    "plusminus": "Advisors/domestic_plusminus.png", "techboxes": "Advisors/techboxes.png",
+    "non_required": "Advisors/non_required.png", "exit": "exitBox-backgroundStates.png",
+    "head_domestic": "SmallHeads/popupDOMESTIC.png", "head_foreign": "SmallHeads/popupFOREIGN.png",
+    "head_science": "SmallHeads/popupSCIENCE.png", "pop_heads": "SmallHeads/popHeads.png",
+    "science_nav": "Tech Chooser/scienceNAV.png", "unit_small": "Civilopedia/icons/units/unit_small.png",
+    "city_bg": "city screen/background.png", "city_buttons": "city screen/cityMgmtButtons.png",
+    "prod_button": "city screen/ProdButton.png", "prod_queue": "city screen/ProductionQueueBox.png",
+    "buildings_small": "city screen/buildings-small.png", "buildings_large": "city screen/buildings-large.png",
+    "units_32": "Units/units_32.png", "popup": "popupborders.png", "xo": "X-o_ALLstates-sprite.png",
+    "orbs": "buttonsFINAL.png",
+    "tech_placeholder": "Tech Chooser/Icons/placeholder.png",
+}
+# The tech icons the standalone client has, by tech id (Lua/standalone/textures.lua); every other tech shows the
+# placeholder. Each is a screen sheet "tech_<id>".
+TECH_ICONS = {"tech-2": "Masonry", "tech-3": "Alphabet", "tech-5": "TheWheel", "tech-6": "WarriorCode",
+              "tech-7": "CeremonialBurial", "tech-10": "Mysticism", "tech-13": "Code of Laws", "tech-14": "Literature",
+              "tech-15": "MapMaking", "tech-16": "HorsebackRiding"}
+SCREENS.update({f"tech_{t}": f"Tech Chooser/Icons/{n}.png" for t, n in TECH_ICONS.items()})
+ERAS = ["ERAS_Ancient_Times", "ERAS_Middle_Ages", "ERAS_Industrial_Age", "ERAS_Modern_Era"]
+# A terraform's unit-command button on interface/NormButtons.png (the `buttons` sheet): its 32x32 cell (column, row),
+# which the science advisor shows on the tech that allows it (Lua/civ3/textures/unit_control.lua).
+TERRAFORM_BUTTON = {"unit_build_fortress": [0, 3], "unit_build_railroad": [7, 2], "unit_plant_forest": [5, 3],
+                    "unit_build_airfield": [1, 4], "unit_build_radar_tower": [2, 4], "unit_build_outpost": [3, 4],
+                    "unit_build_barricade": [4, 4]}
 # Unit type -> art folder under Assets/Art/Units, as the client's standalone ruleset maps them
 # (vendor/OpenCiv3/C7/Lua/standalone/ruleset.lua). Types without art are drawn as the page's own markers.
 UNIT_ART = {
@@ -58,7 +95,7 @@ UNIT_ART = {
     "Privateer": "Pirate Ship", "Medieval Infantry": "Gothic Swordsman", "Trebuchet": "Medieval Trebuchet",
     "Crusader": "Black Hospitaller Swordsman", "Ancient Cavalry": "Oscan Companion", "Curragh": "MinoanGalley",
 }
-FONTS = ("NotoSans-Regular.ttf", "NotoSans-Bold.ttf", "LICENSE-NotoSans.txt")
+FONTS = ("NotoSans-Regular.ttf", "NotoSans-Bold.ttf", "NotoSans-Italic.ttf", "LICENSE-NotoSans.txt")
 
 
 def find() -> Path | None:
@@ -82,13 +119,18 @@ def convert(c7: Path, out: Path) -> dict:
         raise FileNotFoundError(f"no art at {art}: the client's Assets are missing")
     shutil.rmtree(out, ignore_errors=True)
     (out / "sheets").mkdir(parents=True)
-    sheets = {}
-    for name, rel in SHEETS.items():
-        src = art / rel
-        if not src.is_file():
-            raise FileNotFoundError(f"the art has no {rel}")
-        _small_png(src, out / "sheets" / f"{name}.png")
-        sheets[name] = f"sheets/{name}.png"
+    sheets, screens = {}, {}
+    for names, folder, into in ((SHEETS, "sheets", sheets), (SCREENS, "screens", screens)):
+        (out / folder).mkdir(exist_ok=True)
+        for name, rel in names.items():
+            src = art / rel
+            if not src.is_file():
+                raise FileNotFoundError(f"the art has no {rel}")
+            _small_png(src, out / folder / f"{name}.png")
+            into[name] = f"{folder}/{name}.png"
+    _techboxes_fit(art / SCREENS["techboxes"], out / "screens" / "techboxes_fit.png")
+    screens["techboxes_fit"] = "screens/techboxes_fit.png"
+    rules = _ruleset(c7)
     units = {}
     (out / "units").mkdir()
     done: dict[str, dict] = {}
@@ -106,9 +148,88 @@ def convert(c7: Path, out: Path) -> dict:
             digest.update(p.relative_to(out).as_posix().encode() + p.read_bytes())
     fonts = sorted(f for f in FONTS if f.endswith(".ttf") and (out / "fonts" / f).is_file())
     manifest = {"version": 1, "id": digest.hexdigest()[:12], "pinned": _pinned(c7), "sheets": sheets,
-                "units": units, "fonts": fonts}
+                "units": units, "fonts": fonts, "screens": screens, **rules}
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
     return manifest
+
+
+def _ruleset(c7: Path) -> dict:
+    """From the client's ruleset (Lua/civ3/ruleset.json, as the standalone mode trims it to the units with art):
+
+    - `techs`: the science advisor's tree (ScienceAdvisor.cs, TechBox.cs): per tech its id, name, era (0-3), the box's
+      top-left in the 1024x768 screen (x, y), whether the era needs it (`required`), its prerequisites' ids, and what
+      sizes its box: the buildings it allows or makes obsolete (`buildings`, a count: the client draws no icon for
+      them), the units it allows (`units`, names; a civ counts those it can build) and the terraforms it allows
+      (`terraforms`, their button's cell on the `buttons` sheet); `icon` is its screen sheet;
+    - `unit_info`: per unit with art its attack, defence, moves and bombard (the production list's "Warrior 1.1.1"),
+      its icon on the `units_32` sheet (`icon`, and `icon_era` by era where it changes) and, when not every civ can
+      build it, the civs that can (`civs`);
+    - `building_icons`: per building its row on the `buildings_small` and `buildings_large` sheets."""
+    path = c7 / "Lua" / "civ3" / "ruleset.json"
+    if not path.is_file():
+        raise FileNotFoundError(f"no ruleset at {path}: the client's Lua/civ3/ruleset.json is missing")
+    r = json.loads(path.read_text(encoding="utf-8"))
+    all_civs = {c["name"] for c in r.get("civilizations", []) if not c.get("isBarbarian")}
+    protos = [u for u in r.get("unitPrototypes", []) if u["name"] in UNIT_ART]
+    buildings = r.get("buildings", [])
+    techs = []
+    for t in r.get("techs", []):
+        tid = t["id"]
+        tf = [TERRAFORM_BUTTON[k] for x in r.get("terraForms", []) if x.get("requiredTech") == tid
+              for k in [x.get("buttonTexture", "").rsplit(".", 1)[-1]] if k in TERRAFORM_BUTTON]
+        techs.append({
+            "id": tid, "name": t["name"], "era": ERAS.index(t["eraCivilopediaName"]) if t.get("eraCivilopediaName") in ERAS else 0,
+            "x": t.get("x", 0), "y": t.get("y", 0), "required": bool(t.get("requiredForEraAdvancement", True)),
+            "prereqs": t.get("prerequisites", []),
+            "buildings": sum((b.get("requiredTech") == tid) + (b.get("renderedObsoleteBy") == tid) for b in buildings),
+            "units": [u["name"] for u in protos if u.get("requiredTech") == tid], "terraforms": tf,
+            "icon": f"tech_{tid}" if tid in TECH_ICONS else "tech_placeholder"})
+    units = {}
+    for u in protos:
+        thumb = (u.get("art") or {}).get("thumbnailArt") or {}
+        info = {"a": u.get("attack", 0), "d": u.get("defense", 0), "m": u.get("movement", 1), "b": u.get("bombard", 0),
+                "icon": thumb.get("defaultIndex", 0)}
+        era = {str(ERAS.index(k)): v for k, v in (thumb.get("variations") or {}).items() if k in ERAS}
+        if era:
+            info["icon_era"] = era
+        civs = set(u.get("producibleBy") or [])
+        if civs and all_civs - civs:
+            info["civs"] = sorted(civs)
+        units[u["name"]] = info
+    icons = {b["name"]: b["iconRowIndex"] for b in buildings if b.get("iconRowIndex") is not None}
+    return {"techs": techs, "unit_info": units, "building_icons": icons}
+
+
+# The science advisor's tech boxes (Lua/civ3/textures/tech_boxes.lua): a box's crop size by its key, and the x offset
+# of each state's boxes on techboxes.png.
+TECHBOX_SIZES = {"small": (106, 82), "medium": (163, 82), "long": (188, 82), "large": (163, 106)}
+TECHBOX_STATES = {"known": 0, "in_progress": 189, "possible": 378, "blocked": 567}
+
+
+def _techboxes_fit(src: Path, dst: Path) -> None:
+    """Every tech box the science advisor draws, in each state, as one sheet: a slot of 190x108 per box, a column
+    per size (TECHBOX_SIZES' order) and a row per state (TECHBOX_STATES' order), the box at the slot's top-left.
+
+    This art draws only the ancient era's small boxes: the larger ones and the other eras' are empty, so the client
+    shows those techs on bare parchment. Each box here is the ancient small box of its state stretched to the size,
+    its frame kept: of the 98x64 frame at (2, 8) of the crop, columns 0..48 (the border and the colour column) and
+    92..98 and rows 0..24 (the border and the colour band) and 58..64 stay as they are; columns 48..92 and rows 24..58
+    stretch."""
+    from PIL import Image
+
+    with Image.open(src) as im:
+        sheet = im.convert("RGBA")
+    out = Image.new("RGBA", (190 * len(TECHBOX_SIZES), 108 * len(TECHBOX_STATES)), (0, 0, 0, 0))
+    for row, sx in enumerate(TECHBOX_STATES.values()):
+        frame = sheet.crop((1 + sx + 2, 1 + 8, 1 + sx + 100, 1 + 72))
+        for col, (w, h) in enumerate(TECHBOX_SIZES.values()):
+            fw, fh = w - 8, h - 18
+            for x0, x1, dx0, dx1 in ((0, 48, 0, 48), (48, 92, 48, fw - 6), (92, 98, fw - 6, fw)):
+                for y0, y1, dy0, dy1 in ((0, 24, 0, 24), (24, 58, 24, fh - 6), (58, 64, fh - 6, fh)):
+                    if dx1 > dx0 and dy1 > dy0:
+                        part = frame.crop((x0, y0, x1, y1)).resize((dx1 - dx0, dy1 - dy0))
+                        out.alpha_composite(part, (col * 190 + 2 + dx0, row * 108 + 8 + dy0))
+    civ3flc.save_small(out, dst)
 
 
 def _small_png(src: Path, dst: Path) -> None:
@@ -133,7 +254,8 @@ def main(argv: list[str] | None = None) -> int:
     a = p.parse_args(argv)
     m = convert(a.c7, a.out)
     size = sum(f.stat().st_size for f in a.out.rglob("*") if f.is_file())
-    print(f"{a.out}: {len(m['sheets'])} sheets, {len(m['units'])} units, {size / 1e6:.1f} MB (art {m['id']})")
+    print(f"{a.out}: {len(m['sheets'])} sheets, {len(m['screens'])} screen sheets, {len(m['units'])} units, "
+          f"{len(m['techs'])} techs, {size / 1e6:.1f} MB (art {m['id']})")
     return 0
 
 

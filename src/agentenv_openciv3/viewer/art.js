@@ -30,7 +30,8 @@ class Art {
   async _fonts() {
     for (const f of this.m.fonts || []) {
       try {
-        const face = new FontFace("C7 Noto Sans", `url(${this.url("fonts/" + f)})`, {weight: f.includes("Bold") ? "700" : "400"});
+        const face = new FontFace("C7 Noto Sans", `url(${this.url("fonts/" + f)})`,
+          {weight: f.includes("Bold") ? "700" : "400", style: f.includes("Italic") ? "italic" : "normal"});
         document.fonts.add(await face.load());
         this.font = "'C7 Noto Sans', system-ui, sans-serif";
       } catch (e) { /* the system font will do */ }
@@ -151,7 +152,8 @@ class ArtPainter {
   draw(ctx, world, cam, w, h, o = {}) {
     const z = cam.hw / 64, dpr = window.devicePixelRatio || 1, scale = z < 0.5 ? 0.5 : 1;
     this.zs = z;
-    const key = [world.version, cam.cx.toFixed(4), cam.cy.toFixed(4), cam.hw.toFixed(3), w, h, dpr, o.cityRadius?.id ?? ""].join();
+    const key = [world.version, cam.cx.toFixed(4), cam.cy.toFixed(4), cam.hw.toFixed(3), w, h, dpr, o.cityRadius?.id ?? "",
+      o.cityScreen ? `${o.cityScreen.id}:${JSON.stringify(o.cityScreen.worked || [])}` : ""].join();
     if (key !== this.cacheKey || !this.cache) {
       if (!this.cache) this.cache = document.createElement("canvas");
       // map pixels per screen pixel: 1/z; the offscreen map covers the screen plus a margin for the fractional origin
@@ -263,6 +265,8 @@ class ArtPainter {
     // cities: the sprite by size and era, the label below
     const labels = [];
     for (const p of known) { const c = world.city(p.x, p.y); if (c) labels.push(this._city(g, world, c, p, z)); }
+    // the city screen's tile assignment, while it is open (screens.js)
+    if (o.cityScreen) this._cityScreen(g, world, o.cityScreen);
     // fog of war, at each tile's north corner, over every position in view (unknown land goes black)
     const st = t => !t ? 0 : t.visible ? 2 : 1;
     for (const p of all) {
@@ -411,6 +415,38 @@ class ArtPainter {
       for (const [ex, ey, a, b] of edges) if (!inR(dx + ex, dy + ey)) { g.moveTo(...a); g.lineTo(...b); }
     }
     g.stroke();
+  }
+
+  // The city screen's tile assignment (TileAssignmentLayer.cs), over the cities and under the fog: a white 2 px
+  // outline round the tiles the city can work (city `workable`) and its centre, and on the centre and every worked
+  // tile (city `worked`: x, y, food, shields, commerce) its yield as the city screen's icons, food then shields then
+  // commerce, side by side, centred on the tile, their top 15 px above its centre. Without `workable` (an older
+  // bridge) the outline is the city's radius.
+  _cityScreen(g, world, c) {
+    const {ox, oy, MW} = this.origin, W = world.W;
+    let vx = c.x;   // the copy of the city nearest the camera's centre, round the wrap
+    if (world.wrap) { const mid = (MW / 2 - ox) / 64; vx += Math.round((mid - vx) / W) * W; }
+    const near = x => world.wrap ? vx + ((((x - c.x) % W) + W + W / 2) % W - W / 2) : x;
+    if (!c.workable) this._cityRadius(g, world, c);
+    else {
+      const set = new Set([[c.x, c.y], ...c.workable].map(([x, y]) => world.key(x, y)));
+      g.strokeStyle = "#fff"; g.lineWidth = 2; g.beginPath();
+      for (const [x, y] of [[c.x, c.y], ...c.workable]) {
+        const sx = ox + 64 * near(x), sy = oy + 32 * y;
+        for (const [dx, dy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]])
+          if (!set.has(world.key(x + dx, y + dy))) { g.moveTo(sx + 64 * dx, sy); g.lineTo(sx, sy + 32 * dy); }
+      }
+      g.stroke();
+    }
+    const im = this.art.img("yield_icons");
+    if (!im) return;
+    const ICONS = [[195, 1, 21, 30], [133, 1, 16, 30], [67, 1, 21, 30]];   // food, shield, commerce
+    for (const [x, y, ...yields] of c.worked || []) {
+      const strip = yields.flatMap((n, i) => Array(Math.max(0, n | 0)).fill(ICONS[i]));
+      let px = ox + 64 * near(x) - strip.reduce((s, r) => s + r[2], 0) / 2;
+      const py = oy + 32 * y - 15;
+      for (const [sx, sy, sw, sh] of strip) { g.drawImage(im, sx, sy, sw, sh, Math.round(px), py, sw, sh); px += sw; }
+    }
   }
 
   // ---- units: drawn every frame over the cached picture (they move and the cursor turns) ----

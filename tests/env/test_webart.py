@@ -80,9 +80,10 @@ def test_a_unit_becomes_a_sheet_a_civ_colour_mask_and_its_manifest(tmp_path):
     assert (entry["w"], entry["h"]) == (3, 3)
     assert entry["anchor"] == [120 - (OFFSET[0] + 1), 120 - (OFFSET[1] + 1)]
     assert entry["directions"] == ["SW", "S", "SE", "E", "NE", "N", "NW", "W"]
-    # idle: the last DEFAULT frame; no FORTIFY in the INI: its DEFAULT; RUN: every frame
-    assert entry["actions"] == {"default": {"row": 0, "frames": 1, "ms": 100}, "run": {"row": 8, "frames": 2, "ms": 40},
-                                "fortify": {"row": 0, "frames": 1, "ms": 100}}
+    # idle: the last DEFAULT frame; no FORTIFY or ATTACK1 in the INI: DEFAULT's; RUN: every frame; no DEATH: none
+    default = {"row": 0, "frames": 1, "ms": 100}
+    assert entry["actions"] == {"default": default, "run": {"row": 8, "frames": 2, "ms": 40}, "fortify": default,
+                                "attack1": default}
     sheet = Image.open(tmp_path / "out" / "test_unit.png").convert("RGBA")
     mask = Image.open(tmp_path / "out" / "test_unit.mask.png").convert("RGBA")
     assert sheet.size == mask.size == (2 * 3, 16 * 3)
@@ -108,13 +109,34 @@ def test_an_ini_named_otherwise_is_still_found(tmp_path):
     assert civ3flc.convert_unit(folder, tmp_path / "out", "c")["actions"]["default"]["frames"] == 1
 
 
+# A ruleset as the client's Lua/civ3/ruleset.json has it, cut down: two techs, a unit two civs can build, a unit the
+# standalone mode drops (no art), buildings and a terraform.
+RULESET = {
+    "civilizations": [{"name": "Rome"}, {"name": "Greece"}, {"name": "Egypt"}, {"name": "Barbarians", "isBarbarian": True}],
+    "techs": [
+        {"id": "tech-2", "name": "Masonry", "eraCivilopediaName": "ERAS_Ancient_Times", "requiredForEraAdvancement": True,
+         "x": 85, "y": 182},
+        {"id": "tech-30", "name": "Education", "eraCivilopediaName": "ERAS_Middle_Ages", "requiredForEraAdvancement": False,
+         "x": 331, "y": 374, "prerequisites": ["tech-2"]}],
+    "unitPrototypes": [
+        {"name": "Warrior", "attack": 1, "defense": 1, "movement": 1, "bombard": 0, "requiredTech": "tech-2",
+         "producibleBy": ["Rome", "Greece"], "art": {"thumbnailArt": {"defaultIndex": 4, "variations": {"ERAS_Modern_Era": 70}}}},
+        {"name": "Tank", "attack": 16, "defense": 8, "movement": 2, "requiredTech": "tech-2", "producibleBy": ["Rome"]}],
+    "buildings": [{"name": "Walls", "requiredTech": "tech-2", "iconRowIndex": 7},
+                  {"name": "Pyramids", "renderedObsoleteBy": "tech-30", "iconRowIndex": 12}],
+    "terraForms": [{"name": "Outpost", "requiredTech": "tech-2", "buttonTexture": "ui.unit_control.unit_build_outpost"}],
+}
+
+
 def client_tree(root: Path) -> Path:
-    """A C7 directory with every sheet webart takes (a small PNG each), one unit, the fonts."""
+    """A C7 directory with every sheet webart takes (a small PNG each), one unit, the fonts, the ruleset."""
     c7 = root / "C7"
     art = c7 / "Assets" / "Art"
-    for rel in webart.SHEETS.values():
+    for rel in [*webart.SHEETS.values(), *webart.SCREENS.values()]:
         (art / rel).parent.mkdir(parents=True, exist_ok=True)
         Image.new("RGBA", (4, 4), (10, 20, 30, 255)).save(art / rel)
+    (c7 / "Lua" / "civ3").mkdir(parents=True)
+    (c7 / "Lua" / "civ3" / "ruleset.json").write_text(json.dumps(RULESET))
     unit_folder(art / "Units", "Tribal Mediterranean Warrior")
     (c7 / "Fonts").mkdir(parents=True)
     for f in webart.FONTS:
@@ -134,10 +156,35 @@ def test_convert_writes_the_manifest_and_what_it_names(tmp_path, monkeypatch):
     unit = manifest["units"]["Warrior"]
     assert unit["sheet"] == "units/tribal_mediterranean_warrior.png" and (out / unit["sheet"]).is_file()
     assert (out / unit["mask"]).is_file()
-    assert manifest["fonts"] == ["NotoSans-Bold.ttf", "NotoSans-Regular.ttf"]
+    assert manifest["fonts"] == ["NotoSans-Bold.ttf", "NotoSans-Italic.ttf", "NotoSans-Regular.ttf"]
+    # the screens' art, apart from the map's, with the stretched tech boxes: a 190x108 slot per size and state
+    assert set(manifest["screens"]) == {*webart.SCREENS, "techboxes_fit"}
+    assert all((out / p).is_file() for p in manifest["screens"].values())
+    assert Image.open(out / manifest["screens"]["techboxes_fit"]).size == (4 * 190, 4 * 108)
     assert (out / "fonts" / "LICENSE-NotoSans.txt").is_file()
     # the same art gives the same id; the browser caches the sheets by it
     assert webart.convert(client_tree(tmp_path / "again"), tmp_path / "again-out")["id"] == manifest["id"]
+
+
+def test_convert_takes_the_tech_tree_units_and_buildings_from_the_ruleset(tmp_path, monkeypatch):
+    monkeypatch.setattr(webart, "UNIT_ART", {"Warrior": "Tribal Mediterranean Warrior"})
+    m = webart.convert(client_tree(tmp_path), tmp_path / "webart")
+    assert m["techs"] == [
+        {"id": "tech-2", "name": "Masonry", "era": 0, "x": 85, "y": 182, "required": True, "prereqs": [],
+         "buildings": 1, "units": ["Warrior"], "terraforms": [[3, 4]], "icon": "tech_tech-2"},
+        {"id": "tech-30", "name": "Education", "era": 1, "x": 331, "y": 374, "required": False, "prereqs": ["tech-2"],
+         "buildings": 1, "units": [], "terraforms": [], "icon": "tech_placeholder"}]
+    # only the units with art (the standalone mode's); the civs listed when not every civ can build it
+    assert m["unit_info"] == {"Warrior": {"a": 1, "d": 1, "m": 1, "b": 0, "icon": 4, "icon_era": {"3": 70},
+                                          "civs": ["Greece", "Rome"]}}
+    assert m["building_icons"] == {"Walls": 7, "Pyramids": 12}
+
+
+def test_convert_fails_without_the_ruleset(tmp_path):
+    c7 = client_tree(tmp_path)
+    (c7 / "Lua" / "civ3" / "ruleset.json").unlink()
+    with pytest.raises(FileNotFoundError, match="no ruleset"):
+        webart.convert(c7, tmp_path / "out")
 
 
 def test_convert_fails_without_the_art(tmp_path):
