@@ -298,6 +298,13 @@ class Renderer:
             self.ranks.append({p["index"]: r + 1 for r, p in enumerate(order)})
         self.lead_changes = [(t["turn"], e["owner"]) for t in self.turns for e in t["events"]
                              if e.get("kind") == "lead_change"]
+        # The score leader of each turn, or None while the top score is tied.
+        self.top: list[int | None] = []
+        for s in self.score:
+            best = max((v[0] for v in s.values()), default=0)
+            at = [i for i, v in s.items() if v[0] == best]
+            self.top.append(at[0] if len(at) == 1 else None)
+        self.turn_index = {t["turn"]: k for k, t in enumerate(self.turns)}
         latest: dict[int, tuple[int, dict]] = {}
         self.latest: list[dict[int, tuple[int, dict]]] = []
         for t in self.turns:
@@ -815,10 +822,17 @@ class Renderer:
                    anchor="lm")
             y += line_h
 
+    def durable(self, turn: int, owner: int, ti: int) -> bool:
+        """Whether a lead change counts at turn index `ti`: the new leader has held the lead every turn since, for up to
+        5 turns. In a close race the lead flips straight back again and again. Nothing after `ti` is used."""
+        k0 = self.turn_index.get(turn)
+        return k0 is None or all(self.top[k] == owner for k in range(k0, min(k0 + 4, ti) + 1))
+
     def moments(self, ti: int, n: int) -> list[tuple[int, dict]]:
         now = self.turns[ti]["turn"]
         pool = [(t["turn"], e) for t in self.turns[: ti + 1] if t["turn"] > now - MOMENT_WINDOW
-                for e in t["events"] if e.get("kind") in PRIORITY]
+                for e in t["events"] if e.get("kind") in PRIORITY
+                and (e["kind"] != "lead_change" or self.durable(t["turn"], e["owner"], ti))]
         pool.sort(key=lambda pe: (-(pe[0] - HANDICAP[pe[1]["kind"]]), PRIORITY[pe[1]["kind"]]))
         return sorted(pool[:n], key=lambda pe: (-pe[0], PRIORITY[pe[1]["kind"]]))
 
@@ -840,18 +854,21 @@ class Renderer:
         d = ImageDraw.Draw(img)
         d.rounded_rectangle([0, 0, bw * S - 1, bh * S - 1], radius=6 * S, fill=PANEL)
 
+        # Both scales follow the turns played so far: early on, the game isn't a sliver at the left edge.
+        span = max(now, min(self.limit, 10))
+
         def X(turn: float) -> float:
-            return left + (right - left) * turn / self.limit
+            return left + (right - left) * turn / span
 
         def Y(v: float) -> float:
             return bottom - (bottom - top) * v / ytop
 
         for v in range(0, int(ytop) + 1, step):
             d.line([(left * S, Y(v) * S), (right * S, Y(v) * S)], fill=GRID if v else (58, 63, 72), width=S)
-        xstep = next(s for s in (5, 10, 25, 50, 100, 250, 500, 1000, 10 ** 9) if self.limit / s <= 8)
-        ticks = list(range(0, self.limit + 1, xstep))
-        if ticks[-1] != self.limit and X(self.limit) - X(ticks[-1]) > 36:
-            ticks.append(self.limit)
+        xstep = next(s for s in (5, 10, 25, 50, 100, 250, 500, 1000, 10 ** 9) if span / s <= 8)
+        ticks = list(range(0, span + 1, xstep))
+        if ticks[-1] != span and X(span) - X(ticks[-1]) > 36:
+            ticks.append(span)
         for t in ticks:
             d.line([(X(t) * S, bottom * S), (X(t) * S, (bottom + 4) * S)], fill=(58, 63, 72), width=S)
         d.line([(X(now) * S, (top - 10) * S), (X(now) * S, bottom * S)], fill=(84, 90, 100), width=S)
@@ -877,7 +894,7 @@ class Renderer:
                 d.ellipse([ex - r, ey - r, ex + r, ey + r], fill=self.color[i], outline=PANEL, width=S)
                 ends.append((ey / S, ex / S, self.name[i], str(vals[-1]), self.color[i], i == leader))
         for t, o in self.lead_changes:
-            if t <= now:
+            if t <= now and self.durable(t, o, ti):
                 cx, cy, r = X(t) * S, bottom * S, 5 * S
                 d.polygon([(cx, cy - r), (cx + r, cy), (cx, cy + r), (cx - r, cy)], fill=self.color.get(o, MUTED),
                           outline=PANEL, width=S)

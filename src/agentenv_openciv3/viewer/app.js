@@ -127,12 +127,22 @@ class Match {
     this.turns.push(t);
     for (const p of this.civs) this.series[p.index][ti] = t.scores[p.index] || this.series[p.index][ti - 1] || [0, 0, 0, 0, 0, 0];
     for (const e of t.events) this.events.push({...e, turn: t.turn, ti, x: e.x == null ? null : this.sx(e.x)});
-    this.leaders[ti] = this.civs.reduce((a, b) => (this.series[b.index][ti][0] > this.series[a.index][ti][0] ? b : a), this.civs[0])?.index;
+    // the score leader, or null while the top score is tied (every civ starts on the same score)
+    const top = Math.max(...this.civs.map(p => this.series[p.index][ti][0]));
+    const at = this.civs.filter(p => this.series[p.index][ti][0] === top);
+    this.leaders[ti] = at.length === 1 ? at[0].index : null;
     const units = new Map();
     for (const u of t.units) if (u[0] !== -1) units.set(u[0], u);
     this.unitIndex[ti] = units;
   }
   get last() { return this.turns.length - 1; }
+  // A lead change counts once the new leader has held the lead every turn since, for up to 5 turns: in a close race
+  // the lead flips straight back again and again. Uses nothing after turn index `upto`, so it works live too.
+  durable(e, upto) {
+    if (e.kind !== "lead_change") return true;
+    for (let k = e.ti; k <= Math.min(e.ti + 4, upto); k++) if (this.leaders[k] !== e.owner) return false;
+    return true;
+  }
   get limit() { return this.meta.turn_limit || this.turns.at(-1)?.turn || 1; }
   sx(x) { return (x - this.seam + this.W) % this.W; }
   name(i) { const p = this.byIndex[i]; return p ? (p.label || p.civ) : "?"; }
@@ -778,6 +788,9 @@ function mapTip(e) {
     const counts = {}; for (const n of l) counts[n] = (counts[n] || 0) + 1;
     h += `<div class="row">${sw(M.byIndex[o])}<span>${Object.entries(counts).map(([n, k]) => k > 1 ? `${k} ${esc(n)}` : esc(n)).join(", ")}</span></div>`;
   }
+  const now = M.turns[S.ti].turn;
+  for (const ev of M.events.filter(ev => ev.x === t.x && ev.y === t.y && ev.ti <= S.ti && now - ev.turn <= 4).slice(-4))
+    h += `<div class="row" style="color:#f6b3a4">${sw(M.byIndex[ev.owner])}<span>T${ev.turn} · ${esc(ev.text)}</span></div>`;
   const known = M.known(S.ti)[i];
   if (M.seats.length > 1 && S.pov == null) {
     const who = M.seats.filter(p => known & (1 << p.seat));
@@ -834,16 +847,17 @@ function renderStandings() {
     <th>pop</th><th>techs</th>${live ? "<th></th>" : ""}</tr>` + order.map(p => {
     const s = M.series[p.index][ti], d = before[p.index] - ranks[p.index];
     const delta = d > 0 ? `<span class="up">▲${d}</span>` : d < 0 ? `<span class="down">▼${-d}</span>` : `<span class="muted">–</span>`;
-    return `<tr class="row ${S.focus === p.index ? "focus" : ""} ${s[5] ? "out" : ""}" data-i="${p.index}">
+    return `<tr class="row ${S.focus === p.index ? "focus" : ""} ${s[5] ? "out" : ""}" data-i="${p.index}" tabindex="0">
       <td class="rk">${ranks[p.index]}</td><td class="d">${delta}</td>
       <td><div class="who">${sw(p)}<b>${lab(p)}</b>${p.label ? `<span class="civ">${esc(p.civ)}</span>` : ""}${warMark(ti, p)}</div>
         <div class="bar" style="width:${(s[0] / top * 100).toFixed(1)}%;background:${p.color}"></div></td>
       <td class="s">${s[0]}</td><td class="n">${s[1]}</td><td class="n">${s[2]}</td><td class="n">${s[4]}</td>
       ${live ? `<td class="state">${liveMark(p)}</td>` : ""}</tr>`;
   }).join("");
-  for (const tr of $$("#standings tr.row")) tr.onclick = () => {
-    const i = +tr.dataset.i; setFocus(S.focus === i ? null : i, {fly: S.focus !== i});
-  };
+  for (const tr of $$("#standings tr.row")) {
+    tr.onclick = () => { const i = +tr.dataset.i; setFocus(S.focus === i ? null : i, {fly: S.focus !== i}); };
+    tr.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); tr.onclick(); } };
+  }
 }
 function renderAgentCard() {
   const el = $("#agentcard"), p = M.byIndex[S.focus];
@@ -938,6 +952,7 @@ function renderFeed() {
     const e = M.events[k];
     if (e.turn > turn || !S.kinds.has(e.kind)) continue;
     if (S.focus != null && e.owner !== S.focus && e.from !== S.focus) continue;
+    if (!M.durable(e, S.ti)) continue;
     if (e.kind === "unit_lost") {   // a lost battle is one line: "grok lost 10 units (8 Archer, 2 Worker)"
       const key = `${e.ti}:${e.owner}`, type = (/u\d+\s+(.+?)\s+was lost/.exec(e.text) || [])[1] || "unit";
       const g = groups.get(key);
@@ -954,9 +969,10 @@ function renderFeed() {
       .map(([t, n]) => n > 1 ? `${n} ${t}` : t).join(", ")})`;
   }
   $("#feedscope").textContent = (S.focus == null ? "everyone" : M.name(S.focus)) + " · up to T" + turn;
-  $("#feed").innerHTML = items.map((e, k) => `<li class="${e.turn === turn ? "now" : ""} ${kindHot(e.kind) ? "hot" : ""}" data-k="${k}">
+  $("#feed").innerHTML = items.map((e, k) => `<li class="${e.turn === turn ? "now" : ""} ${kindHot(e.kind) ? "hot" : ""}" data-k="${k}" tabindex="0">
     <span class="t">T${e.turn}</span><span>${sw(M.byIndex[e.owner])}<span class="txt">${esc(e.text)}</span><span class="tag">${kindLabel(e.kind)}</span></span></li>`).join("")
     || `<li><span></span><span class="muted">Nothing of these kinds yet.</span></li>`;
+  for (const li of $$("#feed li[data-k]")) li.onkeydown = ev => { if (ev.key === "Enter") li.onclick(); };
   for (const li of $$("#feed li[data-k]")) li.onclick = () => {
     const e = items[+li.dataset.k];
     stop(); setTurn(e.ti, {user: true});
@@ -1116,10 +1132,14 @@ function renderSummary() {
   for (let k = 1; k <= ti; k++) for (const [i, c] of Object.entries(M.turns[k].calls || {})) if (totals[i]) {
     totals[i].ok += c.ok; totals[i].failed += c.failed; totals[i].actions += ((M.turns[k].actions || {})[i] || []).length; }
   const anyCalls = Object.values(totals).some(t => t.ok + t.failed);
-  const lc = M.events.filter(e => e.ti <= ti && e.kind === "lead_change").length;
+  const lc = M.events.filter(e => e.ti <= ti && e.kind === "lead_change" && M.durable(e, ti)).length;
+  const margin = fin(win.index)[0] - fin(second.index)[0];
+  const tied = order.filter(p => fin(p.index)[0] === fin(win.index)[0]);
   const headline = v ? `${sw(M.players.find(p => p.civ === v.civ))}${esc(v.label || v.civ)} wins by ${esc(v.kind)} on turn ${v.turn}`
-    : over ? `${sw(win)}${lab(win)} wins on score, by ${fin(win.index)[0] - fin(second.index)[0]} points`
-    : `${sw(win)}${lab(win)} leads at turn ${T}, by ${fin(win.index)[0] - fin(second.index)[0]} points`;
+    : margin === 0 ? (tied.length === civs.length ? `Every agent ${over ? "ties" : "is tied"}` : `${tied.map(p => sw(p) + lab(p)).join(", ")} ${over ? "tie" : "are tied"}`) +
+      ` on ${fin(win.index)[0]} points${over ? "" : ` at turn ${T}`}`
+    : over ? `${sw(win)}${lab(win)} wins on score, by ${margin} point${margin === 1 ? "" : "s"}`
+    : `${sw(win)}${lab(win)} leads at turn ${T}, by ${margin} point${margin === 1 ? "" : "s"}`;
   const most = k => order.reduce((a, b) => fin(b.index)[k] > fin(a.index)[k] ? b : a);
   const fastest = order.filter(p => reach(p, 10) != null).sort((a, b) => reach(a, 10) - reach(b, 10))[0];
   const longest = order.reduce((a, b) => led[b.index] > led[a.index] ? b : a);
@@ -1149,7 +1169,7 @@ function renderSummary() {
     <div class="card"><h2>Key moments</h2><p class="note">Wars and peace, cities taken or razed, eliminations and lead changes. Click to jump there.</p><ul class="moments" id="sm-moments"></ul></div>
   </div>`;
   summaryRibbon(ti); summaryBump(ti); summaryMultiples(ti, order); summaryRace(ti, reach);
-  const key = M.events.filter(e => e.ti <= ti && kindRank(e.kind) <= 2);
+  const key = M.events.filter(e => e.ti <= ti && kindRank(e.kind) <= 2 && M.durable(e, ti));
   $("#sm-moments").innerHTML = key.map((e, k) => `<li data-k="${k}"><span class="t">T${e.turn}</span><span>${sw(M.byIndex[e.owner])} ${esc(e.text)}</span></li>`).join("")
     || `<li><span></span><span class="muted">None yet.</span></li>`;
   for (const li of $$("#sm-moments li[data-k]")) li.onclick = () => { const e = key[+li.dataset.k]; setView("map"); setTurn(e.ti, {user: true}); };
@@ -1161,9 +1181,10 @@ function summaryRibbon(ti) {
   for (let i = 1; i <= ti + 1; i++) {
     if (i <= ti && M.leaders[i] === M.leaders[start]) continue;
     const p = M.byIndex[M.leaders[start]], a = X(M.turns[start].turn), b = X(i <= ti ? M.turns[i].turn : M.turns[ti].turn + 1);
-    h += `<g data-tip="${esc(`${sw(p)}<b>${lab(p)}</b> leads<div class='k'>T${M.turns[start].turn}–T${M.turns[i - 1].turn}, ${i - start} turns</div>`)}">
-      <rect x="${a + 1}" y="4" width="${Math.max(1, b - a - 2)}" height="26" rx="4" fill="${p.color}"/>
-      ${b - a > 56 ? `<text x="${(a + b) / 2}" y="21.5" fill="#0f1115" font-size="12" font-weight="650" text-anchor="middle">${lab(p)}</text>` : ""}</g>`;
+    const span = `<div class='k'>T${M.turns[start].turn}–T${M.turns[i - 1].turn}, ${i - start} turns</div>`;
+    h += `<g data-tip="${esc(p ? `${sw(p)}<b>${lab(p)}</b> leads${span}` : `<b>Tied at the top</b>${span}`)}">
+      <rect x="${a + 1}" y="4" width="${Math.max(1, b - a - 2)}" height="26" rx="4" fill="${p ? p.color : "#3a3f48"}"/>
+      ${b - a > 56 ? `<text x="${(a + b) / 2}" y="21.5" fill="${p ? "#0f1115" : "#b6bac3"}" font-size="12" font-weight="650" text-anchor="middle">${p ? lab(p) : "tied"}</text>` : ""}</g>`;
     start = i;
   }
   for (const t of [0, .25, .5, .75, 1].map(f => Math.round(M.limit * f)))
@@ -1226,7 +1247,7 @@ function summaryRace(ti, reach) {
   const first = Math.max(0, Math.floor((Math.min(...M.civs.map(p => reach(p, 5) ?? M.limit)) - 10) / 10) * 10);
   const X = t => L + (W - L - R) * (t - first) / Math.max(1, M.limit - first), rh = (H - T - B) / Math.max(1, rows.length);
   let h = `<text x="${L}" y="11" font-size="11" fill="#80868f">the turn of the 5th, 10th, 15th and 20th city</text>`;
-  for (const t of [first, ...[50, 100, 150, 200, 250, 300].filter(t => t > first + 8 && t <= M.limit)])
+  for (const t of [first, ...[50, 100, 150, 200, 250, 300].filter(t => t <= M.limit && X(t) - X(first) >= 40)])
     h += `<line x1="${X(t)}" x2="${X(t)}" y1="${T - 4}" y2="${H - B}" stroke="#22262d"/><text x="${X(t)}" y="${H - 7}" fill="#80868f" font-size="11" text-anchor="middle">T${t}</text>`;
   rows.forEach((p, r) => {
     const y = T + rh * (r + 0.5), ts = marks.map(n => reach(p, n)), known = ts.filter(t => t != null);
@@ -1255,7 +1276,7 @@ function renderScrub() {
     start = i;
   }
   for (const e of M.events) {
-    if (!(KIND[e.kind] || [])[3]) continue;
+    if (!(KIND[e.kind] || [])[3] || !M.durable(e, M.last)) continue;
     const c = e.kind === "lead_change" ? "#e9c46a" : kindHot(e.kind) ? "#f0745a" : "#9fb4d8";
     h += `<path d="M${X(e.turn)},${y - 15} l4,5 l-4,5 l-4,-5z" fill="${c}"><title>T${e.turn} · ${esc(e.text)}</title></path>`;
   }
@@ -1278,8 +1299,9 @@ function scrubEvents() {
     const r = el.getBoundingClientRect(), t = Math.round(clamp((e.clientX - r.left - 6) / (r.width - 12), 0, 1) * M.limit);
     if (t > M.turns[M.last].turn) return showTip(e, `<b>T${t}</b> <span class="k">not played yet</span>`);
     const i = M.turnIndex(t), lead = M.byIndex[M.leaders[i]];
-    const hot = M.events.filter(ev => ev.ti === i && (KIND[ev.kind] || [])[3]);
-    showTip(e, `<b>T${M.turns[i].turn}</b>${lead ? ` <span class="k">·</span> ${sw(lead)}${lab(lead)} <span class="k">leads</span>` : ""}` +
+    const hot = M.events.filter(ev => ev.ti === i && (KIND[ev.kind] || [])[3] && M.durable(ev, M.last));
+    showTip(e, `<b>T${M.turns[i].turn}</b> <span class="k">·</span> ${lead ? `${sw(lead)}${lab(lead)} <span class="k">leads</span>`
+      : `<span class="k">tied at the top</span>`}` +
       hot.slice(0, 4).map(ev => `<div class="row">${sw(M.byIndex[ev.owner])}<span>${esc(ev.text)}</span></div>`).join("") +
       (hot.length > 4 ? `<div class="k">+${hot.length - 4} more</div>` : ""));
   };
