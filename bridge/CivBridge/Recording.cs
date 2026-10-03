@@ -6,8 +6,9 @@ using Serilog;
 
 namespace CivBridge;
 
-// The world snapshot (docs/recording.md): every tile, city and unit regardless of fog, the players with
-// their scores, and the seats' events of the turn that just ended. --record writes one per turn.
+// The world snapshot (docs/recording.md, schema 2 in docs/viewer.md): every tile, city and unit regardless of fog,
+// the players with their scores, and the seats' events of the turn that just ended. --record writes one per turn.
+// Like every observation it must not draw from GameData.rng or change game state.
 sealed partial class Session {
 	// Stand-ins for Civ III's 32 player colours (the originals are palettes in the game's art files).
 	static readonly int[][] Palette = [
@@ -19,22 +20,32 @@ sealed partial class Session {
 
 	JsonObject World() => WorldSnapshot();
 
+	const int SnapshotSchema = 2;
+
 	JsonObject WorldSnapshot() {
 		var index = gd.players.Select((p, i) => (p, i)).ToDictionary(x => x.p, x => x.i);
+		var indexById = gd.players.Select((p, i) => (p, i)).ToDictionary(x => x.p.id, x => x.i);
 		int[][] colors = PlayerColors();
+		// Bit k of a tile's `known` is seats[k]; seats are opponent slots, so at most 31 fit a positive int.
+		var known = seats.Select(s => s.Player.tileKnowledge.knownTiles).ToArray();
 		var tiles = new JsonArray();
 		foreach (Tile t in gd.map.tiles) {
 			Player owner = t.OwningPlayer();
+			int mask = 0;
+			for (int k = 0; k < known.Length; k++)
+				if (known[k].Contains(t)) mask |= 1 << k;
 			tiles.Add(new JsonArray(
 				t.XCoordinate, t.YCoordinate, t.baseTerrainType.Key,
 				t.overlayTerrainType != t.baseTerrainType ? t.overlayTerrainType.Key : null,
-				owner == null ? -1 : index[owner], t.BordersRiver() ? 1 : 0, seats.Any(s => s.Player.tileKnowledge.isTileKnown(t)) ? 1 : 0));
+				owner == null ? -1 : index[owner], t.BordersRiver() ? 1 : 0, mask));
 		}
 		return new JsonObject {
+			["schema"] = SnapshotSchema,
 			["turn"] = gd.turn,
 			["turn_limit"] = turnLimit,
 			["seed"] = seed,
 			["map"] = new JsonObject { ["width"] = gd.map.numTilesWide, ["height"] = gd.map.numTilesTall, ["wrap_x"] = gd.map.wrapHorizontally },
+			["seats"] = Json.Array(seats, s => new JsonObject { ["index"] = index[s.Player], ["civ"] = Owner(s.Player), ["label"] = s.Label }),
 			["players"] = Json.Array(gd.players, p => new JsonObject {
 				["index"] = index[p],
 				["civ"] = Owner(p),
@@ -43,13 +54,24 @@ sealed partial class Session {
 				["defeated"] = p.defeated,
 				["color"] = new JsonArray(colors[index[p]].Select(v => (JsonNode)v).ToArray()),
 				["score"] = ScoreOf(p),
+				["gold"] = p.gold,
+				["government"] = p.government?.name,
+				["research"] = gd.GetTech(p.currentlyResearchedTech)?.Name,
+				// Barbarians are at war with everyone (PlayerRelationship.AtWar), so they are left out on both sides.
+				["at_war"] = Ints(p.isBarbarians ? [] : gd.players.Where(o => o != p && !o.isBarbarians && PlayerRelationship.AtWar(p, o)).Select(o => index[o])),
+				["contacts"] = Ints(p.playerRelationships.Keys.Where(indexById.ContainsKey).Select(id => indexById[id])
+					.Where(i => i != index[p] && !gd.players[i].isBarbarians).Order()),
 			}),
 			["tiles"] = tiles,
+			// Ids are the engine's own (City.id, MapUnit.id) as strings, "city-3" and "Warrior-12": unique in the game, kept
+			// for an object's life, and carried through saves.
 			["cities"] = Json.Array(gd.cities, c => new JsonObject {
+				["id"] = c.id?.ToString(),
 				["x"] = c.location.XCoordinate, ["y"] = c.location.YCoordinate, ["name"] = c.name, ["owner"] = index[c.owner],
-				["size"] = c.residents.Count, ["capital"] = c.IsCapital(),
+				["size"] = c.residents.Count, ["capital"] = c.IsCapital(), ["production"] = c.itemBeingProduced?.name,
 			}),
 			["units"] = Json.Array(gd.mapUnits.Where(u => Tile.IsTileValid(u.location)), u => new JsonObject {
+				["id"] = u.id?.ToString(),
 				["x"] = u.location.XCoordinate, ["y"] = u.location.YCoordinate, ["owner"] = index[u.owner], ["type"] = u.unitType.name,
 			}),
 			["victory"] = VictoryJson(),
@@ -60,6 +82,8 @@ sealed partial class Session {
 			})).ToArray()),
 		};
 	}
+
+	static JsonArray Ints(IEnumerable<int> values) => new(values.Select(v => (JsonNode)v).ToArray());
 
 	/// <summary>
 	/// Each civ's primary colour; a civ whose primary another player already has gets its secondary, then
