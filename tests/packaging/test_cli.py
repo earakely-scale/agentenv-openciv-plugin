@@ -43,6 +43,24 @@ def test_recordings_lists_and_copies_out_one_runs_files(local_stores, tmp_path):
     assert CliRunner().invoke(openciv3, ["recordings", "zzz"]).exit_code == 1
 
 
+def test_recordings_copy_out_the_env_s_own_file_names(local_stores, tmp_path):
+    """The viewer's HTML links the client videos by the names the env gave them, so they keep those names."""
+    for run in ("aaa", "bbb"):
+        for name in ["openciv3-seed1-seats.html", "openciv3-seed1-seats.client-opus.mp4"]:
+            FileArtifact.put_bytes(f"match-recording-{run}.{name.partition('.')[2]}", description=name, filename=name,
+                                   content=f"{run} {name}".encode())
+    one = CliRunner().invoke(openciv3, ["recordings", "aaa", "--out", str(tmp_path / "one")])
+    assert one.exit_code == 0, one.output
+    assert sorted(p.name for p in (tmp_path / "one").iterdir()) == [
+        "openciv3-seed1-seats.client-opus.mp4", "openciv3-seed1-seats.html"]
+    assert (tmp_path / "one" / "openciv3-seed1-seats.html").read_bytes() == b"aaa openciv3-seed1-seats.html"
+    both = CliRunner().invoke(openciv3, ["recordings", "--out", str(tmp_path / "both")])
+    assert both.exit_code == 0, both.output
+    assert sorted(str(p.relative_to(tmp_path / "both")) for p in (tmp_path / "both").rglob("*.*")) == [
+        f"match-recording-{run}/{name}" for run in ("aaa", "bbb")
+        for name in ["openciv3-seed1-seats.client-opus.mp4", "openciv3-seed1-seats.html"]]
+
+
 def fake_docker(tmp_path, monkeypatch, cases: str) -> None:
     """A docker on PATH that runs the shell `case` arms in `cases` on its first two arguments."""
     bin_dir = tmp_path / "bin"

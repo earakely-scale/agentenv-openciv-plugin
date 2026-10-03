@@ -107,6 +107,61 @@ single turns with `skip_idle=true`, as many as the original advanced, so blocker
 conditions added since cannot change what happened. On any difference it writes nothing and exits 1.
 `--no-recording` only checks.
 
+## Scripted matches without an LLM (`bots.py`)
+
+`bots.py` plays a whole multi-seat match with scripted players, for testing the live viewer and the
+recordings on realistic games at no LLM cost. It starts the env locally (no Docker) on a copy of
+`build/bridge`, starts the match the way the `frontier` task does (the `urn:openciv3:new-game/v1`
+extension with civs, seats, labels, size and turn limit) and runs one MCP client per seat, each
+sending its `X-OpenCiv3-Seat` header and playing every turn with real tool calls, so the action log,
+per-seat turns and live routes all get exercised.
+
+```bash
+.venv/bin/python playtest/bots.py --out /tmp/match-9                       # 9 seats, Standard, Regent, 200 turns, seed 1
+.venv/bin/python playtest/bots.py --seats 3 --turns 30 --out /tmp/match-3 --fast   # a quick one
+```
+
+It prints the live view (`http://127.0.0.1:<port>/live`) at the start. The defaults match the
+`frontier` task: Rome=opus, Greece=sonnet, Egypt=haiku, America=sol, Babylon=luna, Persia=terra,
+England=gemini, Carthage=grok and China=kimi on a Standard map at Regent with roaming barbarians.
+Options:
+- `--seats N` keeps the first N of them; `--civs Rome=a,Greece=b` sets your own.
+- `--turns`, `--seed`, `--size`, `--difficulty`, `--barbarians` and `--ai-opponents` (engine-AI civs
+  besides the seats) set the game.
+- `--personalities label=kind,...` changes who plays how.
+- `--think MIN MAX` is the random delay before each call (default 0.05-0.3 s, so seats finish their
+  turns at different times); `--fast` sets it to 0.
+- `--error-rate` is the share of calls preceded by a deliberately wrong one (default 0.015; with the
+  game's own refusals about 2% of calls fail).
+- `--linger S` keeps the env up after the game, for the viewer.
+- `--recording html` also renders the env's recording.
+
+**Personalities:**
+- **expansionist** (haiku, sol, kimi): settlers from every city, many cities.
+- **builder** (sonnet, luna, gemini): a few cities, buildings, a wonder, Republic. Accepts every peace
+  offer.
+- **aggressive** (opus, terra, grok): 6-7 cities and barracks, then an army. A third of the way in it
+  declares war on its nearest neighbour, whose cities it found with `view_map`. It marches to them
+  and attacks them, then offers peace after 30-50 turns, and may pick a new target later.
+
+Every seat researches, chooses its government, fortifies a garrison, explores, puts workers on
+`auto_work`, sometimes buys, fixes disorder with `set_rates` and writes a `plan`. A failing call never
+stops a seat, and a turn always ends. The engine razes the cities it takes, so conquests show up as
+cities razed, not captured.
+
+**Output directory:**
+- `record/`: the bridge's `turn-*.json.gz` snapshots.
+- `saves/`: the engine's per-turn saves. The env passes `--saves` only when the client is installed, so
+  `bots.py` adds it to `CIVBRIDGE_CMD`; `--no-saves` turns it off.
+- `autosave/`
+- `actions.jsonl`: the env's action log, every seat, each row with `seat`. `actions/<label>.jsonl` is
+  the same, split by seat.
+- `summary.json`: `data/get` at the end.
+- `bots.json`: each bot's calls, failures and notable moves.
+- `match.json`: seats, labels, personalities, seed, the live URL, timings, failure rate, standings and
+  `history` (wars, peace, cities captured or razed, civs eliminated, from the snapshots).
+- `server.log` and `bots.log`: every call.
+
 ## Testing the harness without the engine
 
 `stub_env.py` serves the same tool names, card, data plane (decisions, harness counters,

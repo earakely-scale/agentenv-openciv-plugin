@@ -562,6 +562,51 @@ def test_saves_keeps_every_turn_as_a_loadable_save(launch, tmp_path):
     assert launch().call("load", path=str(plain))["turn"] == 2
 
 
+def snapshots(path: Path) -> list[dict]:
+    return [json.loads(gzip.decompress(f.read_bytes())) for f in sorted(path.glob("turn-*.json.gz"))]
+
+
+def test_world_snapshot_schema_2(launch, tmp_path):
+    b = launch("--record", str(tmp_path / "rec"))
+    b.call("new_game", seed=SEED)
+    found_capital(b)
+    b.call("set_production", city="c1", item="Warrior")
+    b.call("unit_order", unit="u2", order="explore")
+    for _ in range(4):
+        b.call("end_turn", skip_idle=True)
+    world, state = b.call("world"), b.call("state")
+    snaps = snapshots(tmp_path / "rec")
+    assert [s["turn"] for s in snaps] == [0, 1, 2, 3, 4] and snaps[-1] == world
+    rome = next(p for p in world["players"] if p["civ"] == "Rome")
+    assert world["schema"] == 2 and world["seats"] == [{"index": rome["index"], "civ": "Rome", "label": None}]
+
+    # One seat: `known` is bit 0, the tiles the human has explored.
+    assert {row[6] for row in world["tiles"]} == {0, 1}
+    known = sum(row[6] for row in world["tiles"])
+    assert round(100 * known / len(world["tiles"]), 1) == state["explored_pct"]
+
+    assert (rome["gold"], rome["government"], rome["research"]) == (
+        state["gold"], state["government"], state["research"]["current"])
+    assert rome["research"] and rome["at_war"] == [] and rome["contacts"] == []
+    for p in world["players"]:
+        assert set(p) >= {"gold", "government", "research", "at_war", "contacts"}
+        assert isinstance(p["gold"], int) and isinstance(p["government"], str)
+    assert next(p for p in world["players"] if p["civ"] == "Barbarians")["at_war"] == []
+
+    # Cities and units carry the engine's ids, unique in a snapshot and kept from turn to turn.
+    [city] = [c for c in world["cities"] if c["owner"] == rome["index"]]
+    assert city["production"] == state["cities"][0]["producing"] == "Warrior"
+    assert all(c["id"] == city["id"] for s in snaps[1:] for c in s["cities"] if c["owner"] == rome["index"])
+    for s in snaps:
+        ids = [u["id"] for u in s["units"]] + [c["id"] for c in s["cities"]]
+        assert all(isinstance(i, str) for i in ids) and len(set(ids)) == len(ids)
+    [worker] = [u for u in snaps[0]["units"] if u["owner"] == rome["index"] and u["type"] == "Worker"]
+    trail = [next(u for u in s["units"] if u["id"] == worker["id"]) for s in snaps]
+    assert all((u["owner"], u["type"]) == (rome["index"], "Worker") for u in trail)
+    assert len({(u["x"], u["y"]) for u in trail}) > 1, "the exploring worker never moved"
+    assert (trail[-1]["x"], trail[-1]["y"]) == (unit(state, "u2")["x"], unit(state, "u2")["y"])
+
+
 def test_watchdog_answers_timeout_and_exits(launch):
     b = launch("--timeout", "0.05")
     reply = b.send("new_game", seed=SEED)
@@ -620,6 +665,39 @@ def test_seats_play_their_own_civs_and_end_turns_together(launch):
     assert [p["score"]["cities"] for p in players] == [0, 1, 0]
 
 
+def test_seat_snapshots_know_tiles_per_seat(launch, tmp_path):
+    b = seat_game(launch, "--record", str(tmp_path / "rec"))
+    for civ in SEATS:
+        b.call("unit_order", seat=civ, unit="u1", order="found_city")
+        b.call("set_production", seat=civ, city="c1", item="Warrior")
+        b.call("unit_order", seat=civ, unit="u2", order="explore")
+    for _ in range(3):
+        end_round(b)
+    world = b.call("world")
+    assert snapshots(tmp_path / "rec")[-1] == world
+    index = {p["civ"]: p["index"] for p in world["players"]}
+    assert world["schema"] == 2 and world["seats"] == [
+        {"index": index["Rome"], "civ": "Rome", "label": "A"},
+        {"index": index["Greece"], "civ": "Greece", "label": "B"},
+        {"index": index["Egypt"], "civ": "Egypt", "label": None}]
+    assert all(0 <= row[6] < 1 << len(SEATS) for row in world["tiles"])
+    known = [{(row[0], row[1]) for row in world["tiles"] if row[6] >> k & 1} for k in range(len(SEATS))]
+    assert all(known) and len({frozenset(k) for k in known}) == len(SEATS)
+
+    # Bit k is what seats[k] knows: around its capital it matches that seat's own map.
+    width, wrap = world["map"]["width"], world["map"]["wrap_x"]
+    tiles = {(row[0], row[1]) for row in world["tiles"]}
+    for k, civ in enumerate(SEATS):
+        city = b.call("state", seat=civ)["cities"][0]
+        assert city["producing"] == "Warrior"
+        assert any(c["production"] == "Warrior" and c["owner"] == index[civ]
+                   and (c["x"], c["y"]) == (city["x"], city["y"]) for c in world["cities"])
+        seen = {(t["x"], t["y"]) for t in b.call("map", seat=civ, x=city["x"], y=city["y"], radius=4)["tiles"]}
+        area = {((city["x"] + dx) % width if wrap else city["x"] + dx, city["y"] + dy)
+                for dx in range(-8, 9) for dy in range(-8, 9) if (dx + dy) % 2 == 0 and abs(dx) + abs(dy) <= 8} & tiles
+        assert seen and seen == area & known[k]
+
+
 def test_new_game_seats_must_fit_the_opponents(launch):
     b = launch()
     assert "opponent slots" in b.error("new_game", seed=SEED, opponents=1, seats=["Greece", "Egypt"])["message"]
@@ -653,7 +731,15 @@ def test_seats_meet_declare_war_and_make_peace(launch):
     assert {civ: sorted(texts) for civ, texts in contacts.items()} == {
         civ: sorted(f"Met {other}." for other in SEATS if other != civ) for civ in SEATS}
 
+    world = b.call("world")
+    index = {p["civ"]: p["index"] for p in world["players"]}
+    for p in world["players"]:
+        if p["civ"] in SEATS:
+            assert p["contacts"] == sorted(index[c] for c in SEATS if c != p["civ"]) and p["at_war"] == []
+
     assert b.call("declare_war", seat="Rome", civ="Greece")["message"] == "Rome declared war on Greece."
+    at_war = {p["civ"]: p["at_war"] for p in b.call("world")["players"] if p["civ"] in SEATS}
+    assert at_war == {"Rome": [index["Greece"]], "Greece": [index["Rome"]], "Egypt": []}
     offer = b.call("propose_peace", seat="Rome", civ="Greece")["message"]
     turn = b.call("state")["turn"]
     assert offer == f"Peace offered to Greece; it is signed if Greece proposes peace too before turn {turn + 2}."
@@ -670,6 +756,7 @@ def test_seats_meet_declare_war_and_make_peace(launch):
     assert ("peace_signed", "Peace with Greece.") in kinds(events["Rome"])
     assert ("peace_signed", "Rome and Greece made peace.") in kinds(events["Egypt"])
     assert not any(c["at_war"] for c in b.call("diplomacy", seat="Rome")["civs"])
+    assert not any(p["at_war"] for p in b.call("world")["players"])
 
 
 def test_a_seat_game_restores_every_seat(launch, tmp_path):
@@ -684,6 +771,10 @@ def test_a_seat_game_restores_every_seat(launch, tmp_path):
         {"civ": "Rome", "label": "A"}, {"civ": "Greece", "label": "B"}, {"civ": "Egypt", "label": None}]
     for civ in SEATS:
         assert restored.call("state", seat=civ) == b.call("state", seat=civ)
+    worlds = [w.call("world") for w in (b, restored)]
+    for key in ("seats", "players", "tiles", "cities"):
+        assert worlds[0][key] == worlds[1][key]
+    assert sorted(worlds[0]["units"], key=lambda u: u["id"]) == sorted(worlds[1]["units"], key=lambda u: u["id"])
     assert restored.call("end_turn", seat="Egypt", skip_idle=True)["waiting_for"] == ["Rome", "Greece"]
 
 

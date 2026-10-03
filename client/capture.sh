@@ -3,7 +3,10 @@
 #
 # usage: client/capture.sh <C7 dir> <saves dir | a.json[,b.json...]> <out dir> [--capture-<opt>=<v> ...]
 #        options: --capture-zoom=auto|<f>  --capture-hide-ui  --capture-settle-frames=<n>
+#                 --capture-players=<civ>[,<civ>...]  one <save>.<civ>.png per civ instead of <save>.png
+#                 --capture-seat-frames=<n>           frames drawn after switching to a civ (default 2)
 # env:   GODOT        Godot 4.4.1 .NET binary (required)
+#        CAPTURE_PLAYERS  same as --capture-players
 #        DEADLINE     seconds for the whole run (default 300); Godot is killed when it passes
 #        RESOLUTION   window size (default 1152x768, the client's own)
 #        GODOT_ARGS   extra Godot arguments, e.g. "--rendering-driver opengl3"
@@ -31,7 +34,8 @@ mkdir -p "$out"
 out=$(cd "$out" && pwd)
 
 cmd=("$GODOT" --path . --resolution "$resolution" --audio-driver Dummy ${GODOT_ARGS:-}
-	-- --capture-saves="$saves" --capture-out="$out" --capture-timeout="$deadline" "$@")
+	-- --capture-saves="$saves" --capture-out="$out" --capture-timeout="$deadline"
+	${CAPTURE_PLAYERS:+--capture-players="$CAPTURE_PLAYERS"} "$@")
 if [ "$(uname)" = Linux ] && [ -z "${DISPLAY:-}" ]; then
 	cmd=(xvfb-run -a -s "-screen 0 ${resolution}x24" "${cmd[@]}")
 fi

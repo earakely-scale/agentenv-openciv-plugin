@@ -726,11 +726,20 @@ class Game:
         return out
 
     def world(self) -> dict:
+        """The snapshot, schema 2 (docs/viewer.md): one seat, the player's own; the opponents' fields are made up."""
         civs = [self.civ, *self.opponents, "Barbarians"]
+        index = {civ: i for i, civ in enumerate(civs)}
         players = [{"index": i, "civ": civ, "is_human": i == 0, "label": None, "defeated": False,
                     "color": COLORS.get(civ, [128, 128, 128]),
                     "score": self.score() if i == 0 else {"total": 30 + self.turn, "cities": 1, "pop": 2, "tiles": 9,
                                                           "techs": 3}} for i, civ in enumerate(civs)]
+        for p in players[:-1]:
+            me = p["index"] == 0
+            p.update(gold=self.gold if me else 20, government=self.government if me else "Despotism",
+                     research=self.research if me else None,
+                     at_war=sorted(index[c] for c in self.wars) if me else [0] if p["civ"] in self.wars else [],
+                     contacts=[index["Greece"]] if me and self.met else [0] if p["civ"] == "Greece" and self.met
+                     else [])
         athens = self.foreign_city["pos"]
         tiles = []
         for y in range(HEIGHT):
@@ -741,14 +750,18 @@ class Game:
                 owner = 0 if self.owned(p) else 1 if dist(p, athens) <= 1 else -1
                 tiles.append([x, y, base, over.lower() if over else None, owner, int(p in RIVER),
                               int(p in self.explored)])
-        cities = [{"x": c["pos"][0], "y": c["pos"][1], "name": c["name"], "owner": 0, "size": c["size"],
-                   "capital": "Palace" in c["buildings"]} for c in self.cities.values()]
-        cities.append({"x": athens[0], "y": athens[1], "name": "Athens", "owner": 1, "size": 2, "capital": True})
-        units = [{"x": u["pos"][0], "y": u["pos"][1], "owner": 0, "type": u["type"]} for u in self.units.values()]
+        cities = [{"id": int(c["id"][1:]), "x": c["pos"][0], "y": c["pos"][1], "name": c["name"], "owner": 0,
+                   "size": c["size"], "capital": "Palace" in c["buildings"], "production": c["producing"]}
+                  for c in self.cities.values()]
+        cities.append({"id": 1000, "x": athens[0], "y": athens[1], "name": "Athens", "owner": 1, "size": 2,
+                       "capital": True, "production": "Warrior"})
+        units = [{"id": int(u["id"][1:]), "x": u["pos"][0], "y": u["pos"][1], "owner": 0, "type": u["type"]}
+                 for u in self.units.values()]
         if b := self.barbarian():
-            units.append({"x": b[0], "y": b[1], "owner": len(civs) - 1, "type": "Warrior"})
-        return {"turn": self.turn, "turn_limit": self.turn_limit, "seed": self.seed,
-                "map": {"width": WIDTH, "height": HEIGHT, "wrap_x": True}, "players": players, "tiles": tiles,
+            units.append({"id": 1000, "x": b[0], "y": b[1], "owner": len(civs) - 1, "type": "Warrior"})
+        return {"schema": 2, "turn": self.turn, "turn_limit": self.turn_limit, "seed": self.seed,
+                "map": {"width": WIDTH, "height": HEIGHT, "wrap_x": True},
+                "seats": [{"index": 0, "civ": self.civ, "label": None}], "players": players, "tiles": tiles,
                 "cities": cities, "units": units, "events": list(self.last_events)}
 
     def handle(self, cmd, a, on_turn) -> dict:

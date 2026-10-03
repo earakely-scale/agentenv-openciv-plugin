@@ -1,5 +1,5 @@
-"""Per-call record of what the agent did: the JSON-lines action log, the counters data/get reports, and the
-per-turn list of game actions the recording shows."""
+"""Per-call record of what the agent did: the JSON-lines action log, the counters data/get reports, and per turn
+the game actions and call counts the recording and the live view show."""
 
 from __future__ import annotations
 
@@ -39,6 +39,7 @@ class ActionLog:
         self.calls_this_turn = 0
         self.failures: collections.Counter[str] = collections.Counter()
         self.timeline: dict[int, list[dict]] = {}
+        self.calls: dict[int, dict[str, int]] = {}    # turn -> {"ok", "failed"}: every tool call, observations too
 
     def begin(self, turn: int | None) -> int:
         """Count a call in `turn`; returns how many calls this turn so far, this one included."""
@@ -67,6 +68,8 @@ class ActionLog:
             self.invalid += 1
             self.streak += 1
             self.max_streak = max(self.max_streak, self.streak)
+        if turn is not None:
+            self.calls.setdefault(turn, {"ok": 0, "failed": 0})["ok" if ok else "failed"] += 1
         if text := describe(tool, args):
             self.note(turn, text if ok else f"{text} ✗ {error_code}", ok)
         if self.path is None:

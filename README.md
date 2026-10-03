@@ -134,24 +134,33 @@ plugin.
 
 ## Watch it live
 
-While a game plays, the env serves a live view: the map, the scoreboard and score chart, each agent's actions and the
-turn's events, refreshed every two seconds (and the real client's view, with `--client`).
+While a game plays, the env serves the match viewer at `/live`. It draws everything from the game's data and follows
+each new turn as it arrives:
+
+- **Map:** pan, zoom and hover any tile. Click a civ to follow it. **See as** shows the map as one agent knows it,
+  fog included.
+- **Agents:** one panel per agent, each with its own view, its stats, and whether it is still playing the turn.
+- **Summary:** standings, who led when, rank by turn, the expansion race and the key moments, so far.
+- **Client view:** with `--client`, the real OpenCiv3 client's view of the game from any agent's seat.
+- **Timeline:** play, scrub or step through every turn played so far. Wars, razed cities and lead changes are marked.
+  Links keep the view, e.g. `/live#focus=Greece&client=Greece`.
 
 ```bash
 agent-env openciv3 watch --open    # from the checkout: prints each running game's live view and opens the newest
 ```
 
-![The live view of the frontier match at turn 62: the map with nine civilizations, the scoreboard and score chart, and each agent's actions](docs/media/live-view.png)
+![The match viewer live at the end of a nine-seat game: the map, the standings, Greece's agent card, and the real OpenCiv3 client's view from Greece's seat](docs/media/viewer-live.png)
 
-*The `frontier` match at turn 62: GPT-5.6 Sol (America) leads, ahead of Sonnet (Greece) and Opus (Rome).*
+*A scripted nine-seat test game (`playtest/bots.py`) at turn 50, following Greece. The real client draws the game
+as Greece sees it.*
 
 On a remote machine, `agent-env openciv3 watch` prints the URL (`http://127.0.0.1:<port>/live`); forward that port,
 e.g. `ssh -L <port>:127.0.0.1:<port> <host>`, and open the same URL locally.
 
 **Stream it to Twitch.** `agent-env openciv3 stream` sends the live view to Twitch while a game plays: a headless
-browser in Docker shows the page's full-screen layout (`/live?stream`), and ffmpeg sends it at 1080p and 30 fps. It
-waits for a game to start and ends the stream a minute after GAME OVER, so it can run beside any task, on your machine
-or a server:
+browser in Docker shows the viewer's full-screen layout (`/live?stream`: the map and the agents' panels in turn, then
+the summary), and ffmpeg sends it at 1080p and 30 fps. It waits for a game to start and ends the stream a minute after
+GAME OVER, so it can run beside any task, on your machine or a server:
 
 ```bash
 read -rs KEY && printf 'OPENCIV3_STREAM_KEY: %s\n' "$KEY" >> ~/.config/agentenv/secrets.yaml   # once: paste the key
@@ -165,9 +174,14 @@ RTMP server (YouTube's is `rtmp://a.rtmp.youtube.com/live2`), `--size 1280x720 -
 uplink, `--test` sends to Twitch without going live (its bandwidth test, visible only in Twitch Inspector), and the
 first run builds the streamer image (`streamer/`, about 1.5 GB).
 
-When the game ends, its recording is saved with the run: an MP4 of the map, scores and actions turn by turn, a
-self-contained HTML replay with a turn slider, and with `--client` the real client's view. `agent-env openciv3
-recordings` lists them and copies them out ([docs/recording.md](docs/recording.md)).
+When the game ends, its recording is saved with the run:
+
+- an MP4 of the map, standings, agents' actions and key moments, turn by turn;
+- the same viewer as one self-contained HTML file;
+- with `--client`, every seat's view in the real client, which the HTML plays when the files sit next to it.
+
+`agent-env openciv3 recordings` lists them and copies them out ([docs/recording.md](docs/recording.md),
+[docs/viewer.md](docs/viewer.md)).
 
 ## How a match is built
 

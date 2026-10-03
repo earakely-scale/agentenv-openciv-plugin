@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>OpenCiv3 · match report</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root{--bg:#0f1115;--surface:#16191f;--raise:#1d2129;--line:#262b33;--line2:#343a45;--text:#eceef2;--text2:#b6bac3;
+  --muted:#80868f;--gold:#e9c46a;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:1240px;margin:0 auto;padding:28px 24px 64px}
+.eyebrow{color:var(--muted);font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+h1{font-size:30px;line-height:1.2;margin:6px 0 4px;font-weight:700}
+h1 .sw{width:16px;height:16px;border-radius:4px}
+.lede{color:var(--text2);max-width:820px;margin:0}
+h2{font-size:13px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);margin:0 0 4px;font-weight:650}
+.note{color:var(--muted);font-size:12px;margin:0 0 12px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-top:18px}
+.grid2{display:grid;grid-template-columns:1.25fr 1fr;gap:18px}
+.grid2 .card{margin-top:0}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:20px}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.tile .v{font-size:26px;font-weight:700;line-height:1.1;margin-top:2px}
+.tile .s{color:var(--muted);font-size:12px}
+.sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th{font-weight:500;color:var(--muted);font-size:11px;text-align:right;padding:6px 8px;border-bottom:1px solid var(--line2);white-space:nowrap}
+th.l,td.l{text-align:left}
+td{padding:7px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap;color:var(--text2)}
+td.b{color:var(--text);font-weight:650}
+tr:hover td{background:#1b1f26}
+.rank{color:var(--muted);width:24px}
+.civ{color:var(--muted);margin-left:6px}
+svg text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.sm{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.sm .cell{background:var(--raise);border-radius:8px;padding:8px 10px 4px}
+.sm .head{display:flex;justify-content:space-between;font-size:12px}
+.sm .head b{font-weight:650}
+.sm .head span{color:var(--muted);font-variant-numeric:tabular-nums}
+#tip{position:fixed;pointer-events:none;background:rgba(18,21,27,.97);border:1px solid var(--line2);border-radius:8px;
+  padding:8px 10px;font-size:12px;display:none;z-index:10;box-shadow:0 6px 24px rgba(0,0,0,.45);min-width:150px}
+#tip .k{color:var(--muted)}
+.moments{list-style:none;padding:0;margin:0;columns:2;column-gap:28px}
+.moments li{break-inside:avoid;padding:5px 0;border-bottom:1px solid var(--line);display:grid;grid-template-columns:48px 1fr}
+.moments .t{color:var(--muted);font-variant-numeric:tabular-nums}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--text2);margin:0 0 8px}
+canvas{display:block;width:100%;border-radius:8px}
+@media (max-width:900px){.grid2,.tiles{grid-template-columns:1fr}.sm{grid-template-columns:1fr 1fr}.moments{columns:1}}
+</style></head><body><div class="wrap">
+<div class="eyebrow" id="eyebrow"></div>
+<h1 id="headline"></h1>
+<p class="lede" id="lede"></p>
+<div class="tiles" id="tiles"></div>
+
+<div class="card">
+  <h2>Final standings</h2>
+  <p class="note">Score = 10·cities + 3·pop + 1·tiles + 4·techs. Land share is of all owned land at the end.
+    “Led” counts turns at the top of the score table.</p>
+  <table id="standings"></table>
+</div>
+
+<div class="card">
+  <h2>Who led when</h2>
+  <p class="note">The score leader at each turn. Hover a band for its span.</p>
+  <svg id="ribbon" width="100%" height="64"></svg>
+</div>
+
+<div class="card">
+  <h2>Rank by turn</h2>
+  <p class="note">Every civ's place in the score table (on a 9-turn average, so early ties don't flicker), every 10 turns. Hover a line to pick it out.</p>
+  <svg id="bump" width="100%" height="330"></svg>
+</div>
+
+<div class="grid2" style="margin-top:18px">
+  <div class="card">
+    <h2>Score, one civ at a time</h2>
+    <p class="note">Each panel draws one civ against the others in grey, on the same scale. Hover to read a turn.</p>
+    <div class="sm" id="sm"></div>
+    <h2 style="margin-top:18px">The world at the end</h2>
+    <p class="note">Territory at the final turn; stars are capitals.</p>
+    <canvas id="final" style="height:240px"></canvas>
+  </div>
+  <div class="card">
+    <h2>The expansion race</h2>
+    <p class="note">The turn each civ reached 5, 10, 15 and 20 cities. Earlier is further left.</p>
+    <svg id="race" width="100%" height="560"></svg>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Key moments</h2>
+  <p class="note">Lead changes, cities taken or razed and civs eliminated, in order.</p>
+  <ul class="moments" id="moments"></ul>
+</div>
+</div>
+<div id="tip"></div>
+<script>/*__COMMON__*/</script>
+<script id="data" type="application/json">/*__DATA__*/</script>
+<script>
+"use strict";
+const M = new Match(JSON.parse(document.getElementById("data").textContent));
+const $ = id => document.getElementById(id), tipEl = $("tip");
+const L = M.last, civs = M.civs;
+const final = i => M.series[i][L];
+const ranksAt = M.turns.map((_, t) => M.ranks(t));
+// Ranks on a trailing 9-turn mean of the score: early ties flip raw ranks every turn.
+const smooth = M.turns.map((_, t) => {
+  const mean = i => { let s = 0, n = 0; for (let k = Math.max(0, t - 8); k <= t; k++) { s += M.series[i][k][0]; n++; } return s / n; };
+  const ord = M.civs.map(p => p.index).sort((a, b) => mean(b) - mean(a) || a - b);
+  return Object.fromEntries(ord.map((i, r) => [i, r + 1]));
+});
+const order = civs.slice().sort((a, b) => ranksAt[L][a.index] - ranksAt[L][b.index]);
+const leaders = M.turns.map((_, t) => order.reduce((a, b) => M.series[b.index][t][0] > M.series[a.index][t][0] ? b : a).index);
+const lab = p => p.label || p.civ;
+const sw = p => `<span class="sw" style="background:${p.color}"></span>`;
+function tip(e, html) {
+  tipEl.innerHTML = html; tipEl.style.display = "block";
+  let x = e.clientX + 14, y = e.clientY + 14;
+  if (x + tipEl.offsetWidth > innerWidth - 8) x = e.clientX - tipEl.offsetWidth - 14;
+  if (y + tipEl.offsetHeight > innerHeight - 8) y = e.clientY - tipEl.offsetHeight - 14;
+  tipEl.style.left = x + "px"; tipEl.style.top = y + "px";
+}
+const untip = () => { tipEl.style.display = "none"; };
+
+// ---- headline ----
+const win = order[0], second = order[1];
+const ledTurns = Object.fromEntries(civs.map(p => [p.index, leaders.filter(l => l === p.index).length]));
+let since = L; while (since > 0 && leaders[since - 1] === win.index) since--;
+const totalLand = civs.reduce((s, p) => s + final(p.index)[3], 0);
+const reach = (p, n) => { const i = M.series[p.index].findIndex(s => s[1] >= n); return i < 0 ? null : M.turns[i].turn; };
+$("eyebrow").textContent = `OpenCiv3 · ${civs.length} agents · seed ${M.meta.seed} · ${M.W}×${M.H} map · ${M.turns[L].turn} turns`;
+$("headline").innerHTML = `${sw(win)}${esc(lab(win))} wins as ${esc(win.civ)}, by ${final(win.index)[0] - final(second.index)[0]} points`;
+$("lede").textContent = `${lab(win)} finished on ${final(win.index)[0]} points to ${lab(second)}'s ${final(second.index)[0]}, ` +
+  `with ${final(win.index)[1]} cities and ${final(win.index)[2]} population. It led for ${ledTurns[win.index]} of ` +
+  `${M.turns.length} turns and held the lead without a break from T${M.turns[since].turn}. ` +
+  `The lead changed hands ${M.events.filter(e => e.kind === "lead_change").length} times.`;
+const mostCities = order.reduce((a, b) => final(b.index)[1] > final(a.index)[1] ? b : a);
+const mostTechs = order.reduce((a, b) => final(b.index)[4] > final(a.index)[4] ? b : a);
+const fastest10 = order.filter(p => reach(p, 10) != null).sort((a, b) => reach(a, 10) - reach(b, 10))[0];
+const longest = order.reduce((a, b) => ledTurns[b.index] > ledTurns[a.index] ? b : a);
+$("tiles").innerHTML = [
+  ["Most cities", mostCities, `${final(mostCities.index)[1]}`, "cities at the end"],
+  ["Most techs", mostTechs, `${final(mostTechs.index)[4]}`, "techs known"],
+  ["Fastest to 10 cities", fastest10, fastest10 ? `T${reach(fastest10, 10)}` : "–", "turn reached"],
+  ["Longest in the lead", longest, `${ledTurns[longest.index]}`, "turns at the top"],
+].map(([h, p, v, s]) => `<div class="tile"><div class="eyebrow">${h}</div><div class="v">${v}</div>
+  <div class="s">${p ? sw(p) + esc(lab(p)) + " · " : ""}${s}</div></div>`).join("");
+
+// ---- standings ----
+const spark = (p, w = 90, h = 20) => {
+  const top = Math.max(...order.map(q => final(q.index)[0]));
+  return `<svg width="${w}" height="${h}" style="vertical-align:middle"><path d="${sparkPath(M.series[p.index].map(s => s[0]), w, h - 2, top)}"
+    fill="none" stroke="${p.color}" stroke-width="1.5"/></svg>`;
+};
+$("standings").innerHTML = `<tr><th class="l"></th><th class="l">agent</th><th class="l">score over the game</th><th>score</th>
+  <th>cities</th><th>pop</th><th>techs</th><th>land</th><th>land share</th><th>led</th><th>best rank</th><th>10 cities</th></tr>` +
+  order.map((p, r) => {
+    const s = final(p.index), best = Math.min(...ranksAt.map(rk => rk[p.index]).slice(5));
+    return `<tr><td class="l rank">${r + 1}</td><td class="l">${sw(p)}<b>${esc(lab(p))}</b><span class="civ">${esc(p.label ? p.civ : "")}</span></td>
+      <td class="l">${spark(p)}</td><td class="b">${s[0]}</td><td>${s[1]}</td><td>${s[2]}</td><td>${s[4]}</td><td>${s[3]}</td>
+      <td>${(s[3] / totalLand * 100).toFixed(1)}%</td><td>${ledTurns[p.index] || "–"}</td><td>${best}</td>
+      <td>${reach(p, 10) != null ? "T" + reach(p, 10) : "–"}</td></tr>`;
+  }).join("");
+
+// ---- who led when ----
+function ribbon() {
+  const svg = $("ribbon"), W = svg.clientWidth, H = 64, x0 = 0, X = t => x0 + (W - x0) * t / M.limit;
+  let h = "", start = 0;
+  for (let i = 1; i <= M.turns.length; i++) {
+    if (i < M.turns.length && leaders[i] === leaders[start]) continue;
+    const p = M.byIndex[leaders[start]], a = X(M.turns[start].turn), b = X(i < M.turns.length ? M.turns[i].turn : M.limit);
+    const span = `T${M.turns[start].turn}–T${M.turns[i - 1].turn}`;
+    h += `<g data-tip="${esc(sw(p) + "<b>" + esc(lab(p)) + "</b> leads<div class='k'>" + span + ", " + (i - start) + " turns</div>")}">
+      <rect x="${a + 1}" y="6" width="${Math.max(1, b - a - 2)}" height="28" rx="4" fill="${p.color}"/>
+      ${b - a > 60 ? `<text x="${(a + b) / 2}" y="24.5" fill="#0f1115" font-size="12" font-weight="650" text-anchor="middle">${esc(lab(p))}</text>` : ""}</g>`;
+    start = i;
+  }
+  for (const t of [0, 50, 100, 150, 200].filter(t => t <= M.limit))
+    h += `<text x="${Math.min(W - 14, Math.max(10, X(t)))}" y="54" fill="#80868f" font-size="11" text-anchor="middle">T${t}</text>`;
+  svg.innerHTML = h;
+  hookTips(svg);
+}
+function hookTips(svg) {
+  for (const g of svg.querySelectorAll("[data-tip]")) {
+    g.onmousemove = e => tip(e, g.dataset.tip); g.onmouseleave = untip;
+  }
+}
+
+// ---- bump chart ----
+function bump() {
+  const svg = $("bump"), W = svg.clientWidth, H = 330, Lp = 110, R = 110, T = 14, B = 26, n = civs.length;
+  const step = 10, samples = M.turns.map((t, i) => i).filter(i => M.turns[i].turn % step === 0 || i === L).filter(i => M.turns[i].turn >= 20);
+  const X = i => Lp + (W - Lp - R) * (M.turns[i].turn - M.turns[samples[0]].turn) / (M.turns[L].turn - M.turns[samples[0]].turn);
+  const Y = r => T + (H - T - B) * (r - 1) / (n - 1);
+  let h = `<text x="${Lp}" y="${H - 6}" fill="#80868f" font-size="11" text-anchor="middle">T${M.turns[samples[0]].turn}</text>`;
+  for (let r = 1; r <= n; r++) h += `<line x1="${Lp}" x2="${W - R}" y1="${Y(r)}" y2="${Y(r)}" stroke="#20242b"/>`;
+  for (const t of [50, 100, 150, 200]) {
+    const i = M.turns.findIndex(x => x.turn === t); if (i < 0) continue;
+    h += `<text x="${X(i)}" y="${H - 6}" fill="#80868f" font-size="11" text-anchor="middle">T${t}</text>`;
+  }
+  for (const p of civs) {
+    const pts = samples.map(i => [X(i), Y(smooth[i][p.index])]);
+    const d = pts.map(([x, y], k) => k ? `C${(pts[k - 1][0] + x) / 2},${pts[k - 1][1]} ${(pts[k - 1][0] + x) / 2},${y} ${x},${y}` : `M${x},${y}`).join("");
+    h += `<g class="ln" data-i="${p.index}"><path d="${d}" fill="none" stroke="${p.color}" stroke-width="2.5" stroke-linecap="round"/>
+      <path d="${d}" fill="none" stroke="transparent" stroke-width="12"/>
+      <circle cx="${pts[0][0]}" cy="${pts[0][1]}" r="4" fill="${p.color}" stroke="#16191f" stroke-width="2"/>
+      <circle cx="${pts.at(-1)[0]}" cy="${pts.at(-1)[1]}" r="4" fill="${p.color}" stroke="#16191f" stroke-width="2"/>
+      <text x="${Lp - 10}" y="${pts[0][1] + 4}" text-anchor="end" font-size="12" fill="#b6bac3">${esc(lab(p))} ${smooth[samples[0]][p.index]}</text>
+      <text x="${W - R + 10}" y="${pts.at(-1)[1] + 4}" font-size="12" fill="#eceef2" font-weight="600">${smooth[L][p.index]} ${esc(lab(p))}</text></g>`;
+  }
+
+  svg.innerHTML = h;
+  const lines = [...svg.querySelectorAll(".ln")];
+  for (const g of lines) {
+    g.onmousemove = e => {
+      for (const o of lines) o.style.opacity = o === g ? 1 : 0.15;
+      const p = M.byIndex[+g.dataset.i], r = svg.getBoundingClientRect();
+      const t0 = M.turns[samples[0]].turn, turn = Math.round((e.clientX - r.left - Lp) / (W - Lp - R) * (M.turns[L].turn - t0) + t0);
+      const i = Math.max(0, Math.min(L, M.turns.findIndex(t => t.turn >= turn)));
+      tip(e, `${sw(p)}<b>${esc(lab(p))}</b> <span class="k">${esc(p.civ)}</span><div>T${M.turns[i].turn}: rank ${smooth[i][p.index]}, score ${M.series[p.index][i][0]}</div>`);
+    };
+    g.onmouseleave = () => { for (const o of lines) o.style.opacity = 1; untip(); };
+  }
+}
+
+// ---- small multiples ----
+function multiples() {
+  const top = Math.max(...civs.map(p => final(p.index)[0]));
+  $("sm").innerHTML = order.map(p => `<div class="cell" data-i="${p.index}"><div class="head"><b>${sw(p)}${esc(lab(p))}</b>
+    <span>#${ranksAt[L][p.index]} · ${final(p.index)[0]}</span></div><svg width="100%" height="70" class="mini"></svg></div>`).join("");
+  for (const cell of $("sm").children) {
+    const p = M.byIndex[+cell.dataset.i], svg = cell.querySelector("svg"), W = svg.clientWidth, H = 70;
+    const path = q => sparkPath(M.series[q.index].map(s => s[0]), W, H - 4, top);
+    svg.innerHTML = civs.filter(q => q !== p).map(q => `<path d="${path(q)}" fill="none" stroke="#3a3f48" stroke-width="1"/>`).join("") +
+      `<path d="${path(p)}" fill="none" stroke="${p.color}" stroke-width="2"/>` +
+      `<line class="xh" y1="0" y2="${H}" stroke="#80868f" visibility="hidden"/><circle class="dot" r="3.5" fill="${p.color}" stroke="#1d2129" stroke-width="2" visibility="hidden"/>`;
+    svg.onmousemove = e => {
+      const r = svg.getBoundingClientRect(), f = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+      const i = Math.round(f * L);
+      for (const c of $("sm").children) {   // the crosshair follows in every panel
+        const s2 = c.querySelector("svg"), q = M.byIndex[+c.dataset.i], w2 = s2.clientWidth, x = i / L * w2;
+        const y = (H - 4) - M.series[q.index][i][0] / top * (H - 4);
+        s2.querySelector(".xh").setAttribute("x1", x); s2.querySelector(".xh").setAttribute("x2", x);
+        s2.querySelector(".xh").setAttribute("visibility", "visible");
+        const dot = s2.querySelector(".dot"); dot.setAttribute("cx", x); dot.setAttribute("cy", y); dot.setAttribute("visibility", "visible");
+      }
+      tip(e, `<b>T${M.turns[i].turn}</b>` + order.map(q => `<div style="display:flex;gap:10px;${q === p ? "font-weight:650" : "color:#b6bac3"}">
+        <span>${sw(q)}${esc(lab(q))}</span><span style="margin-left:auto">${M.series[q.index][i][0]}</span></div>`).join(""));
+    };
+    svg.onmouseleave = () => {
+      untip();
+      for (const c of $("sm").children) for (const el of c.querySelectorAll(".xh,.dot")) el.setAttribute("visibility", "hidden");
+    };
+  }
+}
+
+// ---- expansion race ----
+function race() {
+  const svg = $("race"), W = svg.clientWidth, H = 560, Lp = 92, R = 16, T = 22, B = 26;
+  const marks = [5, 10, 15, 20];
+  const rows = civs.slice().sort((a, b) => (reach(a, 10) ?? 999) - (reach(b, 10) ?? 999) || (reach(a, 5) ?? 999) - (reach(b, 5) ?? 999));
+  const first = Math.max(0, Math.floor((Math.min(...civs.map(p => reach(p, 5) ?? M.limit)) - 10) / 10) * 10);
+  const X = t => Lp + (W - Lp - R) * (t - first) / (M.limit - first), rowH = (H - T - B) / rows.length;
+  let h = "";
+  for (const t of [first, ...[50, 100, 150, 200].filter(t => t > first + 8)]) h += `<line x1="${X(t)}" x2="${X(t)}" y1="${T - 6}" y2="${H - B}" stroke="#22262d"/>
+    <text x="${X(t)}" y="${H - 8}" fill="#80868f" font-size="11" text-anchor="middle">T${t}</text>`;
+  h += `<text x="${Lp}" y="11" font-size="11" fill="#80868f">markers: the turn of the 5th, 10th, 15th and 20th city</text>`;
+  rows.forEach((p, r) => {
+    const y = T + rowH * (r + 0.5), ts = marks.map(n => reach(p, n));
+    const known = ts.filter(t => t != null);
+    h += `<text x="${Lp - 10}" y="${y + 4}" text-anchor="end" font-size="12" fill="#b6bac3">${esc(lab(p))}</text>`;
+    if (known.length > 1) h += `<line x1="${X(known[0])}" x2="${X(known.at(-1))}" y1="${y}" y2="${y}" stroke="${p.color}" stroke-width="2" opacity=".45"/>`;
+    ts.forEach((t, k) => {
+      if (t == null) return;
+      const rr = 6 + k * 1.6;
+      h += `<g data-tip="${esc(sw(p) + "<b>" + esc(lab(p)) + "</b>: " + marks[k] + " cities at T" + t)}">
+        <circle cx="${X(t)}" cy="${y}" r="${rr}" fill="${p.color}" stroke="#16191f" stroke-width="2"/>
+        <text x="${X(t)}" y="${y + 3.5}" text-anchor="middle" font-size="9" font-weight="700" fill="#0f1115">${marks[k]}</text></g>`;
+    });
+  });
+  svg.innerHTML = h; hookTips(svg);
+}
+
+// ---- final map ----
+function finalMap() {
+  const c = $("final"), {ctx, w, h} = sizeCanvas(c);
+  const P = new MapPainter(M);
+  P.draw(ctx, L, fitView(M.landBox, w, h), w, h, {labels: "none", units: false});
+}
+
+// ---- key moments ----
+const KEY = ["lead_change", "city_captured", "city_destroyed", "civ_destroyed", "war_declared"];
+$("moments").innerHTML = M.events.filter(e => KEY.includes(e.kind)).map(e =>
+  `<li><span class="t">T${e.turn}</span><span>${sw(M.byIndex[e.owner] || {color: "#777"})}${esc(e.text)}</span></li>`).join("");
+
+function all() { ribbon(); bump(); multiples(); race(); finalMap(); }
+all();
+let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(all, 120); });
+</script></body></html>

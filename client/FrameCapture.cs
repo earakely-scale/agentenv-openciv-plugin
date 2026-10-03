@@ -12,6 +12,8 @@ using C7GameData;
 
 // Autoload that turns the OpenCiv3 client into a batch renderer: load each save through the normal
 // in-game load path, frame the human's explored area, write the viewport to PNG, quit.
+// With --capture-players=<civ>,<civ>,... each save is loaded once and drawn once per listed civ, as if that
+// civ were the human at the screen (its fog of war, units, status box and framing).
 // Inert unless --capture-saves is passed after "--" on the Godot command line.
 public partial class FrameCapture : Node {
 	Dictionary<string, string> opts = new();
@@ -71,6 +73,10 @@ public partial class FrameCapture : Node {
 		int settle = int.Parse(Opt("capture-settle-frames", "20"));
 		string zoomArg = Opt("capture-zoom", "auto");
 		bool hideUi = Opt("capture-hide-ui", "0") == "1";
+		// Civ names; empty: one frame per save, drawn for the controller as the client loads it.
+		string[] players = Opt("capture-players", "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+		// Frames to draw after switching to a player: the map, minimap and status box redraw every frame.
+		int seatFrames = int.Parse(Opt("capture-seat-frames", "2"));
 		Directory.CreateDirectory(outDir);
 		string tmpDir = Directory.CreateTempSubdirectory("c7-capture-").FullName;
 
@@ -99,19 +105,52 @@ public partial class FrameCapture : Node {
 
 			await Frames(settle);
 			if (hideUi) HideUi(game);
-			StopBlinking(game);
-			Frame(game.controller, mapView, zoomArg);
-			await Frames(settle);
-			await ToSignal(RenderingServer.Singleton, RenderingServer.SignalName.FramePostDraw);
-
-			Image img = GetViewport().GetTexture().GetImage();
-			string png = Path.Combine(outDir, Stem(save) + ".png");
-			img.SavePng(png);
-			GD.Print($"CAPTURED {png} {img.GetWidth()}x{img.GetHeight()} turn={EngineStorage.gameData.turn} zoom={mapView.cameraZoom:F2} load_ms={loadMs} total_ms={sw.ElapsedMilliseconds}");
+			if (players.Length == 0) {
+				StopBlinking(game);
+				Frame(game.controller, mapView, zoomArg);
+				await Frames(settle);
+				string shot = await Capture(Path.Combine(outDir, Stem(save) + ".png"));
+				GD.Print($"CAPTURED {shot} zoom={mapView.cameraZoom:F2} load_ms={loadMs} total_ms={sw.ElapsedMilliseconds}");
+				continue;
+			}
+			foreach (string civ in players) {
+				var seatSw = Stopwatch.StartNew();
+				Player player = FindPlayer(civ) ?? throw new Exception($"no civ named {civ} in {save}");
+				ViewAs(game, player);
+				StopBlinking(game);
+				Frame(player, mapView, zoomArg);
+				await Frames(seatFrames);
+				string shot = await Capture(Path.Combine(outDir, $"{Stem(save)}.{civ}.png"));
+				GD.Print($"CAPTURED {shot} civ={civ} zoom={mapView.cameraZoom:F2} load_ms={loadMs} seat_ms={seatSw.ElapsedMilliseconds}");
+			}
 		}
 		Directory.Delete(tmpDir, recursive: true);
-		GD.Print($"CAPTURE_DONE frames={saves.Count} ms={total.ElapsedMilliseconds}");
+		GD.Print($"CAPTURE_DONE frames={saves.Count * Math.Max(players.Length, 1)} ms={total.ElapsedMilliseconds}");
 		GetTree().Quit(0);
+	}
+
+	// Waits for the next drawn frame and writes the viewport to `png`; returns "<png> <w>x<h> turn=<n>" for the log.
+	async Task<string> Capture(string png) {
+		await ToSignal(RenderingServer.Singleton, RenderingServer.SignalName.FramePostDraw);
+		Image img = GetViewport().GetTexture().GetImage();
+		img.SavePng(png);
+		return $"{png} {img.GetWidth()}x{img.GetHeight()} turn={EngineStorage.gameData.turn}";
+	}
+
+	static Player FindPlayer(string civ) => EngineStorage.gameData.players.Find(
+		p => string.Equals(p.civilization?.name, civ, StringComparison.OrdinalIgnoreCase));
+
+	// Make `player` the one the client draws for. The map's fog, unit and resource layers, the minimap and the
+	// status box all ask GameData.GetFirstHumanPlayer() (or game.controller) every frame, so this is the client's own
+	// observer-mode toggle (Game.SetObserverModeOff): only the viewing civ is human. The other seats' isHuman flags
+	// only matter when a turn is played, which a capture never does. Then select the unit the client would
+	// autoselect for that player, without UnitSelector's side effect of running busy units' orders.
+	static void ViewAs(Game game, Player player) {
+		foreach (Player p in EngineStorage.gameData.players) p.isHuman = p == player;
+		EngineStorage.uiControllerID = player.id;
+		game.controller = player;
+		MapUnit next = player.units.FirstOrDefault(u => u.movementPoints.canMove && !u.isFortified && !u.IsBusy()) ?? MapUnit.NONE;
+		game.unitSelector.SetSelectedUnit(next);
 	}
 
 	static IEnumerable<Node> Descendants(Node n) => n.GetChildren().SelectMany(c => Descendants(c).Prepend(c));
@@ -129,18 +168,19 @@ public partial class FrameCapture : Node {
 			layer.Visible = false;
 	}
 
-	// Fit the controller's explored tiles (wrap-aware around its capital) into the viewport.
-	static void Frame(Player controller, MapView mv, string zoomArg) {
+	// Fit the player's explored tiles (wrap-aware around its capital) into the viewport.
+	static void Frame(Player player, MapView mv, string zoomArg) {
 		GameMap map = EngineStorage.gameData.map;
-		Tile anchor = controller.cities.Find(c => c.IsCapital())?.location
-			?? controller.cities.FirstOrDefault()?.location
-			?? controller.units.FirstOrDefault()?.location;
+		Tile anchor = player.cities.Find(c => c.IsCapital())?.location
+			?? player.cities.FirstOrDefault()?.location
+			?? player.units.FirstOrDefault()?.location
+			?? player.tileKnowledge.knownTiles.FirstOrDefault();
 		if (anchor == null) return;
 
 		int W = map.numTilesWide, H = map.numTilesTall;
 		int Rel(int v, int a, int n, bool wrap) => wrap ? ((v - a + n / 2) % n + n) % n - n / 2 + a : v;
 		var xs = new List<int>(); var ys = new List<int>();
-		foreach (Tile t in controller.tileKnowledge.knownTiles) {
+		foreach (Tile t in player.tileKnowledge.knownTiles) {
 			xs.Add(Rel(t.XCoordinate, anchor.XCoordinate, W, map.wrapHorizontally));
 			ys.Add(Rel(t.YCoordinate, anchor.YCoordinate, H, map.wrapVertically));
 		}
