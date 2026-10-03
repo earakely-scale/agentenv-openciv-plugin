@@ -214,3 +214,26 @@ svg text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
   .tiles, .grid2 { grid-template-columns: 1fr 1fr; }
   ul.moments { columns: 1; }
 }
+
+/* ---- ?stream: 1920x1080, nothing to click ---- */
+body.stream { font-size: 16px; cursor: none; }
+body.stream .tabs, body.stream .pov, body.stream .chips, body.stream .zoom, body.stream .legendbox, body.stream .hints,
+body.stream #play, body.stream #speed, body.stream #golive, body.stream .povnote, body.stream .btnrow,
+body.stream .kfilter, body.stream .side h2 .hint, body.stream #cl-seat, body.stream #cl-big, body.stream #cl-x { display: none !important; }
+body.stream .top { padding: 12px 22px; }
+body.stream .brand { font-size: 22px; } body.stream .brand small { font-size: 15px; }
+body.stream .turnbig { font-size: 34px; } body.stream .turnbig small { font-size: 18px; }
+body.stream .waiting { font-size: 16px; }
+body.stream .livebadge { font-size: 13px; padding: 3px 12px; }
+body.stream .mapview { grid-template-columns: 1fr 560px; }
+body.stream .side section { padding: 12px 18px; }
+body.stream .side h2, body.stream .card h2 { font-size: 13px; }
+body.stream .standings td { padding: 4px 5px; } body.stream .standings th { font-size: 12px; }
+body.stream .agentcard .head b { font-size: 20px; }
+body.stream ul.lines { max-height: 200px; }
+body.stream svg.chart { height: 200px; }
+body.stream .clientpane { right: auto; left: 16px; top: auto; bottom: 16px; width: 40%; }
+body.stream .timeline { padding: 6px 22px 10px; }
+body.stream .acard .hd b { font-size: 17px; } body.stream .acard .stats { font-size: 14px; } body.stream .acard .act { font-size: 13px; }
+body.stream .summary .wrap { max-width: 1600px; }
+body.stream .empty { font-size: 26px; }

@@ -145,3 +145,13 @@ never reads the game again. The real client draws the seat the viewer asks for, 
 newest save only, so a slow client skips turns instead of falling behind. With `OPENCIV_RECORD=0` there are no
 snapshots, and the viewer says so. The older page's routes (`/live/state.json`, `/live/frame.png`) still work.
 Routes: [docs/tools.md](tools.md#watching-a-game-live); the data and the `live` object: [docs/viewer.md](viewer.md).
+
+`/live?stream` lays the viewer out for a 1920×1080 screen with nothing to click: larger text, no tabs, buttons or
+hints, and the newest turn always shown. It alternates the map with the agents' panels, shows the summary once the
+game is over, and, with the client, keeps one agent's client view in a corner, a different agent every half minute.
+`agent-env openciv3 stream` shows that layout in Chromium on a virtual display
+(`streamer/`) and sends it with ffmpeg (H.264 at 4.5 Mbit/s, a keyframe every 2 s, silent AAC audio) to Twitch or
+any RTMP server. It streams the newest env whose game is under way, waiting for one to start, and ends the stream
+`--linger` seconds after GAME OVER, or a minute after the env is gone. The stream key comes from agent-env's secret
+store, and the streamer replaces it in everything ffmpeg prints.
+

@@ -439,6 +439,8 @@ function star(ctx, cx, cy, r) {
 const M = new Match();
 let P = null;                           // the painter, made when the first document arrives
 const LIVE = !window.OPENCIV_DATA;
+// ?stream: a full-screen layout for broadcasting (agent-env openciv3 stream), with a director instead of controls.
+const STREAM = new URLSearchParams(location.search).has("stream");
 const VIDEOS = window.OPENCIV_VIDEOS || {};
 const S = {
   ti: 0, follow: true, view: "map", pov: null, focus: null, metric: 0, speed: 5, playing: null,
@@ -462,6 +464,7 @@ function readHash() {
 }
 let hashTimer = 0;
 function writeHash() {
+  if (STREAM) return;
   clearTimeout(hashTimer);
   hashTimer = setTimeout(() => {
     const h = new URLSearchParams();
@@ -542,6 +545,7 @@ function shell() {
       <kbd>Esc</kbd> clear · drag to pan, wheel to zoom</div>
   </footer>`;
   document.body.appendChild(tip);
+  document.body.classList.toggle("stream", STREAM);
   for (const b of $$(".tabs button")) b.onclick = () => setView(b.dataset.view);
   $("#pov").onchange = () => setPov($("#pov").value === "" ? null : +$("#pov").value);
   $("#play").onclick = togglePlay;
@@ -821,7 +825,7 @@ function renderMetrics() {
 }
 function renderChart() {
   if (S.view !== "map") return;
-  const svg = $("#chart"), W = svg.clientWidth || 350, H = 170, L = 34, R = 58, T = 8, B = 18, k = S.metric;
+  const svg = $("#chart"), W = svg.clientWidth || 350, H = svg.clientHeight || 170, L = 34, R = 58, T = 8, B = 18, k = S.metric;
   const seen = Math.max(1, ...M.civs.flatMap(p => M.series[p.index].slice(0, S.ti + 1).map(s => s[k])));
   const max = niceMax(seen * 1.05);
   const X = i => L + (W - L - R) * M.turns[i].turn / M.limit, Y = v => T + (H - T - B) * (1 - v / max);
@@ -1233,7 +1237,7 @@ function keys() {
 
 // A link pasted into the open page (only its #hash changed) takes it to the same view.
 addEventListener("hashchange", () => {
-  if (!M.ready) return;
+  if (!M.ready || STREAM) return;
   const before = {view: S.view, ti: S.ti, focus: S.focus, pov: S.pov, client: S.client.open};
   S.view = "map"; S.focus = null; S.pov = null; S.client = {open: false, seat: null, big: false};
   readHash();
@@ -1245,10 +1249,35 @@ addEventListener("hashchange", () => {
   renderClient();
 });
 
+// The stream's director, on a 90 s loop: the whole map (20 s), three agents in the spotlight (15 s each: the map flies
+// to the civ, its card shows its turn, and with the client its client view sits in the corner), then every agent's
+// panel (25 s). Once the game is over, the summary stays up.
+let shot = null;
+function direct() {
+  if (!STREAM || !M.ready) return;
+  const seats = M.seats.length ? M.seats : M.civs;
+  if (M.live?.game_over) {
+    if (shot !== "summary") { shot = "summary"; closeClient(); setView("summary"); }
+    return;
+  }
+  const now = Math.floor(Date.now() / 1000), loop = Math.floor(now / 90), t = now % 90;
+  let next, p = null;
+  if (t < 20) next = "overview";
+  else if (t < 65) { p = seats[(loop * 3 + Math.floor((t - 20) / 15)) % seats.length]; next = "agent:" + p.index; }
+  else next = "agents";
+  if (next === shot) return;
+  shot = next;
+  if (next === "agents") { closeClient(); setFocus(null); setView("agents"); return; }
+  if (S.view !== "map") setView("map");
+  if (next === "overview") { closeClient(); setFocus(null); S.userMoved = false; fitMap(); draw(); return; }
+  setFocus(p.index, {fly: true});
+  if (M.live?.client && p.seat != null) openClient(p.index); else closeClient();
+}
+
 function start() {
   P = new Painter(M);
   S.ti = M.last;
-  readHash();
+  if (STREAM) { S.kinds.delete("unit_lost"); setInterval(direct, 1000); } else readHash();
   $("#emptymsg").hidden = true;
   for (const id of ["#v-map", "#v-agents", "#v-summary"]) $(id).hidden = true;
   renderTop(); renderLayers(); renderMetrics(); renderKinds(); renderPovNote();

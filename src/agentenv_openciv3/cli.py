@@ -7,11 +7,14 @@ import re
 import shlex
 import subprocess
 import sys
+import time
+import urllib.request
 from pathlib import Path
 
 import click
 from agent_env.a2a_agent import A2AAgent
 from agent_env.artifact import DockerImageArtifact, FileArtifact
+from agent_env.config import get_config
 from agent_env.env import MCPServerEnv
 
 ENVIRONMENT_NAME = "openciv3"
@@ -23,6 +26,8 @@ PLAYERS = {  # A2A agent id: its directory under agents/, the CLI it plays with,
 }
 REPO = "https://github.com/earakely-scale/agentenv-openciv-plugin"
 ENV_PORT = re.compile(r":(\d+)->18765/tcp")
+STREAMER_IMAGE = "openciv3-streamer"
+STREAM_KEY = "OPENCIV3_STREAM_KEY"
 
 
 @click.group()
@@ -198,14 +203,78 @@ def _run_of(artifact_id: str) -> str:
 def watch(open_page: bool):
     """Print the live view of every OpenCiv3 env running in Docker, newest first: a page that follows the game while
     the agents play it."""
-    urls = []
-    for line in _docker("ps", "--format", "{{.Image}}\t{{.Ports}}\t{{.Names}}").splitlines():
-        image, ports, name = line.split("\t")
-        if "mcp-server-openciv3" in image and (port := ENV_PORT.search(ports)):
-            urls.append(f"http://127.0.0.1:{port[1]}/live")
-            click.echo(f"{urls[-1]}  ({name})")
-    if not urls:
+    views = _live_views()
+    for url, name in views:
+        click.echo(f"{url}  ({name})")
+    if not views:
         raise click.ClickException("no OpenCiv3 env is running; agent-env run starts one, e.g. "
                                    "agent-env run openciv3 --task three-agents-quick")
     if open_page:
-        click.launch(urls[0])
+        click.launch(views[0][0])
+
+
+def _live_views() -> list[tuple[str, str]]:
+    """The live view of each OpenCiv3 env running in Docker, newest first, with its container's name."""
+    views = []
+    for line in _docker("ps", "--format", "{{.Image}}\t{{.Ports}}\t{{.Names}}").splitlines():
+        image, ports, name = line.split("\t")
+        if "mcp-server-openciv3" in image and (port := ENV_PORT.search(ports)):
+            views.append((f"http://127.0.0.1:{port[1]}/live", name))
+    return views
+
+
+def _playing(url: str) -> bool:
+    """Whether the env behind a live view answers and its game is under way."""
+    try:
+        with urllib.request.urlopen(f"{url}/state.json", timeout=5) as r:
+            return not json.load(r).get("game_over")
+    except (OSError, ValueError):
+        return False
+
+
+@openciv3.command()
+@click.option("--url", help="The live view to stream. Default: the newest OpenCiv3 env in Docker whose game is under "
+                            "way; the command waits for one to start.")
+@click.option("--server", default="rtmp://live.twitch.tv/app", show_default=True,
+              help="The RTMP ingest server; the stream key is appended to it.")
+@click.option("--key-secret", default=STREAM_KEY, show_default=True,
+              help="The secret that holds the stream key, from agent-env's secret store ([stores.secret] in "
+                   ".agentenv/config.toml, or an environment variable of that name).")
+@click.option("--size", default="1920x1080", show_default=True, help="The stream's resolution.")
+@click.option("--fps", default=30, show_default=True)
+@click.option("--bitrate", default="4500k", show_default=True)
+@click.option("--linger", default=60, show_default=True, help="Seconds to keep streaming the final standings.")
+@click.option("--test", "bandwidth_test", is_flag=True,
+              help="Send to Twitch without going live (its bandwidth test): the stream shows only in Twitch Inspector.")
+@click.option("--source", type=click.Path(exists=True, file_okay=False, path_type=Path),
+              help="Checkout to build the streamer image from when it isn't built yet.")
+def stream(url: str | None, server: str, key_secret: str, size: str, fps: int, bitrate: str, linger: int,
+           bandwidth_test: bool, source: Path | None):
+    """Stream a game's live view to Twitch, or any RTMP server, while the agents play it. A headless browser in Docker
+    shows the page and ffmpeg sends it; the stream starts with the game and ends after GAME OVER."""
+    key = get_config().get_secret_store().get(key_secret)
+    if not key:
+        raise click.ClickException(f"no stream key: store your Twitch stream key as the secret {key_secret}, e.g. a "
+                                   f"line '{key_secret}: <key>' in the secrets file .agentenv/config.toml names, or "
+                                   f"export {key_secret}")
+    if subprocess.run(["docker", "image", "inspect", STREAMER_IMAGE], capture_output=True).returncode:
+        context = _checkout(source) / "streamer"
+        click.echo(f"Building {STREAMER_IMAGE} from {context}")
+        if subprocess.run(["docker", "build", "-t", STREAMER_IMAGE, str(context)]).returncode:
+            raise click.ClickException("docker build of the streamer failed")
+    if url is None:
+        click.echo("Waiting for an OpenCiv3 game to start (agent-env run openciv3 --task ...)")
+        while (url := next((u for u, _ in _live_views() if _playing(u)), None)) is None:
+            time.sleep(5)
+    if sys.platform == "darwin":
+        network, page = [], url.replace("127.0.0.1", "host.docker.internal")
+    else:
+        network, page = ["--network", "host"], url
+    target = f"{server.rstrip('/')}/{key}" + ("?bandwidthtest=true" if bandwidth_test else "")
+    test = " as a bandwidth test (not live; see Twitch Inspector)" if bandwidth_test else ""
+    click.echo(f"Streaming {url} to {server.rstrip('/')}/<stream key>{test}; Ctrl-C ends the stream")
+    cmd = ["docker", "run", "--rm", "--shm-size", "1g", *network, "-e", "STREAM_URL", STREAMER_IMAGE,
+           "--url", page, "--size", size, "--fps", str(fps), "--bitrate", bitrate, "--linger", str(linger)]
+    code = subprocess.run(cmd, env={**os.environ, "STREAM_URL": target}).returncode
+    if code:
+        raise click.ClickException(f"the stream ended with an error ({code})")

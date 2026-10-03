@@ -1,12 +1,17 @@
+import importlib.util
 import shlex
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import click
 from agent_env.artifact import FileArtifact
 from click.testing import CliRunner
 
+from agentenv_openciv3 import cli
 from agentenv_openciv3.cli import _check_bridge, openciv3
+
+STREAMER = Path(__file__).resolve().parents[2] / "streamer" / "stream.py"
 
 FAKE_BRIDGE = Path(__file__).resolve().parents[1] / "env" / "fake_bridge.py"
 
@@ -92,3 +97,46 @@ def test_watch_prints_the_live_view_of_each_running_env(tmp_path, monkeypatch):
     result = CliRunner().invoke(openciv3, ["watch"])
     assert result.exit_code == 1
     assert "no OpenCiv3 env is running; agent-env run starts one" in result.output
+
+
+def _secrets(monkeypatch, **secrets):
+    store = SimpleNamespace(get=secrets.get)
+    monkeypatch.setattr(cli, "get_config", lambda: SimpleNamespace(get_secret_store=lambda: store))
+
+
+def test_stream_needs_a_stream_key(monkeypatch):
+    _secrets(monkeypatch)
+    result = CliRunner().invoke(openciv3, ["stream"])
+    assert result.exit_code == 1 and "store your Twitch stream key as the secret OPENCIV3_STREAM_KEY" in result.output
+
+
+def test_stream_sends_the_newest_game_under_way_without_showing_the_key(tmp_path, monkeypatch):
+    _secrets(monkeypatch, OPENCIV3_STREAM_KEY="live_123_secret")
+    (tmp_path / "ps.txt").write_text("mcp-server-openciv3\t127.0.0.1:41000->18765/tcp\tagent-local-old\n"
+                                     "mcp-server-openciv3\t127.0.0.1:42000->18765/tcp\tagent-local-new\n")
+    log = tmp_path / "docker.log"
+    fake_docker(tmp_path, monkeypatch, f'  "ps --format") cat {tmp_path / "ps.txt"} ;;\n'
+                                       f'  "image inspect") ;;\n'
+                                       f'  "run --rm") echo "$@" > {log}; echo "$STREAM_URL" >> {log} ;;\n')
+    monkeypatch.setattr(cli, "_playing", lambda url: "42000" in url)
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    result = CliRunner().invoke(openciv3, ["stream", "--linger", "30"])
+    assert result.exit_code == 0, result.output
+    assert "live_123_secret" not in result.output
+    args, url = log.read_text().splitlines()
+    assert "--network host -e STREAM_URL openciv3-streamer --url http://127.0.0.1:42000/live" in args
+    assert "live_123_secret" not in args and args.endswith("--linger 30")
+    assert url == "rtmp://live.twitch.tv/app/live_123_secret"
+    assert CliRunner().invoke(openciv3, ["stream", "--test"]).exit_code == 0
+    assert log.read_text().splitlines()[1] == "rtmp://live.twitch.tv/app/live_123_secret?bandwidthtest=true"
+
+
+def test_the_streamer_hides_the_key_and_ends_after_the_game():
+    spec = importlib.util.spec_from_file_location("streamer", STREAMER)
+    streamer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(streamer)
+    assert streamer.redacted("Error writing to rtmp://x/app/live_9?bandwidthtest=true: broken pipe", "live_9") == (
+        "Error writing to rtmp://x/app/<stream key>?bandwidthtest=true: broken pipe")
+    assert not streamer.stop_at(None, None, 60, 1000)
+    assert not streamer.stop_at(950, None, 60, 1000) and streamer.stop_at(940, None, 60, 1000)
+    assert not streamer.stop_at(None, 945, 60, 1000) and streamer.stop_at(None, 940, 60, 1000)
