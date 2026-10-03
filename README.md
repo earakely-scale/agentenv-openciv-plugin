@@ -17,6 +17,7 @@ won with 40 cities, ahead of Opus 5.5 and Sonnet 5.5 (Claude Code); see [Results
 ([video](docs/media/frontier.mp4), [the task](src/agentenv_openciv3/bundles/openciv3/tasks/frontier.json)).*
 
 **Contents:** [Run it yourself](#run-it-yourself) · [Watch it live](#watch-it-live) ·
+[Play alongside the agents](#play-alongside-the-agents) ·
 [How a match is built](#how-a-match-is-built) · [Built on the AgentEnv Framework](#built-on-the-agentenv-framework) ·
 [The tools](#the-environments-tools) · [The player agents](#the-player-agents) · [Grading](#grading) ·
 [Results](#results) · [Contributing](#contributing)
@@ -74,6 +75,8 @@ Then, from the checkout (`cd agentenv-openciv-plugin`), play any task in the bun
 | `three-agents-quick` | the same match | Small, 10 | 3 min, $0.30 |
 | **`frontier`** | nine models from five labs: Claude, GPT, Gemini, Grok, Kimi (the flagship) | Standard, 200 | 1 h 52 min, about $80 |
 | `frontier-quick` | the same match | Standard, 10 | 8 min, $1.70 |
+| `human-vs-ai` | you, in the browser, against 3 AI civs ([play alongside](#play-alongside-the-agents)) | Small, 100 | as long as you play, free |
+| `human-vs-agents` | you against Opus (Claude Code) and GPT-5.6 Sol (Codex); Sol needs a LiteLLM proxy, as `frontier` | Small, 100 | as long as you play |
 
 ```bash
 agent-env run openciv3 --task three-agents     # graded, recorded; prints the instance id
@@ -182,6 +185,33 @@ When the game ends, its recording is saved with the run:
 
 `agent-env openciv3 recordings` lists them and copies them out ([docs/recording.md](docs/recording.md),
 [docs/viewer.md](docs/viewer.md)).
+
+## Play alongside the agents
+
+A match can seat people too: you play a civilization in the browser while the agents play theirs, under the same
+rules. Your moves go through the same env calls as an agent's tools, so they show in the live view, the action log and
+the recording like any seat's.
+
+```bash
+agent-env run openciv3 --task human-vs-ai       # you (Rome) against 3 AI civs, Small map, 100 turns; no model needed
+agent-env run openciv3 --task human-vs-agents   # you against Opus (Claude Code) and GPT-5.6 Sol (Codex)
+```
+
+When the game starts, the run prints your link, which is your seat: whoever opens it plays that civ.
+
+```
+PLAY Rome (you): http://127.0.0.1:49293/play#token=3f2a...
+```
+
+From another terminal, `agent-env openciv3 play --open` finds the links of every running game and opens the first.
+The page is the game as your civilization sees it: the map under your fog of war, the real game's controls and
+hotkeys, the city screen, the advisors, and end turn. The agents wait for you to end each turn; a seat idle for 15
+minutes while others wait has its turn ended for it (`human_turn_seconds` in the task's `openciv3_match` step). The
+task waits for the game to end (`openciv3_await_game`), then grades it and saves the recording.
+
+To seat yourself in any match, add `"humans": {"you": "Rome"}` to its `openciv3_match` step and an
+`openciv3_await_game` step that grading and the recording depend on. [docs/play.md](docs/play.md) has the details.
+On a remote machine, forward the port as for the live view.
 
 ## How a match is built
 

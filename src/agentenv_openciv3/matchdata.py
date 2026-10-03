@@ -53,6 +53,17 @@ def is_barbarian(p: dict) -> bool:
     return "barbarian" in str(p.get("civ", "")).lower()
 
 
+def player_colors(players: Iterable[dict]) -> dict[int, str]:
+    """Each player's colour by index, as the viewer gives them: the palette in order over the players that are not
+    barbarians (in the order given, the players' index order), barbarians grey."""
+    out, slot = {}, 0
+    for p in players:
+        barb = is_barbarian(p)
+        out[p["index"]] = BARBARIAN if barb else PALETTE[slot % len(PALETTE)]
+        slot += not barb
+    return out
+
+
 def seam(snap: dict) -> int:
     """An even x column with the least land around it: drawn as the left edge, no continent is cut in two."""
     w = snap["map"]["width"]

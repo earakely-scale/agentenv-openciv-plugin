@@ -6,6 +6,8 @@ docs/recording.md exactly. Flags: --record <dir>, --autosave <dir>, --saves <dir
 Test hooks: FAKE_BRIDGE_STDERR_KB (log noise before ready), FAKE_BRIDGE_STDOUT_NOISE (a stray non-JSON
 line), FAKE_BRIDGE_CRASH_ON (a command that kills the process), and the commands `_sleep`, `_big`,
 `_crash`, `_city` (overwrite city fields) and `_game` (overwrite game attributes).
+Seats (new_game `seats`, each an opponent civ) share the one scripted game: every seat sees and orders the same
+units and cities; only `end_turn` is per seat (it waits for every seat, as protocol.md's Seats section says).
 """
 
 from __future__ import annotations
@@ -131,6 +133,11 @@ class Game:
         self.turn_limit = args.get("turn_limit", 60)
         self.civ = args.get("civ", "Rome")
         self.opponents = CIVS[: args.get("opponents", 3)]
+        self.seats = [self.civ, *(args.get("seats") or [])]
+        self.labels = dict(args.get("labels") or {})
+        if unknown := [c for c in self.seats[1:] if c not in self.opponents]:
+            raise Refused("bad_args", f"seats {unknown} are not opponents.", self.opponents)
+        self.ready = set()
         self.turn = 1
         self.units = {}
         self.next_unit = self.next_city = 1
@@ -688,6 +695,16 @@ class Game:
         blockers = self.blockers()
         if blockers and not a.get("skip_idle"):
             return {"blocked": True, "blockers": blockers}
+        if len(self.seats) > 1:
+            self.ready.add(a.get("seat", self.civ))
+            if waiting := [c for c in self.seats if c not in self.ready]:
+                return {"blocked": False, "turns_advanced": 0, "turn": self.turn, "waiting_for": waiting}
+            self.ready.clear()
+            res = self._advance({}, on_turn)
+            return {"turn": self.turn, "seats": {c: dict(res) for c in self.seats}}
+        return self._advance(a, on_turn)
+
+    def _advance(self, a, on_turn) -> dict:
         max_turns = min(a.get("max_turns", 1), 20) if a.get("until_attention") else 1
         events, auto, n = [], [], 0
         while True:
@@ -761,12 +778,51 @@ class Game:
             units.append({"id": 1000, "x": b[0], "y": b[1], "owner": len(civs) - 1, "type": "Warrior"})
         return {"schema": 2, "turn": self.turn, "turn_limit": self.turn_limit, "seed": self.seed,
                 "map": {"width": WIDTH, "height": HEIGHT, "wrap_x": True},
-                "seats": [{"index": 0, "civ": self.civ, "label": None}], "players": players, "tiles": tiles,
+                "seats": [{"index": index[c], "civ": c, "label": self.labels.get(c)} for c in self.seats],
+                "players": players, "tiles": tiles,
                 "cities": cities, "units": units, "events": list(self.last_events)}
 
+    def known_map(self, a) -> dict:
+        """docs/play.md section 3: the explored tiles, the cities on them and the units on visible ones. The seat
+        asking owns the scripted game's units and cities (every seat plays the same ones)."""
+        me = a.get("seat", self.civ)
+        civs = [self.civ, *self.opponents, "Barbarians"]
+        mine = civs.index(me)
+        visible = {p for u in self.units.values() for p in area(u["pos"], 2)} | \
+                  {p for ci in self.cities.values() for p in area(ci["pos"], 2)}
+        athens = self.foreign_city["pos"]
+        greece = civs.index("Greece") if "Greece" in civs else -1
+        tiles = []
+        for p in sorted(self.explored, key=lambda q: (q[1], q[0])):
+            if not on_map(p):
+                continue
+            over = OVERLAY.get(p)
+            owner = mine if self.owned(p) else greece if dist(p, athens) <= 1 else -1
+            tiles.append([p[0], p[1], terrain(*p).lower(), over.lower() if over else None, int(p in RIVER), owner,
+                          int(p in visible), RESOURCES.get(p), []])
+        cities = [{"x": c["pos"][0], "y": c["pos"][1], "name": c["name"], "owner": mine, "size": c["size"],
+                   "capital": "Palace" in c["buildings"], "id": c["id"], "producing": c["producing"],
+                   "turns_to_complete": self.city_view(c)["turns_to_complete"],
+                   "turns_to_grow": self.city_view(c)["turns_to_grow"]} for c in self.cities.values()]
+        if athens in self.explored:
+            cities.append({"x": athens[0], "y": athens[1], "name": "Athens", "owner": greece, "size": 2,
+                           "capital": True})
+        units = [{"x": u["pos"][0], "y": u["pos"][1], "owner": mine, "type": u["type"], "count": 1, "id": u["id"]}
+                 for u in self.units.values()]
+        if (b := self.barbarian()) and b in visible:
+            units.append({"x": b[0], "y": b[1], "owner": len(civs) - 1, "type": "Warrior", "count": 1})
+        return {"turn": self.turn, "width": WIDTH, "height": HEIGHT, "wrap_x": True,
+                "players": [{"index": i, "civ": c, "barbarian": c == "Barbarians", "me": i == mine}
+                            for i, c in enumerate(civs)],
+                "tiles": tiles, "cities": cities, "units": units}
+
     def handle(self, cmd, a, on_turn) -> dict:
+        if a.get("seat", self.civ) not in self.seats:
+            raise Refused("unknown_seat", f"{a['seat']!r} is not a seat.", self.seats)
         if cmd == "state":
             return self.state()
+        if cmd == "known_map":
+            return self.known_map(a)
         if cmd == "map":
             return self.map(a)
         if cmd == "world":
@@ -907,8 +963,9 @@ def main():
                 json.dump({"format": 1, "bridge": {}, "game": {"turn": game.turn}}, f)
 
     def started():
+        seats = {"seats": [{"civ": c, "label": game.labels.get(c)} for c in game.seats]} if len(game.seats) > 1 else {}
         return {"turn": game.turn, "turn_limit": game.turn_limit, "seed": game.seed, "civ": game.civ,
-                "opponents": game.opponents, "map": {"width": WIDTH, "height": HEIGHT, "wrap_x": True}}
+                "opponents": game.opponents, "map": {"width": WIDTH, "height": HEIGHT, "wrap_x": True}, **seats}
 
     for line in sys.stdin:
         req = json.loads(line)

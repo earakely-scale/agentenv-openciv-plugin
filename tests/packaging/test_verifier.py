@@ -166,6 +166,23 @@ def test_an_unfinished_match_a_failed_engine_or_a_sat_out_agent_does_not_count()
     assert score(sat_out) == 0.0
 
 
+def test_a_human_seat_is_ranked_like_an_agent_but_its_idle_turns_are_not_gated():
+    s = match_summary(auto_ended=(0, 2, 60))
+    for seat in s["seats"]:
+        seat["human"] = seat["civ"] == "Egypt"
+    rows = victor_verifier.grade(s)
+    assert [(p["civ"], p["human"]) for p in rows[0]["standings"]] == [
+        ("Greece", False), ("Rome", False), ("Egypt", True)]
+    assert [r["human"] for r in rows[1:4]] == [False, False, True]
+    assert (rows[-1]["result"], rows[-1]["auto_ended_turns"], rows[-1]["human_auto_ended_turns"]) == (
+        True, {"Rome": 0, "Greece": 2}, {"Egypt": 60})
+    assert score(rows) == 1.0
+    won = match_summary(totals=(700, 900, 1200))
+    won["seats"][2]["human"] = True
+    rows = victor_verifier.grade(won)
+    assert (rows[0]["victor"], rows[0]["civ"]) == ("Haiku", "Egypt")
+
+
 @pytest.mark.anyio
 async def test_a_victor_verifier_env_that_cannot_report_is_a_failed_grade():
     rows = await victor_verifier.verify("http://127.0.0.1:9/mcp")

@@ -422,6 +422,7 @@ def _scripted_game(b: Bridge, observe: bool) -> list:
             b.call("techs")
             b.call("city", city="c1")
             b.call("score")
+            b.call("known_map")
         b.call("end_turn", skip_idle=True)
     b.call("autoplay", turns=15, policy="engine_ai")
     return [b.call("state"), b.call("score"), b.call("map", x=30, y=30, radius=8)]
@@ -607,6 +608,91 @@ def test_world_snapshot_schema_2(launch, tmp_path):
     assert (trail[-1]["x"], trail[-1]["y"]) == (unit(state, "u2")["x"], unit(state, "u2")["y"])
 
 
+def check_known_map(km: dict, world: dict, state: dict, k: int = 0) -> None:
+    """known_map for seats[k] against the world snapshot (which sees through the fog) and the seat's own state."""
+    me = world["seats"][k]["index"]
+    assert list(km) == ["turn", "width", "height", "wrap_x", "players", "tiles", "cities", "units"]
+    assert (km["turn"], km["width"], km["height"], km["wrap_x"]) == (
+        world["turn"], world["map"]["width"], world["map"]["height"], world["map"]["wrap_x"])
+    assert km["players"] == [{"index": p["index"], "civ": p["civ"], "barbarian": p["civ"] == "Barbarians",
+                              "me": p["index"] == me} for p in world["players"]]
+
+    # Every tile the seat knows and nothing else; terrain, overlay, river and owner as in the snapshot.
+    rows = {(r[0], r[1]): r for r in world["tiles"]}
+    known = {xy for xy, r in rows.items() if r[6] >> k & 1}
+    assert {(t[0], t[1]) for t in km["tiles"]} == known and len(km["tiles"]) == len(known)
+    for x, y, terrain, overlay, river, owner, visible, resource, improvements in km["tiles"]:
+        w = rows[x, y]
+        assert (terrain, overlay, owner, river) == (w[2], w[3], w[4], w[5])
+        assert visible in (0, 1) and (resource is None or isinstance(resource, str))
+        assert all(isinstance(i, str) and i != "barbarianCamp" for i in improvements)
+    visible = {(t[0], t[1]) for t in km["tiles"] if t[6]}
+    assert visible and visible < known, "after exploring, some known tiles should be out of sight"
+
+    # Cities on known tiles; the seat's own carry its ids and plans, as in state.
+    own_cities = {c["id"]: c for c in state["cities"]}
+    expected = [{k_: c[k_] for k_ in ("x", "y", "name", "owner", "size", "capital")}
+                for c in world["cities"] if (c["x"], c["y"]) in known]
+    base = [{k_: c[k_] for k_ in ("x", "y", "name", "owner", "size", "capital")} for c in km["cities"]]
+    assert sorted(base, key=lambda c: (c["x"], c["y"])) == sorted(expected, key=lambda c: (c["x"], c["y"]))
+    for c in km["cities"]:
+        if c["owner"] != me:
+            assert set(c) == {"x", "y", "name", "owner", "size", "capital"}
+            continue
+        mine = own_cities.pop(c["id"])
+        assert (c["name"], c["x"], c["y"], c["size"]) == (mine["name"], mine["x"], mine["y"], mine["size"])
+        assert (c["producing"], c["turns_to_complete"], c["turns_to_grow"]) == (
+            mine["producing"], mine["turns_to_complete"], mine["turns_to_grow"])
+    assert own_cities == {}
+
+    # Units on visible tiles only: the seat's own one by one with ids, everyone else's counted by owner and type.
+    assert all((u["x"], u["y"]) in visible for u in km["units"])
+    own = [u for u in km["units"] if u["owner"] == me]
+    assert all(u["count"] == 1 for u in own)
+    assert sorted((u["id"], u["type"], u["x"], u["y"]) for u in own) == sorted(
+        (u["id"], u["type"], u["x"], u["y"]) for u in state["units"])
+    foreign = [u for u in km["units"] if u["owner"] != me]
+    assert all(set(u) == {"x", "y", "owner", "type", "count"} for u in foreign)
+    groups = {}
+    for u in world["units"]:
+        if u["owner"] != me and (u["x"], u["y"]) in visible:
+            key = (u["x"], u["y"], u["owner"], u["type"])
+            groups[key] = groups.get(key, 0) + 1
+    assert {(u["x"], u["y"], u["owner"], u["type"]): u["count"] for u in foreign} == groups
+    assert len(foreign) == len(groups)
+
+
+def test_known_map_draws_what_the_seat_knows(launch):
+    b = launch()
+    b.call("new_game", seed=SEED, turn_limit=100)
+    start = b.call("known_map")
+    assert start["turn"] == 0 and start["cities"] == [] and all(t[6] == 1 for t in start["tiles"])
+    assert [(u["id"], u["type"], u["count"]) for u in start["units"]] == [("u1", "Settler", 1), ("u2", "Worker", 1)]
+    found_capital(b)
+    b.call("set_production", city="c1", item="Warrior")
+    b.call("unit_order", unit="u2", order="explore")
+    for _ in range(3):
+        b.call("end_turn", skip_idle=True)
+    km = b.call("known_map")
+    check_known_map(km, b.call("world"), b.call("state"))
+    [city] = km["cities"]
+    assert city["id"] == "c1" and city["producing"] == "Warrior" and city["capital"]
+    assert any(t[5] == city["owner"] for t in km["tiles"]), "the capital's borders are known"
+
+    # Later, with neighbours met: foreign cities and units show (theirs without ids), still only what is known.
+    me = next(p["index"] for p in km["players"] if p["me"])
+    for _ in range(8):
+        b.call("autoplay", turns=10, policy="engine_ai")
+        km = b.call("known_map")
+        check_known_map(km, b.call("world"), b.call("state"))
+        if any(c["owner"] != me for c in km["cities"]) and any(u["owner"] != me for u in km["units"]):
+            break
+    else:
+        pytest.fail("no foreign city and unit in sight by T83")
+    assert len(km["tiles"]) < km["width"] * km["height"] // 2
+    assert b.call("known_map") == km
+
+
 def test_watchdog_answers_timeout_and_exits(launch):
     b = launch("--timeout", "0.05")
     reply = b.send("new_game", seed=SEED)
@@ -696,6 +782,30 @@ def test_seat_snapshots_know_tiles_per_seat(launch, tmp_path):
         area = {((city["x"] + dx) % width if wrap else city["x"] + dx, city["y"] + dy)
                 for dx in range(-8, 9) for dy in range(-8, 9) if (dx + dy) % 2 == 0 and abs(dx) + abs(dy) <= 8} & tiles
         assert seen and seen == area & known[k]
+
+
+def test_known_map_per_seat(launch):
+    b = seat_game(launch)
+    for civ in SEATS:
+        b.call("unit_order", seat=civ, unit="u1", order="found_city")
+        b.call("set_production", seat=civ, city="c1", item="Warrior")
+        b.call("unit_order", seat=civ, unit="u2", order="explore")
+    for _ in range(3):
+        end_round(b)
+    world = b.call("world")
+    maps = {civ: b.call("known_map", seat=civ) for civ in SEATS}
+    assert b.call("known_map") == maps["Rome"]
+    for k, civ in enumerate(SEATS):
+        km = maps[civ]
+        check_known_map(km, world, b.call("state", seat=civ), k)
+        assert [p["civ"] for p in km["players"] if p["me"]] == [civ]
+        me = next(p["index"] for p in km["players"] if p["me"])
+        # Ids are this seat's own: only on its units and cities, and they are u1, c1, ... like every seat's.
+        assert all(("id" in u) == (u["owner"] == me) for u in km["units"])
+        assert all(("id" in c) == (c["owner"] == me) for c in km["cities"])
+        assert [c["id"] for c in km["cities"] if "id" in c] == ["c1"]
+    tiles = [frozenset((t[0], t[1]) for t in maps[civ]["tiles"]) for civ in SEATS]
+    assert len(set(tiles)) == len(SEATS)
 
 
 def test_new_game_seats_must_fit_the_opponents(launch):

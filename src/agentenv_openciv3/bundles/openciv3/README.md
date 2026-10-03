@@ -60,6 +60,16 @@ in parallel: the outcome verifier and `save_env_recording`.
   names the player agent for its model with `a2a_agent_id`: Codex plays the GPT models, Gemini CLI plays Gemini,
   and Claude Code plays the rest (Grok and Kimi through a LiteLLM proxy). Each agent starts a fresh session every
   40 turns. `frontier-quick` is the same match in 10 turns.
+- `human-vs-ai` and `human-vs-agents` seat you: you play Rome in the browser, on a Small map for 100 turns, against
+  3 AI civilizations (`human-vs-ai`) or against Opus (Claude Code, Greece) and GPT-5.6 Sol (Codex, America)
+  (`human-vs-agents`). The `openciv3_match` step's `humans` names each person and their civ, and the step logs one
+  play link per person, `PLAY Rome (you): http://127.0.0.1:<port>/play#token=...`; `agent-env openciv3 play --open`
+  finds it again. `human_turn_seconds` (900) is how long a human seat may sit idle while the agents wait before the
+  env ends its turn. Since no `prompt_agent` step plays your seat, `openciv3_await_game` waits for the game to end
+  (polling `data/get`, logging the turn) and grading and the recording depend on it. `human-vs-ai` is graded by the
+  full-game verifier (your score against the engine's own AI in your seat, your rank, your share of the world);
+  `human-vs-agents` by the victor verifier, which ranks you like an agent but doesn't hold your idle turns against
+  the match. See [docs/play.md](https://github.com/earakely-scale/agentenv-openciv-plugin/blob/main/docs/play.md).
 
 **The player agents.** The repository ships three A2A agents for these tasks, one per coding-agent CLI, over one
 game loop (`agents/common`):

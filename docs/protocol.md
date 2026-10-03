@@ -124,6 +124,33 @@ explored are returned. Result:
 units on visible tiles; `id` is present for the player's own units. `resource` is null unless the
 player knows about it.
 
+### `known_map`
+Args: none. Everything the seat knows of the world, for drawing it (the play page polls it after every action, so
+it is one cheap pass over the map: no yields or city-site checks). Result:
+
+```json
+{"turn": 12, "width": 60, "height": 60, "wrap_x": true,
+ "players": [{"index": 0, "civ": "Barbarians", "barbarian": true, "me": false},
+             {"index": 1, "civ": "Rome", "barbarian": false, "me": true}],
+ "tiles": [[13, 9, "grassland", "forest", 1, 1, 1, "Wheat", ["road"]]],
+ "cities": [{"x": 12, "y": 10, "name": "Rome", "owner": 1, "size": 3, "capital": true,
+             "id": "c1", "producing": "Settler", "turns_to_complete": 6, "turns_to_grow": 4}],
+ "units": [{"x": 12, "y": 10, "owner": 1, "type": "Warrior", "count": 1, "id": "u2"},
+           {"x": 14, "y": 10, "owner": 0, "type": "Horseman", "count": 2}]}
+```
+
+- `tiles` has one row per tile the seat knows, and none for the rest: `[x, y, terrain, overlay, river, owner,
+  visible, resource, improvements]`. `terrain` and `overlay` are the engine's lower-case keys, as in the world
+  snapshot (`overlay` null when it is the base terrain); `river` and `visible` are 0 or 1; `owner` is the index
+  of the player whose borders hold the tile, or -1; `resource` is null unless the seat knows about it (as in
+  `map`); `improvements` are as in `map` (`road`, `mine`, `barbarian_camp`, ...).
+- `players` lists every player, barbarians included; `owner` everywhere is an index into it, the same index as
+  the world snapshot's, and `me` marks the seat.
+- `cities` are the cities on known tiles. The seat's own also carry its `id`, `producing`, `turns_to_complete`
+  and `turns_to_grow`, as in `state`.
+- `units` are on visible tiles only: the seat's own one per unit with its `id` and `count` 1, everyone else's
+  counted per tile, owner and type.
+
 ### `city_sites`
 Args: `unit` (a Settler id; default: the first settler, else the capital), `top` (default 5).
 Result: `{"origin": {"x", "y"}, "sites": [{"x", "y", "score", "dist", "dir", "turns", "terrain",

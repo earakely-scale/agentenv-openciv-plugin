@@ -1,0 +1,119 @@
+[
+  {
+    "id": "deploy",
+    "type": "deploy_env",
+    "env_id": "openciv3",
+    "ttl_seconds": 43200
+  },
+  {
+    "id": "agent-opus",
+    "type": "deploy_agent",
+    "agent_name": "opus",
+    "a2a_agent_id": "openciv3-claude",
+    "env_ids": [
+      "openciv3"
+    ],
+    "env_vars": {
+      "OPENCIV3_SESSION_TURNS": "40"
+    },
+    "ttl_seconds": 43200,
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "agent-sol",
+    "type": "deploy_agent",
+    "agent_name": "sol",
+    "a2a_agent_id": "openciv3-codex",
+    "env_ids": [
+      "openciv3"
+    ],
+    "env_vars": {
+      "OPENCIV3_SESSION_TURNS": "40"
+    },
+    "ttl_seconds": 43200,
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "match",
+    "type": "openciv3_match",
+    "env_id": "openciv3",
+    "turns": 100,
+    "size": "Small",
+    "civs": {
+      "opus": "Greece",
+      "sol": "America"
+    },
+    "humans": {
+      "you": "Rome"
+    },
+    "human_turn_seconds": 900,
+    "depends_on": [
+      "agent-opus",
+      "agent-sol"
+    ]
+  },
+  {
+    "id": "await",
+    "type": "openciv3_await_game",
+    "env_id": "openciv3",
+    "timeout_seconds": 36000,
+    "fail_task_on_error": false,
+    "depends_on": [
+      "match"
+    ]
+  },
+  {
+    "id": "opus",
+    "type": "prompt_agent",
+    "agent_name": "opus",
+    "model": "anthropic/claude-opus-5-5",
+    "prompt_id": "opus",
+    "timeout_seconds": 36000,
+    "fail_task_on_error": false,
+    "depends_on": [
+      "match"
+    ],
+    "prompt": "You lead a civilization in a game of OpenCiv3, an open-source Civilization III remake, against other players: AI agents and a person playing in the browser. Play to win. The get_turn_brief tool shows your civilization, your rivals, the match's rules and what needs orders; you act only through the openciv3 tools. The person may take several minutes over a turn, so end_turn can wait a while. Nobody will answer questions, so never ask or wait for confirmation. Keep playing until the end_turn tool reports GAME OVER, then reply with your final result."
+  },
+  {
+    "id": "sol",
+    "type": "prompt_agent",
+    "agent_name": "sol",
+    "model": "openai/gpt-5.6-sol",
+    "prompt_id": "sol",
+    "timeout_seconds": 36000,
+    "fail_task_on_error": false,
+    "depends_on": [
+      "match"
+    ],
+    "prompt": "You lead a civilization in a game of OpenCiv3, an open-source Civilization III remake, against other players: AI agents and a person playing in the browser. Play to win. The get_turn_brief tool shows your civilization, your rivals, the match's rules and what needs orders; you act only through the openciv3 tools. The person may take several minutes over a turn, so end_turn can wait a while. Nobody will answer questions, so never ask or wait for confirmation. Keep playing until the end_turn tool reports GAME OVER, then reply with your final result."
+  },
+  {
+    "id": "grade",
+    "type": "env_outcome_verifier",
+    "env_id": "openciv3",
+    "file_artifact_id": "victor-verifier",
+    "verifier_id": "victor",
+    "score_aggregator": "weighted_average",
+    "depends_on": [
+      "await",
+      "opus",
+      "sol"
+    ]
+  },
+  {
+    "id": "recording",
+    "type": "save_env_recording",
+    "env_id": "openciv3",
+    "timeout_seconds": 1200,
+    "depends_on": [
+      "await",
+      "opus",
+      "sol"
+    ]
+  }
+]

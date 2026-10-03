@@ -14,7 +14,7 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 	public const int MaxTurnLimit = 1000;
 
 	static readonly string[] Commands = [
-		"new_game", "load", "state", "map", "city_sites", "unit_order", "city", "set_production", "set_rates", "hurry",
+		"new_game", "load", "state", "map", "known_map", "city_sites", "unit_order", "city", "set_production", "set_rates", "hurry",
 		"techs", "set_research", "end_turn", "autoplay", "score", "world", "revolution", "diplomacy", "declare_war", "propose_peace",
 	];
 	static readonly string[] Policies = ["null", "found_capital", "settler_bot", "engine_ai"];
@@ -47,6 +47,7 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 		return cmd switch {
 			"state" => State(),
 			"map" => Map(a),
+			"known_map" => KnownMap(),
 			"city_sites" => CitySites(a),
 			"unit_order" => await UnitOrder(a),
 			"city" => CityInfo(a),

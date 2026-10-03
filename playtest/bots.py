@@ -2,6 +2,7 @@
 
     .venv/bin/python playtest/bots.py --out /tmp/match-9                     # 9 seats, Standard map, 200 turns
     .venv/bin/python playtest/bots.py --seats 3 --turns 30 --out /tmp/match-3 --fast
+    .venv/bin/python playtest/bots.py --seats 2 --humans Rome=you --turns 50     # you play Rome in the browser
 
 Starts the env locally (no Docker) on a copy of the bridge, starts a match the way the `frontier` task does (the
 `urn:openciv3:new-game/v1` extension with civs, seats, labels, size and turn limit), and plays one asyncio task per
@@ -16,6 +17,10 @@ The output directory gets everything a viewer needs: record/ (the bridge's turn-
 engine's per-turn saves), autosave/, actions.jsonl (the env's action log, every seat) and actions/<label>.jsonl,
 summary.json (data/get at the end), bots.json (the bots' own counters and notable moves), server.log, bots.log, and
 match.json (seats, labels, seed, the live URL, timings and what happened: wars, peace, cities captured and razed).
+
+With --humans, those civs are human seats (docs/play.md): the bots leave them alone, and the script prints each one's
+play link (`PLAY Rome (you): http://.../play#token=...`) and writes them to play.json, for a person or a browser
+script (playtest/play_e2e.mjs) to play.
 """
 from __future__ import annotations
 
@@ -496,7 +501,7 @@ class Bot:
                     break
                 await self.end_turn()
                 stalls = stalls + 1 if self.turn == before else 0
-                if stalls > 20:
+                if stalls > 20 and not self.m.humans:     # a person may take their time
                     self.log("the turn has not advanced 20 times in a row; giving up", notable=True)
                     break
         finally:
@@ -1057,6 +1062,11 @@ class Match:
         self.proc: subprocess.Popen | None = None
         self.logf = None
         self.bots: list[Bot] = []
+        self.humans: dict[str, str] = {}        # civ -> label
+        if args.humans:
+            self.humans = dict(tuple(h.split("=", 1)) if "=" in h else (h, h.lower()) for h in args.humans.split(","))
+        self.play: dict[str, str] = {}          # civ -> play URL
+        self.over = False
 
     def log(self, line: str, echo: bool = True) -> None:
         if self.logf:
@@ -1069,7 +1079,7 @@ class Match:
         pairs = DEFAULT_SEATS
         if self.args.civs:
             pairs = [tuple(p.split("=", 1)) if "=" in p else (p, p.lower()) for p in self.args.civs.split(",")]
-        pairs = pairs[:self.args.seats]
+        pairs = [p for p in pairs if p[0] not in self.humans][:self.args.seats]
         kinds = dict(DEFAULT_PERSONALITIES)
         if self.args.personalities:
             kinds.update(dict(p.split("=", 1) for p in self.args.personalities.split(",")))
@@ -1144,7 +1154,8 @@ class Match:
         meta = {
             "seats": [{"civ": b.civ, "label": b.label, "personality": b.personality} for b in self.bots]
             or [{"civ": c, "label": la, "personality": k} for c, la, k in self.seats()],
-            "labels": {b.civ: b.label for b in self.bots},
+            "labels": {b.civ: b.label for b in self.bots} | self.humans,
+            "humans": self.humans, "play": self.play,
             "seed": self.args.seed, "size": self.args.size, "difficulty": self.args.difficulty,
             "barbarians": self.args.barbarians, "turn_limit": self.args.turns, "ai_opponents": self.args.ai_opponents,
             "live_url": self.live_url, "mcp_url": self.mcp_url, "port": self.port,
@@ -1161,22 +1172,29 @@ class Match:
         started = time.time()
         try:
             card = await self.wait_ready()
-            first, *others = seats
+            civs = [s[0] for s in seats] + list(self.humans)
             args = {"seed": self.args.seed, "size": self.args.size, "difficulty": self.args.difficulty,
-                    "barbarians": self.args.barbarians, "turn_limit": self.args.turns, "civ": first[0],
-                    "opponents": len(others) + self.args.ai_opponents, "seats": [s[0] for s in others],
-                    "labels": {s[0]: s[1] for s in seats}}
+                    "barbarians": self.args.barbarians, "turn_limit": self.args.turns, "civ": civs[0],
+                    "opponents": len(civs) - 1 + self.args.ai_opponents, "seats": civs[1:],
+                    "labels": {s[0]: s[1] for s in seats} | self.humans}
+            if self.humans:
+                args |= {"humans": list(self.humans), "human_turn_seconds": self.args.human_turn_seconds}
             game = await env_client.invoke_extension(self.base, card, NEW_GAME, args, 600)
+            self.play = {civ: self.base + path for civ, path in (game.get("play") or {}).items()}
             self.turn_limit, self.width = game["turn_limit"], game["map"]["width"] if game["map"].get("wrap_x") else 0
             self.log(f"{ts()} match: seed {game['seed']}, {self.args.size} map {game['map']['width']}x"
                      f"{game['map']['height']}, {len(seats)} seats, {self.turn_limit} turns")
             for civ, label, kind in seats:
                 self.log(f"         {label:>7} plays {civ} ({kind})")
+            for civ, url in self.play.items():
+                self.log(f"PLAY {civ} ({self.humans.get(civ, civ)}): {url}")
+            (self.out / "play.json").write_text(json.dumps(
+                {"live_url": self.live_url, "base": self.base, "humans": self.humans, "play": self.play}, indent=2))
             self.log(f"LIVE VIEW: {self.live_url}    (MCP: {self.mcp_url}; output: {self.out})")
             self.bots = [Bot(self, civ, label, kind, i) for i, (civ, label, kind) in enumerate(seats)]
             self.write_meta(started=datetime.datetime.fromtimestamp(started).isoformat(timespec="seconds"),
                             status="playing")
-            await asyncio.gather(*(b.play() for b in self.bots), self.progress())
+            await asyncio.gather(*(b.play() for b in self.bots), self.progress(), self.watch_game())
             elapsed = time.time() - started
             summary = {}
             with contextlib.suppress(Exception):
@@ -1196,10 +1214,25 @@ class Match:
             if self.logf:
                 self.logf.close()
 
+    async def watch_game(self) -> None:
+        """With no bot seats left playing (only people), the game's end comes from data/get."""
+        while not self.over:
+            await asyncio.sleep(2)
+            if self.bots and not all(b.over for b in self.bots):
+                continue
+            if not self.humans:
+                break
+            with contextlib.suppress(Exception):
+                res = await env_client.get_data(self.base, 30)
+                data = res.parts[0].data if hasattr(res.parts[0], "data") else res.parts[0].root.data
+                if data.get("game_over"):
+                    break
+        self.over = True
+
     async def progress(self) -> None:
         """A line per turn the game reaches (every 10th on the console): the time since the previous one."""
         last, t0, start = 0, time.time(), time.time()
-        while not all(b.over for b in self.bots):
+        while not self.over:
             await asyncio.sleep(0.2)
             turn = min((b.turn for b in self.bots if not b.over), default=last)
             if turn > last:
@@ -1322,6 +1355,9 @@ def main() -> int:
     p.add_argument("--barbarians", default="Roaming")
     p.add_argument("--turns", type=int, default=200)
     p.add_argument("--seed", type=int, default=1)
+    p.add_argument("--humans", help="civ=label,... human seats, played in the browser (docs/play.md)")
+    p.add_argument("--human-turn-seconds", type=int, default=900,
+                   help="a human seat idle this long has its turn ended for it; 0: never (default 900)")
     p.add_argument("--ai-opponents", type=int, default=0, help="engine-AI civs besides the seats (default 0)")
     p.add_argument("--port", type=int, default=0, help="env port (default: a free one)")
     p.add_argument("--bridge", help="CIVBRIDGE_CMD (default: a copy of build/bridge in the output dir)")
@@ -1340,7 +1376,7 @@ def main() -> int:
     if args.out is None:
         args.out = ROOT / "playtest" / "runs" / f"bots-{datetime.datetime.now():%Y%m%d-%H%M%S}"
     args.out = args.out.resolve()
-    if not 1 <= args.seats <= len(DEFAULT_SEATS) and not args.civs:
+    if not (0 if args.humans else 1) <= args.seats <= len(DEFAULT_SEATS) and not args.civs:
         p.error(f"--seats is 1-{len(DEFAULT_SEATS)}")
     match = Match(args)
     try:
