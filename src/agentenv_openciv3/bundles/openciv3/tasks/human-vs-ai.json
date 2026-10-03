@@ -1,0 +1,52 @@
+[
+  {
+    "id": "deploy",
+    "type": "deploy_env",
+    "env_id": "openciv3",
+    "ttl_seconds": 43200
+  },
+  {
+    "id": "match",
+    "type": "openciv3_match",
+    "env_id": "openciv3",
+    "turns": 100,
+    "size": "Small",
+    "humans": {
+      "you": "Rome"
+    },
+    "ai_opponents": 3,
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "await",
+    "type": "openciv3_await_game",
+    "env_id": "openciv3",
+    "timeout_seconds": 36000,
+    "fail_task_on_error": false,
+    "depends_on": [
+      "match"
+    ]
+  },
+  {
+    "id": "grade",
+    "type": "env_outcome_verifier",
+    "env_id": "openciv3",
+    "file_artifact_id": "full-game-verifier",
+    "verifier_id": "full-game",
+    "score_aggregator": "weighted_average",
+    "depends_on": [
+      "await"
+    ]
+  },
+  {
+    "id": "recording",
+    "type": "save_env_recording",
+    "env_id": "openciv3",
+    "timeout_seconds": 1200,
+    "depends_on": [
+      "await"
+    ]
+  }
+]

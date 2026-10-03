@@ -1,5 +1,5 @@
-"""`agent-env openciv3`: register the OpenCiv3 env, serve it locally without Docker, watch a game live, and fetch game
-recordings."""
+"""`agent-env openciv3`: register the OpenCiv3 env, serve it locally without Docker, watch a game live, play in one,
+and fetch game recordings."""
 
 import json
 import os
@@ -26,6 +26,10 @@ PLAYERS = {  # A2A agent id: its directory under agents/, the CLI it plays with,
 }
 REPO = "https://github.com/earakely-scale/agentenv-openciv-plugin"
 ENV_PORT = re.compile(r":(\d+)->18765/tcp")
+# The env logs `NEW GAME <id>` when a game starts, then one line per human seat (docs/play.md):
+# `PLAY <civ> (<label>) game <id> /play#token=<token>`.
+PLAY_LINK = re.compile(r"\bPLAY (?P<civ>.+?) \((?P<label>.*)\):?(?: game \S+)? \S*?(?P<path>/play#token=\w+)")
+NEW_GAME_LINE = re.compile(r"\bNEW GAME \S+")
 STREAMER_IMAGE = "openciv3-streamer"
 STREAM_KEY = "OPENCIV3_STREAM_KEY"
 
@@ -215,12 +219,69 @@ def watch(open_page: bool):
 
 def _live_views() -> list[tuple[str, str]]:
     """The live view of each OpenCiv3 env running in Docker, newest first, with its container's name."""
-    views = []
+    return [(f"http://127.0.0.1:{port}/live", name) for port, name in _running_envs()]
+
+
+def _running_envs() -> list[tuple[str, str]]:
+    """The host port and container name of each OpenCiv3 env running in Docker, newest first."""
+    envs = []
     for line in _docker("ps", "--format", "{{.Image}}\t{{.Ports}}\t{{.Names}}").splitlines():
         image, ports, name = line.split("\t")
         if "mcp-server-openciv3" in image and (port := ENV_PORT.search(ports)):
-            views.append((f"http://127.0.0.1:{port[1]}/live", name))
-    return views
+            envs.append((port[1], name))
+    return envs
+
+
+@openciv3.command()
+@click.option("--open", "open_page", is_flag=True, help="Open the first human seat's play page in the browser.")
+def play(open_page: bool):
+    """Print the play link of every human seat in the OpenCiv3 games running in Docker, newest env first: whoever opens
+    a link plays that civilization in the browser (docs/play.md). A task seats people with openciv3_match's `humans`,
+    e.g. agent-env run openciv3 --task human-vs-ai."""
+    envs = _running_envs()
+    if not envs:
+        raise click.ClickException("no OpenCiv3 env is running; agent-env run starts one, e.g. "
+                                   "agent-env run openciv3 --task human-vs-ai")
+    links = [(f"http://127.0.0.1:{port}{path}", civ, label, name)
+             for port, name in envs for civ, label, path in _play_links(_container_log(name))]
+    for url, civ, label, name in links:
+        click.echo(f"{url}  ({civ}, {label}; {name})")
+    if not links:
+        raise click.ClickException(
+            f"no human seats: the game in {', '.join(name for _, name in envs)} has no human players. A task seats "
+            "you with openciv3_match's humans, e.g. agent-env run openciv3 --task human-vs-ai")
+    if open_page:
+        click.launch(links[0][0])
+
+
+def _container_log(name: str) -> str:
+    """A container's log, its stdout and stderr together, in order."""
+    try:
+        out = subprocess.run(["docker", "logs", name], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                             timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise click.ClickException(f"docker logs {name} failed: {e}") from e
+    if out.returncode:
+        raise click.ClickException(f"docker logs {name} failed: {out.stdout.strip()}")
+    return out.stdout
+
+
+def _play_links(log: str) -> list[tuple[str, str, str]]:
+    """The newest game's play links in an env's log, as (civ, label, path): the PLAY lines after the last NEW GAME line
+    (none if the newest game has no humans). An older env logs no NEW GAME: then the last run of PLAY lines, up to a
+    civ named twice (an earlier game's)."""
+    lines = log.splitlines()
+    starts = [i for i, line in enumerate(lines) if NEW_GAME_LINE.search(line)]
+    if starts:
+        return [(m["civ"], m["label"], m["path"]) for line in lines[starts[-1]:] if (m := PLAY_LINK.search(line))]
+    ends = [i for i, line in enumerate(lines) if PLAY_LINK.search(line)]
+    links: list[tuple[str, str, str]] = []
+    for line in reversed(lines[:ends[-1] + 1] if ends else []):
+        m = PLAY_LINK.search(line)
+        if m is None or m["civ"] in {civ for civ, _, _ in links}:
+            break
+        links.append((m["civ"], m["label"], m["path"]))
+    return links[::-1]
 
 
 def _playing(url: str) -> bool:

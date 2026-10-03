@@ -541,6 +541,14 @@ function showTip(e, html) {
 const hideTip = () => { tip.hidden = true; };
 const sw = p => `<span class="sw" style="background:${p?.color || "#777"}"></span>`;
 const lab = p => esc(p?.label || p?.civ || "?");
+// A seat a person plays (docs/play.md), marked where seats are listed.
+// Who plays: "3 agents", or "2 agents · 1 person" with people at the table.
+function cast() {
+  const people = M.seats.filter(p => p.human).length, agents = M.seats.length - people;
+  return [agents ? `${agents} agent${agents > 1 ? "s" : ""}` : "", people ? `${people} ${people > 1 ? "people" : "person"}` : ""]
+    .filter(Boolean).join(" · ");
+}
+const person = p => p?.human ? `<span class="person" title="played by a person">person</span>` : "";
 
 function shell() {
   $("#app").innerHTML = `
@@ -656,7 +664,7 @@ function goLive() { S.follow = true; stop(); setTurn(M.last, {}); }
 
 function renderTop() {
   const seats = M.seats.length;
-  $("#sub").textContent = `${seats ? seats + " agent" + (seats > 1 ? "s" : "") + " · " : ""}seed ${M.meta.seed ?? "?"} · ` +
+  $("#sub").textContent = `${seats ? cast() + " · " : ""}seed ${M.meta.seed ?? "?"} · ` +
     `${M.W}×${M.H}` + (LIVE ? "" : " · recording");
   $("#pov").innerHTML = `<option value="">Spectator (everything)</option>` +
     M.seats.map(p => `<option value="${p.seat}">${lab(p)} · ${esc(p.civ)}</option>`).join("");
@@ -679,7 +687,7 @@ function renderStatus() {
           const p = M.players.find(q => q.civ === s.civ);
           return `${sw(p)}${esc(s.label || s.civ)}`;
         }).join(", ")}${waiting.length > 4 ? ` +${waiting.length - 4}` : ""}`
-      : `T${M.turns[M.last].turn}: every agent has ended the turn`;
+      : `T${M.turns[M.last].turn}: every player has ended the turn`;
   } else {
     $("#livebadge").innerHTML = ""; $("#waiting").innerHTML = ""; $("#golive").hidden = true;
   }
@@ -794,8 +802,8 @@ function mapTip(e) {
   const known = M.known(S.ti)[i];
   if (M.seats.length > 1 && S.pov == null) {
     const who = M.seats.filter(p => known & (1 << p.seat));
-    h += `<div class="k" style="margin-top:3px">${who.length === M.seats.length ? "known to every agent"
-      : who.length ? "known to " + who.map(p => esc(p.label || p.civ)).join(", ") : "no agent has seen it"}</div>`;
+    h += `<div class="k" style="margin-top:3px">${who.length === M.seats.length ? "known to every player"
+      : who.length ? "known to " + who.map(p => esc(p.label || p.civ)).join(", ") : "no player has seen it"}</div>`;
   }
   showTip(e, h);
 }
@@ -849,7 +857,7 @@ function renderStandings() {
     const delta = d > 0 ? `<span class="up">▲${d}</span>` : d < 0 ? `<span class="down">▼${-d}</span>` : `<span class="muted">–</span>`;
     return `<tr class="row ${S.focus === p.index ? "focus" : ""} ${s[5] ? "out" : ""}" data-i="${p.index}" tabindex="0">
       <td class="rk">${ranks[p.index]}</td><td class="d">${delta}</td>
-      <td><div class="who">${sw(p)}<b>${lab(p)}</b>${p.label ? `<span class="civ">${esc(p.civ)}</span>` : ""}${warMark(ti, p)}</div>
+      <td><div class="who">${sw(p)}<b>${lab(p)}</b>${person(p)}${p.label ? `<span class="civ">${esc(p.civ)}</span>` : ""}${warMark(ti, p)}</div>
         <div class="bar" style="width:${(s[0] / top * 100).toFixed(1)}%;background:${p.color}"></div></td>
       <td class="s">${s[0]}</td><td class="n">${s[1]}</td><td class="n">${s[2]}</td><td class="n">${s[4]}</td>
       ${live ? `<td class="state">${liveMark(p)}</td>` : ""}</tr>`;
@@ -870,7 +878,7 @@ function renderAgentCard() {
   const live = during.live;
   const state = live ? (live.ended ? `ended the turn after ${fmtSecs(live.seconds)}` : `playing · ${fmtSecs(live.seconds)}`)
     : during.done ? `turn T${M.turns[ti].turn}` : "";
-  el.innerHTML = `<div class="head">${sw(p)}<b>${lab(p)}</b><span class="muted">${esc(p.label ? p.civ : "")}</span>
+  el.innerHTML = `<div class="head">${sw(p)}<b>${lab(p)}</b>${person(p)}<span class="muted">${esc(p.label ? p.civ : "")}</span>
       <span class="grow" style="flex:1"></span><span class="muted">#${ranks[p.index]}</span><b class="num">${s[0]}</b></div>
     <div class="facts">
       <div class="fact"><div class="l">Gold</div><div class="v num">${st.gold ?? "–"}</div></div>
@@ -1064,7 +1072,7 @@ function renderAgents() {
   if (gridGame !== M.game + ":" + n) {
     gridGame = M.game + ":" + n;
     el.innerHTML = seats.map(p => `<div class="acard" data-i="${p.index}" tabindex="0" title="Open ${lab(p)} on the map">
-      <div class="hd">${sw(p)}<span class="nm"><b>${lab(p)}</b><span class="civ">${esc(p.label ? p.civ : "")}</span></span>
+      <div class="hd">${sw(p)}<span class="nm"><b>${lab(p)}</b>${person(p)}<span class="civ">${esc(p.label ? p.civ : "")}</span></span>
         <span class="rank"><span class="lead-tag"></span><span class="dd"></span><span class="r"></span><span class="s num"></span></span></div>
       <div class="mm"><canvas></canvas><span class="badge">${p.seat != null ? "its view" : "territory"}</span><span class="livestate" hidden></span>
         <span class="warchip" hidden></span></div>
@@ -1136,7 +1144,7 @@ function renderSummary() {
   const margin = fin(win.index)[0] - fin(second.index)[0];
   const tied = order.filter(p => fin(p.index)[0] === fin(win.index)[0]);
   const headline = v ? `${sw(M.players.find(p => p.civ === v.civ))}${esc(v.label || v.civ)} wins by ${esc(v.kind)} on turn ${v.turn}`
-    : margin === 0 ? (tied.length === civs.length ? `Every agent ${over ? "ties" : "is tied"}` : `${tied.map(p => sw(p) + lab(p)).join(", ")} ${over ? "tie" : "are tied"}`) +
+    : margin === 0 ? (tied.length === civs.length ? `Every player ${over ? "ties" : "is tied"}` : `${tied.map(p => sw(p) + lab(p)).join(", ")} ${over ? "tie" : "are tied"}`) +
       ` on ${fin(win.index)[0]} points${over ? "" : ` at turn ${T}`}`
     : over ? `${sw(win)}${lab(win)} wins on score, by ${margin} point${margin === 1 ? "" : "s"}`
     : `${sw(win)}${lab(win)} leads at turn ${T}, by ${margin} point${margin === 1 ? "" : "s"}`;
@@ -1144,7 +1152,7 @@ function renderSummary() {
   const fastest = order.filter(p => reach(p, 10) != null).sort((a, b) => reach(a, 10) - reach(b, 10))[0];
   const longest = order.reduce((a, b) => led[b.index] > led[a.index] ? b : a);
   el.innerHTML = `<div class="wrap">
-    <div class="eyebrow">OpenCiv3 · ${M.seats.length} agents · seed ${M.meta.seed ?? "?"} · ${over ? "final" : `after ${T} of ${M.limit} turns`}</div>
+    <div class="eyebrow">OpenCiv3 · ${cast()} · seed ${M.meta.seed ?? "?"} · ${over ? "final" : `after ${T} of ${M.limit} turns`}</div>
     <h1>${headline}</h1>
     <p class="lede">${lab(win)} has ${fin(win.index)[0]} points to ${lab(second)}'s ${fin(second.index)[0]}, with ${fin(win.index)[1]} cities and
       ${fin(win.index)[2]} population. It has led for ${led[win.index]} of ${ti + 1} turns${since < ti ? `, without a break since T${M.turns[since].turn}` : ""}.

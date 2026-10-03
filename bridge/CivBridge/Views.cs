@@ -201,6 +201,66 @@ sealed partial class Session {
 		};
 	}
 
+	/// <summary>
+	/// Everything the seat knows of the world, for drawing it (docs/play.md section 3). Polled after every human action, so
+	/// it stays cheap: no yields, site checks or other per-tile engine work, one pass over the tiles.
+	/// </summary>
+	JsonObject KnownMap() {
+		var index = new Dictionary<Player, int>(ReferenceEqualityComparer.Instance);
+		for (int i = 0; i < gd.players.Count; i++) index[gd.players[i]] = i;
+		TileKnowledge knowledge = human.tileKnowledge;
+		var tiles = new JsonArray();
+		var units = new JsonArray();
+		foreach (Tile t in gd.map.tiles) {
+			if (!knowledge.isTileKnown(t)) continue;
+			bool visible = knowledge.isActiveTile(t);
+			Player owner = t.OwningPlayer();
+			tiles.Add(new JsonArray(
+				t.XCoordinate, t.YCoordinate, t.baseTerrainType.Key,
+				t.overlayTerrainType != t.baseTerrainType ? t.overlayTerrainType.Key : null,
+				t.BordersRiver() ? 1 : 0, owner == null ? -1 : index[owner], visible ? 1 : 0, KnownResource(t),
+				Json.Strings(t.overlays.GetImprovements().Select(i => i.key == "barbarianCamp" ? "barbarian_camp" : i.key))));
+			if (!visible || t.unitsOnTile.Count == 0) continue;
+			// As TileUnits: the seat's own units one by one with their ids, everyone else's grouped by owner and type.
+			foreach (MapUnit u in t.unitsOnTile.Where(u => u.owner == human).OrderBy(u => ids.Of(u) is string id ? Ids.Number(id) : int.MaxValue))
+				units.Add(new JsonObject {
+					["x"] = t.XCoordinate, ["y"] = t.YCoordinate, ["owner"] = index[human], ["type"] = u.unitType.name, ["count"] = 1, ["id"] = ids.Of(u),
+				});
+			foreach (var g in t.unitsOnTile.Where(u => u.owner != human).GroupBy(u => (Owner: index[u.owner], Type: u.unitType.name)))
+				units.Add(new JsonObject {
+					["x"] = t.XCoordinate, ["y"] = t.YCoordinate, ["owner"] = g.Key.Owner, ["type"] = g.Key.Type, ["count"] = g.Count(),
+				});
+		}
+		var cities = new JsonArray();
+		foreach (City c in gd.cities) {
+			if (!Tile.IsTileValid(c.location) || !knowledge.isTileKnown(c.location) || !index.ContainsKey(c.owner)) continue;
+			var o = new JsonObject {
+				["x"] = c.location.XCoordinate, ["y"] = c.location.YCoordinate, ["name"] = c.name, ["owner"] = index[c.owner],
+				["size"] = c.residents.Count, ["capital"] = c.IsCapital(),
+			};
+			if (c.owner == human) {
+				int food = c.FoodGrowthPerTurn();
+				o["id"] = ids.Of(c);
+				o["producing"] = c.itemBeingProduced?.name;
+				o["turns_to_complete"] = ProductionEta(c);
+				o["turns_to_grow"] = food > 0 ? Json.Turns(c.TurnsUntilGrowth()) : null;
+			}
+			cities.Add(o);
+		}
+		return new JsonObject {
+			["turn"] = gd.turn,
+			["width"] = gd.map.numTilesWide,
+			["height"] = gd.map.numTilesTall,
+			["wrap_x"] = gd.map.wrapHorizontally,
+			["players"] = Json.Array(gd.players, p => new JsonObject {
+				["index"] = index[p], ["civ"] = Owner(p), ["barbarian"] = p.isBarbarians, ["me"] = p == human,
+			}),
+			["tiles"] = tiles,
+			["cities"] = cities,
+			["units"] = units,
+		};
+	}
+
 	JsonObject TileJson(Tile from, Tile t) {
 		bool visible = human.tileKnowledge.isActiveTile(t);
 		JsonObject o = Relative(from, t, withXY: true);

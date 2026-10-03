@@ -1,10 +1,11 @@
-"""Decide which agent won a game several agents played, one seat each, from the env's data/get summary.
+"""Decide which seat won a game several agents played, one seat each, from the env's data/get summary; people may
+play seats too (data/get marks them `human`), and are ranked like the agents.
 
 The victor is the seat that won by conquest or domination, else, at the turn limit, the seat with the highest score;
 a tie on top is no victor and half the grade. The match counts only if it was played to its end, the engine kept
 running and every agent played its own turns (the env ends a silent seat's turn so the others can go on; past a tenth
-of a seat's turns the match does not count). Each seat's rank among the seats is reported, not graded: the victor
-first, then undefeated seats before defeated ones, then by score.
+of an agent's turns the match does not count; a human seat's ended turns are reported, not gated). Each seat's rank
+among the seats is reported, not graded: the victor first, then undefeated seats before defeated ones, then by score.
 """
 
 from agentenv_protocol import client
@@ -39,7 +40,8 @@ def grade(s: dict) -> list[dict]:
     elif ended and leaders:
         match |= {"score": TIE, "tied": [_name(seat) for seat in leaders]}
     match["standings"] = [{"civ": seat["civ"], "label": seat.get("label"), "rank": rank[seat["civ"]],
-                           "score": seat["score"]["total"], "defeated": seat["defeated"]} for seat in ranked]
+                           "score": seat["score"]["total"], "defeated": seat["defeated"],
+                           "human": bool(seat.get("human"))} for seat in ranked]
     rows = [match]
     for seat in seats:
         rows.append({
@@ -47,16 +49,19 @@ def grade(s: dict) -> list[dict]:
             "result": seat["civ"] == match.get("civ"), "score": (len(seats) - rank[seat["civ"]]) / (len(seats) - 1),
             "rank": rank[seat["civ"]], "game_score": seat["score"]["total"], "defeated": seat["defeated"],
             "metrics": seat["metrics"], "share": seat.get("share"), "decisions": seat["decisions"],
-            "actions": seat["actions"], "auto_ended_turns": seat["auto_ended_turns"]})
-    idle = {seat["civ"]: seat["auto_ended_turns"] for seat in seats}
+            "actions": seat["actions"], "auto_ended_turns": seat["auto_ended_turns"],
+            "human": bool(seat.get("human"))})
+    idle = {seat["civ"]: seat["auto_ended_turns"] for seat in seats if not seat.get("human")}
+    human_idle = {seat["civ"]: seat["auto_ended_turns"] for seat in seats if seat.get("human")}
     rows += [
         {"criterion": "the match was played to its end", "weight": GATE_WEIGHT, "result": ended,
          "turn": s["turn"], "turn_limit": s["turn_limit"], "game_over": s["game_over"]},
         {"criterion": "the engine kept running", "weight": GATE_WEIGHT, "result": not s["engine_failed"],
          "engine_restarts": s["harness"]["engine_restarts"]},
         {"criterion": f"every agent played: the env ended at most {IDLE_SHARE:.0%} of any seat's turns",
-         "weight": GATE_WEIGHT, "result": len(seats) > 1 and max(idle.values()) <= IDLE_SHARE * max(s["turn"], 1),
-         "auto_ended_turns": idle},
+         "weight": GATE_WEIGHT,
+         "result": len(seats) > 1 and max(idle.values(), default=0) <= IDLE_SHARE * max(s["turn"], 1),
+         "auto_ended_turns": idle, **({"human_auto_ended_turns": human_idle} if human_idle else {})},
     ]
     return rows
 

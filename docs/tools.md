@@ -58,6 +58,12 @@ A game started with `seats` (new-game extension) is played by several agents, on
   `skip_idle`), and its next call starts with a `!!` line saying so. `data/get` counts these per seat.
 - **Diplomacy:** another agent's civ shows as `(another agent)`. Peace with it has no price: it is signed when both
   propose it, the second within a turn of the first; the brief marks a war whose enemy `offers peace`.
+- **Human seats:** a seat in new-game `humans` is played by a person in the browser (`GET /play`, with the seat's
+  token from the result's `play`), through the same tool wrapper, action log and turn as an agent's seat. A tool call
+  that would play a human seat fails with `human_seat`: its header names it, or names no seat while the first civ is
+  human (agents must name their own seat then; a one-seat human game takes no tool calls). A human seat that idles
+  while others wait has its turn ended after `human_turn_seconds` (default 15 minutes; 0: never). The contract,
+  routes and UI: [play.md](play.md).
 
 ## Watching a game live
 
@@ -110,11 +116,11 @@ harness reads this log; it is the authoritative record of what the agent did.
 - `data/reset`: start a new game from the current scenario.
 - `data/add`: a `DataPart` with `{"scenario": {...}}` updates the scenario and starts a new game.
 - `data/get`: one `DataPart` with the summary: `turn`, `turn_limit`, `game_over`, `defeated`, `seed`,
-  `civ`, `score`, `metrics` (cities, pop, techs, tiles, units, gold, explored_pct), `baselines`
-  (`null` and `engine_ai`, each with the score at the same turn and at the turn limit when known), and
-  `actions` (`ok`, `invalid`, `max_consecutive_errors`). With seats, these describe the first seat, and `seats`
-  lists every seat: `civ`, `label`, `defeated`, `score`, `metrics`, `decisions`, `actions`, `rank`, `share` and
-  `auto_ended_turns`; `standings` entries carry `seat`.
+  `civ`, `human` (a person plays it), `score`, `metrics` (cities, pop, techs, tiles, units, gold, explored_pct),
+  `baselines` (`null` and `engine_ai`, each with the score at the same turn and at the turn limit when known), and
+  `actions` (`ok`, `invalid`, `max_consecutive_errors`). With seats (or a human seat), these describe the first
+  seat, and `seats` lists every seat: `civ`, `label`, `human`, `defeated`, `score`, `metrics`, `decisions`,
+  `actions`, `rank`, `share` and `auto_ended_turns`; `standings` entries carry `seat`.
 - Extensions (REST, for harnesses and `apply_server_config`):
   - `urn:openciv3:new-game/v1`: scenario args, plus `seats` (more civs played by agents) and `labels`
     (`{civ: label}` for recordings and reports).

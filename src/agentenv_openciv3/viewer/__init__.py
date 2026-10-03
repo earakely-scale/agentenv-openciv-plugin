@@ -1,4 +1,5 @@
-"""The match viewer (docs/viewer.md): one page, live (`GET /live`) or with a whole game embedded (the `html` format)."""
+"""The match viewer (docs/viewer.md): one page, live (`GET /live`) or with a whole game embedded (the `html` format);
+and the play UI (docs/play.md, `GET /play`), which shares the viewer's map drawing (map.js)."""
 
 from __future__ import annotations
 
@@ -24,3 +25,10 @@ def page(data: dict | None = None, videos: dict[str, dict] | None = None) -> str
     fills = {"CSS": _asset("app.css"), "JS": _asset("app.js").replace("</script", "<\\/script"),
              "DATA": _json(data), "VIDEOS": _json(videos)}
     return PLACEHOLDER.sub(lambda m: fills[m[1] or m[2]], _asset("index.html"))
+
+
+def play_page() -> str:
+    """The play UI as one HTML file; it reads its seat's token from the URL's `#token=`."""
+    js = (_asset("map.js") + "\n" + _asset("play.js")).replace("</script", "<\\/script")
+    fills = {"CSS": _asset("play.css"), "JS": js}
+    return re.sub(r"/\*__(CSS|JS)__\*/", lambda m: fills[m[1]], _asset("play.html"))
