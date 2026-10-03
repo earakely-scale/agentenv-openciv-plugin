@@ -54,32 +54,6 @@ class World {
       if (!this.units.has(k)) this.units.set(k, []);
       this.units.get(k).push(u);
     }
-    this.rivers = this._rivers();
-  }
-  // River tiles only carry a flag, and joining every pair of river neighbours draws a lattice of little diamonds, so
-  // join them with a spanning forest (a branching line) and cut its corners at the segments' midpoints, as the
-  // viewer does. Each line is [tile key, x0, y0, x1, y1] in tile coordinates, drawn relative to that tile.
-  _rivers() {
-    const keys = [...this.tiles.keys()].filter(k => this.tiles.get(k).river), par = new Map(keys.map(k => [k, k]));
-    const root = k => { while (par.get(k) !== k) { par.set(k, par.get(par.get(k))); k = par.get(k); } return k; };
-    const mids = new Map(), add = (k, m) => { if (!mids.has(k)) mids.set(k, []); mids.get(k).push(m); };
-    for (const k of keys) {
-      const t = this.tiles.get(k);
-      for (const [dx, dy] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
-        const j = this.key(t.x + dx, t.y + dy), n = this.tiles.get(j);
-        if (!n || !n.river) continue;
-        const a = root(k), b = root(j);
-        if (a === b) continue;
-        par.set(a, b);
-        add(k, [t.x + dx / 2, t.y + dy / 2]); add(j, [n.x - dx / 2, n.y - dy / 2]);
-      }
-    }
-    const lines = [];
-    for (const [k, ms] of mids) {
-      const t = this.tiles.get(k);
-      if (ms.length === 2) lines.push([k, ...ms[0], ...ms[1]]); else for (const m of ms) lines.push([k, t.x, t.y, ...m]);
-    }
-    return lines;
   }
   key(x, y) { return this.wx(x) * 4096 + y; }
   wx(x) { return this.wrap ? ((x % this.W) + this.W) % this.W : x; }
@@ -147,14 +121,16 @@ class PlayPainter {
       ctx.beginPath(); this.diamond(ctx, sx, sy, hw, 1.02); ctx.fillStyle = rgb(c); ctx.fill();
     }
     if (hw >= 14) for (const [t, sx, sy] of tiles) this._detail(ctx, t, sx, sy, hw);
-    // rivers: the world's branching lines, each drawn from its tile's place on screen
-    const onScreen = new Map(tiles.map(([t, sx, sy]) => [world.key(t.x, t.y), [t, sx, sy]]));
-    ctx.strokeStyle = "rgba(64,98,132,.95)"; ctx.lineWidth = clamp(hw / 10, 1, 3); ctx.lineCap = ctx.lineJoin = "round";
+    // rivers run along tile edges: known_map's river mask (NE 1, SE 2, SW 4, NW 8), each edge on both its tiles
+    ctx.strokeStyle = "rgba(64,98,132,.95)"; ctx.lineWidth = clamp(hw / 8, 1.2, 3.5); ctx.lineCap = ctx.lineJoin = "round";
     ctx.beginPath();
-    for (const [k, ax, ay, bx, by] of world.rivers) {
-      const o = onScreen.get(k); if (!o) continue;
-      const [t, sx, sy] = o;
-      ctx.moveTo(sx + (ax - t.x) * hw, sy + (ay - t.y) * hw / 2); ctx.lineTo(sx + (bx - t.x) * hw, sy + (by - t.y) * hw / 2);
+    for (const [t, sx, sy] of tiles) {
+      const r = t.river | 0; if (!r) continue;
+      const n = [sx, sy - hw / 2], e = [sx + hw, sy], so = [sx, sy + hw / 2], w = [sx - hw, sy];
+      if (r & 1) { ctx.moveTo(...n); ctx.lineTo(...e); }
+      if (r & 2) { ctx.moveTo(...e); ctx.lineTo(...so); }
+      if (r & 4) { ctx.moveTo(...so); ctx.lineTo(...w); }
+      if (r & 8) { ctx.moveTo(...w); ctx.lineTo(...n); }
     }
     ctx.stroke();
     // borders between owners
@@ -294,8 +270,11 @@ class PlayPainter {
     const mineHere = us.filter(u => u.owner === world.me);
     const top = (sel && mineHere.find(u => u.id === sel.id)) || mineHere[0] || us[0];
     const count = us.reduce((n, u) => n + (u.count || 1), 0);
-    const r = clamp(hw * 0.3, 4, 13), x = inCity ? sx + hw * 0.5 : sx, y = inCity ? sy - hw * 0.25 : sy - hw * 0.06;
-    const col = world.color(top.owner), civilian = CIVILIAN.has(top.type);
+    this.unitMarker(ctx, world, top, count, inCity ? sx + hw * 0.5 : sx, inCity ? sy - hw * 0.25 : sy - hw * 0.06, hw);
+  }
+  // A unit as a marker: a disc (fighting) or a square (civilian) in its owner's colour, with its type's initials.
+  unitMarker(ctx, world, top, count, x, y, hw) {
+    const r = clamp(hw * 0.3, 4, 13), col = world.color(top.owner), civilian = CIVILIAN.has(top.type);
     ctx.beginPath();
     if (civilian) ctx.rect(x - r, y - r, r * 2, r * 2); else ctx.arc(x, y, r, 0, 7);
     ctx.fillStyle = rgb(col); ctx.fill();

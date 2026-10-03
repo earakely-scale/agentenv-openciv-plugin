@@ -637,7 +637,8 @@ def client_color_table() -> tuple[dict, list[str]]:
     ruleset = json.loads((lua / "civ3" / "ruleset.json").read_text(encoding="utf-8"))
     civs = {("Barbarians" if c.get("isBarbarian") else c["name"]): (c["primaryColorIndex"], c["secondaryColorIndex"])
             for c in ruleset["civilizations"]}
-    table = (lua / "standalone" / "textures.lua").read_text(encoding="utf-8").split("local civ_colors = {")[1].split("}")[0]
+    textures = (lua / "standalone" / "textures.lua").read_text(encoding="utf-8")
+    table = textures.split("local civ_colors = {")[1].split("}")[0]
     return civs, ["#" + h.lower() for h in re.findall(r'"([0-9A-Fa-f]{6})"', table)]
 
 
@@ -713,8 +714,21 @@ def check_known_map(km: dict, world: dict, state: dict, k: int = 0) -> None:
     assert all(u["count"] == 1 for u in own)
     assert sorted((u["id"], u["type"], u["x"], u["y"]) for u in own) == sorted(
         (u["id"], u["type"], u["x"], u["y"]) for u in state["units"])
+    # The hit point bar beside every unit: hp as in state for the seat's own, the fortified frame, and only for
+    # units that can fight (one answer per type).
+    mine = {u["id"]: u for u in state["units"]}
+    for u in own:
+        s = mine[u["id"]]
+        assert (u["hp"], u["hp_max"]) == (s["hp"], s["hp_max"])
+        assert u["fortified"] if s["status"] == "fortified" else u["fortified"] in (True, False)
+    combat = {}
+    for u in km["units"]:
+        assert 0 < u["hp"] <= u["hp_max"] and isinstance(u["fortified"], bool)
+        assert combat.setdefault(u["type"], u["combat"]) == u["combat"]
+    assert combat.get("Settler", False) is False and combat.get("Worker", False) is False
+    assert combat.get("Warrior", True) is True
     foreign = [u for u in km["units"] if u["owner"] != me]
-    assert all(set(u) == {"x", "y", "owner", "type", "count"} for u in foreign)
+    assert all(set(u) == {"x", "y", "owner", "type", "count", "hp", "hp_max", "fortified", "combat"} for u in foreign)
     groups = {}
     for u in world["units"]:
         if u["owner"] != me and (u["x"], u["y"]) in visible:
@@ -750,7 +764,8 @@ def test_known_map_draws_what_the_seat_knows(launch):
     rows = {(t[0], t[1]): t for t in km["tiles"]}
     near = b.call("map", x=city["x"], y=city["y"], radius=8)["tiles"]
     assert all(bool(rows[t["x"], t["y"]][4]) == t["river"] for t in near)
-    plain = [t for t in near if (t["terrain"], t["overlay"], t["resource"], t["city"]) == ("Grassland", None, None, None)]
+    plain = [t for t in near
+             if (t["terrain"], t["overlay"], t["resource"], t["city"]) == ("Grassland", None, None, None)]
     assert all(rows[t["x"], t["y"]][9] == t["yield"]["shields"] for t in plain)
     assert {rows[t["x"], t["y"]][9] for t in plain} == {0, 1}, "both kinds of grassland near the capital"
 
@@ -766,6 +781,14 @@ def test_known_map_draws_what_the_seat_knows(launch):
         pytest.fail("no foreign city and unit in sight by T83")
     assert len(km["tiles"]) < km["width"] * km["height"] // 2
     assert b.call("known_map") == km
+
+    # A unit the seat fortifies gets the frame.
+    state = b.call("state")
+    unit_id = next(u["id"] for u in state["units"] if "fortify" in u["orders"])
+    b.call("unit_order", unit=unit_id, order="fortify")
+    after = b.call("known_map")
+    check_known_map(after, b.call("world"), b.call("state"))
+    assert next(u for u in after["units"] if u.get("id") == unit_id)["fortified"] is True
     # Still in the Ancient era while an Ancient tech is left to learn.
     if any(t["era"] == "Ancient Times" for t in b.call("techs")["available"]):
         assert all(c["era"] == 0 for c in km["cities"] if c["owner"] == me)

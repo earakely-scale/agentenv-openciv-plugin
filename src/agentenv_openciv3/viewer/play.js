@@ -26,9 +26,23 @@ function useArt(on) {
   S.artState = on ? "on" : "off";
   localStorage.setItem("openciv3-art", S.artState);
   S.painter = on ? new ArtPainter(S.art) : new PlayPainter();
+  if (S.world && S.view) S.world.update(S.view.map, palette());
   if (on && S.cam.hw === 44) S.cam.hw = 56;   // the art reads best near the game's own zoom
-  renderBar(); draw();
+  document.body.classList.toggle("art", on);
+  if (on && !$("#art-style")) {   // the HUD's art, as CSS: the sheets' URLs carry the art's id
+    const u = n => `url("${S.art.url(S.art.m.sheets[n])}")`, st = document.createElement("style");
+    st.id = "art-style";
+    st.textContent = `body.art .status { background-image: ${u("status_box")}; }
+      body.art .status .dome { background-image: ${u("next_turn")}; }
+      body.art .minimap { background-image: ${u("minimap_box")}; }
+      body.art .commands button.icon { background-image: ${u("buttons")}; }
+      body.art .commands button.icon:hover:not(:disabled) { background-image: ${u("buttons_hover")}; }
+      body.art .commands button.icon:active:not(:disabled) { background-image: ${u("buttons_pressed")}; }`;
+    document.head.appendChild(st);
+  }
+  renderBar(); renderStatus(); renderCommands(); draw();
 }
+const artOn = () => S.artState === "on" && !!S.art;
 
 // The unit orders, as the game's command bar shows them: [order, label, key shown, key code]
 const ORDERS = [
@@ -37,6 +51,10 @@ const ORDERS = [
   ["fortify", "Fortify", "F"], ["wake", "Wake", "⇧W"], ["hold", "Skip turn", "Space"], ["bombard", "Bombard", "⇧B"],
   ["disband", "Disband", "⇧D"],
 ];
+// The client's order buttons (NormButtons.png and its hover and pressed sheets): order -> [column, row] of 32x32.
+const BUTTON_CELL = {hold: [0, 0], wait: [1, 0], fortify: [2, 0], disband: [3, 0], goto: [4, 0], explore: [5, 0],
+  bombard: [3, 1], found_city: [5, 2], build_road: [6, 2], build_railroad: [7, 2], build_mine: [1, 3], irrigate: [2, 3],
+  clear_forest: [3, 3], auto_work: [7, 3]};
 const KEYS = {b: "found_city", g: "goto", x: "explore", a: "auto_work", r: "build_road", m: "build_mine", i: "irrigate",
   C: "clear_forest", f: "fortify", W: "wake", " ": "hold", B: "bombard", D: "disband"};
 // Arrow keys and the number pad move the active unit a tile, as in the game (8 is north).
@@ -114,7 +132,8 @@ async function loadView() {
   const v = await api("play/api/view");
   const newGame = v.game.id !== S.gameId, newTurn = v.game.turn !== S.turn;
   S.view = v; S.gameId = v.game.id;
-  if (!S.world) S.world = new World(v.map, v.colors); else S.world.update(v.map, v.colors);
+  const colors = palette(v);
+  if (!S.world) S.world = new World(v.map, colors); else S.world.update(v.map, colors);
   if (newGame) { S.waited.clear(); S.sel = null; centerOnHome(); }
   if (newTurn) { S.turn = v.game.turn; S.waited.clear(); S.tileInfo.clear(); S.sites = null; }
   const units = myUnits();
@@ -126,6 +145,18 @@ async function loadView() {
   if (v.game.game_over) gameOver();
   if (v.game.art) loadArt();
   return v;
+}
+// The civs' colours: with the game's art, the client's own (known_map players[].color), so the map looks as it does
+// in the game; else the viewer's, as the live view and recordings show them.
+function palette(v = S.view) {
+  if (!artOn()) return v.colors;
+  const own = Object.fromEntries((v.map.players || []).filter(p => p.color).map(p => [String(p.index), p.color]));
+  return {...v.colors, ...own};
+}
+function civColor(civ, fallback) {
+  if (!artOn()) return fallback;
+  const p = (S.view.map.players || []).find(q => q.civ === civ);
+  return p?.color || fallback;
 }
 const state = () => S.view.state;
 const myUnits = () => state().units || [];
@@ -173,7 +204,7 @@ function renderBar() {
   const v = S.view, s = v.state, g = v.game, me = g.me, rs = s.rates || {}, res = s.research || {};
   const pct = res.cost ? Math.min(100, (res.beakers || 0) / res.cost * 100) : 0;
   $("#bar").innerHTML = `
-    <div class="civ"><span class="sw" style="background:${me.color}"></span>${esc(me.civ)} <small>${esc(me.label || "")}</small></div>
+    <div class="civ"><span class="sw" style="background:${civColor(me.civ, me.color)}"></span>${esc(me.civ)} <small>${esc(me.label || "")}</small></div>
     <div class="turn">T${g.turn} <small>/ ${g.turn_limit}</small></div>
     <div class="stat"><span class="l">Government</span><span class="v">${esc(s.government)}${s.anarchy_until ? ` <span class="bad">until T${s.anarchy_until}</span>` : ""}</span></div>
     <div class="stat"><span class="l">Gold</span><span class="v gold">${s.gold} <span class="muted">${s.gold_per_turn >= 0 ? "+" : ""}${s.gold_per_turn}</span></span></div>
@@ -183,7 +214,7 @@ function renderBar() {
     <div class="stat"><span class="l">Score</span><span class="v">${s.score.total}</span></div>
     <div class="grow"></div>
     <div class="seats">${g.seats.filter(x => x.civ !== me.civ).map(x => `<span class="seat" title="${esc(x.human ? "a person" : "an agent")}">
-      <span class="sw" style="background:${x.color}"></span>${esc(x.label || x.civ)}${x.human ? " 👤" : ""}
+      <span class="sw" style="background:${civColor(x.civ, x.color)}"></span>${esc(x.label || x.civ)}${x.human ? " 👤" : ""}
       <span class="st ${x.ended ? "done" : "play"}">${x.defeated ? "out" : x.ended ? "✓" : "●"}</span></span>`).join("")}</div>
     <div class="adv">
       <button data-a="domestic" title="Domestic advisor: taxes and government (F1)">Domestic <kbd>F1</kbd></button>
@@ -196,6 +227,7 @@ function renderBar() {
 
 function renderStatus() {
   if (!S.view) return;
+  if (artOn()) return renderArtStatus();
   const s = state(), g = S.view.game, u = unit(S.sel);
   let body;
   if (g.game_over) body = `<div class="enter" style="animation:none">Game over</div>`;
@@ -220,6 +252,35 @@ function renderStatus() {
   $("#endturn").onclick = () => endTurn(true);
   if ($("#waitbtn")) $("#waitbtn").onclick = waitUnit;
 }
+// The client's status scroll (LowerRightInfoBox.cs): the active unit at the top right, with its picture; the civ,
+// the treasury and the research in the middle; the next-turn dome on the brass ball, lit while the turn can end.
+function renderArtStatus() {
+  const s = state(), g = S.view.game, u = unit(S.sel), res = s.research || {};
+  const pending = myUnits().filter(canAct).length;
+  const hint = g.game_over ? "Game over" : g.ended ? "Please wait..." : !u && !pending ? "ENTER or SPACEBAR for next turn" : "";
+  const where = u ? (() => { const c = (s.cities || []).find(c => c.x === u.x && c.y === u.y); const t = S.world.tile(u.x, u.y);
+    return c ? c.name : t ? (t.overlay || t.terrain).replace(/^./, ch => ch.toUpperCase()) : ""; })() : "";
+  $("#status").innerHTML = `<button class="dome ${hint && !g.ended && !g.game_over ? "lit" : ""}" id="endturn" title="End the turn (Enter)" ${ended() ? "disabled" : ""}></button>
+    ${hint ? `<div class="hint">${esc(hint)}</div>` : ""}
+    ${u ? `<canvas class="thumb" width="70" height="60"></canvas>
+      <div class="unitline" style="top:18px">${esc(u.type)} <span class="uid">${esc(u.id)}</span></div>
+      <div class="unitline" style="top:32px">HP ${u.hp}/${u.hp_max} · ${fmtMoves(u.moves_left)}/${u.moves_max}</div>
+      <div class="unitline" style="top:46px">${esc(where)}</div>
+      <div class="unitline small" style="top:60px">${esc(statusText(u))}</div>` : ""}
+    <div class="mid" style="top:80px">${esc(s.civ)} - ${esc(s.government)}${s.anarchy_until ? ` (until T${s.anarchy_until})` : ""}</div>
+    <div class="mid" style="top:94px">Turn ${g.turn}  ${s.gold} Gold (${s.gold_per_turn >= 0 ? "+" : ""}${s.gold_per_turn} per turn)</div>
+    <div class="mid" style="top:108px">${res.current ? `${esc(res.current)} (${res.turns_left ?? "--"} turns)` : "Not selected (-- turns)"}</div>`;
+  $("#endturn").onclick = () => endTurn(true);
+  const thumb = $("#status .thumb");
+  if (thumb && u) {
+    const ua = S.art.unit(u.type, renderStatus), g2 = thumb.getContext("2d");
+    if (ua) {
+      const cell = S.art.unitCell(ua, u.status === "fortified" ? "fortify" : "default", "SE", 0, rgb(S.world.color(S.world.me)));
+      const [ax, ay] = ua.spec.anchor;
+      g2.drawImage(cell, 35 - ax, 44 - ay);
+    }
+  }
+}
 const fmtMoves = m => Number.isInteger(m) ? m : (Math.round(m * 3) / 3).toFixed(1);
 function statusText(u) {
   const st = u.status || "idle";
@@ -234,10 +295,16 @@ function renderCommands() {
   if (!u || ended()) { el.hidden = true; return; }
   el.hidden = false;
   const have = new Set(u.orders || []);
-  el.innerHTML = ORDERS.filter(([o]) => have.has(o)).map(([o, label, k]) =>
-    `<button data-o="${o}" ${S.busy ? "disabled" : ""} title="${esc(label)} (${k})"><b>${esc(label)}</b><kbd>${esc(k)}</kbd></button>`).join("")
-    + `<span class="sep"></span><button data-o="wait" title="Come back to this unit later (W)"><b>Wait</b><kbd>W</kbd></button>
-       <button data-o="center" title="Centre on the unit (C)"><b>Centre</b><kbd>C</kbd></button>`;
+  const art = artOn();
+  el.classList.toggle("art", art);
+  el.innerHTML = ORDERS.filter(([o]) => have.has(o)).map(([o, label, k]) => art && BUTTON_CELL[o]
+    ? `<button class="icon" data-o="${o}" ${S.busy ? "disabled" : ""} title="${esc(label)} (${k})" aria-label="${esc(label)}"
+        style="background-position:-${BUTTON_CELL[o][0] * 32}px -${BUTTON_CELL[o][1] * 32}px"><kbd>${esc(k)}</kbd></button>`
+    : `<button data-o="${o}" ${S.busy ? "disabled" : ""} title="${esc(label)} (${k})"><b>${esc(label)}</b><kbd>${esc(k)}</kbd></button>`).join("")
+    + (art ? `<button class="icon" data-o="wait" title="Wait: come back to this unit later (W)" aria-label="Wait"
+        style="background-position:-32px 0"><kbd>W</kbd></button>`
+      : `<span class="sep"></span><button data-o="wait" title="Come back to this unit later (W)"><b>Wait</b><kbd>W</kbd></button>
+       <button data-o="center" title="Centre on the unit (C)"><b>Centre</b><kbd>C</kbd></button>`);
   for (const b of $$("button", el)) b.onclick = () => command(b.dataset.o);
 }
 
@@ -327,11 +394,13 @@ function paint() {
   const dlgCity = S.dialog?.kind === "city" ? S.dialog.city : null;
   S.painter.draw(ctx, S.world, S.cam, w, h, {
     selected: u, targets: u && !ended() ? u.attack_targets || [] : [], sites: u ? S.sites : null, hover: S.hover,
+    mine: new Map(myUnits().map(x => [x.id, x])),
     cityRadius: dlgCity, path: u && S.hover && S.mode ? [[u.x, u.y], S.hover] : null,
   });
   const m = $("#minimap");
+  $("#minimapbox").classList.toggle("art", artOn());
   if (m) {
-    const mw = 220, mh = Math.round(mw * S.world.H / (2 * S.world.W));
+    const mw = artOn() ? 229 : 220, mh = artOn() ? 105 : Math.round(mw * S.world.H / (2 * S.world.W));
     m.style.width = mw + "px"; m.style.height = mh + "px";
     const mm = sizeCanvas(m); S.painter.minimap(mm.ctx, S.world, S.cam, mm.w, mm.h, w, h);
   }
@@ -450,6 +519,7 @@ function keys() {
     if (k === "F6") { e.preventDefault(); return advisor("science"); }
     if (k === "Escape") { S.mode = null; $("#map").classList.remove("goto"); return; }
     if (k === "Enter") { e.preventDefault(); return endTurn(e.shiftKey); }
+    if (k === " " && !S.sel) { e.preventDefault(); return endTurn(); }   // "ENTER or SPACEBAR for next turn"
     if (k === "c" || (k === "C" && !e.shiftKey)) { const u = unit(S.sel); if (u) centerOn(u.x, u.y); return; }
     if (k === "w") { e.preventDefault(); return waitUnit(); }
     if (k === "Tab") { e.preventDefault(); return selectNext(); }

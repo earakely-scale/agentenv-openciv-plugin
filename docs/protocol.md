@@ -130,26 +130,51 @@ it is one cheap pass over the map: no yields or city-site checks). Result:
 
 ```json
 {"turn": 12, "width": 60, "height": 60, "wrap_x": true,
- "players": [{"index": 0, "civ": "Barbarians", "barbarian": true, "me": false},
-             {"index": 1, "civ": "Rome", "barbarian": false, "me": true}],
- "tiles": [[13, 9, "grassland", "forest", 1, 1, 1, "Wheat", ["road"]]],
+ "players": [{"index": 0, "civ": "Barbarians", "barbarian": true, "me": false, "color": "#f0f8ff"},
+             {"index": 1, "civ": "Rome", "barbarian": false, "me": true, "color": "#e6194b"}],
+ "tiles": [[13, 9, "grassland", null, 6, 1, 1, "Wheat", ["road"], 1]],
  "cities": [{"x": 12, "y": 10, "name": "Rome", "owner": 1, "size": 3, "capital": true,
-             "id": "c1", "producing": "Settler", "turns_to_complete": 6, "turns_to_grow": 4}],
- "units": [{"x": 12, "y": 10, "owner": 1, "type": "Warrior", "count": 1, "id": "u2"},
-           {"x": 14, "y": 10, "owner": 0, "type": "Horseman", "count": 2}]}
+             "era": 0, "walls": false, "disorder": false,
+             "id": "c1", "producing": "Settler", "turns_to_complete": 6, "turns_to_grow": 4, "starving": false}],
+ "units": [{"x": 12, "y": 10, "owner": 1, "type": "Warrior", "count": 1, "id": "u2",
+            "hp": 3, "hp_max": 3, "fortified": true, "combat": true},
+           {"x": 14, "y": 10, "owner": 0, "type": "Horseman", "count": 2,
+            "hp": 2, "hp_max": 3, "fortified": false, "combat": true}]}
 ```
 
 - `tiles` has one row per tile the seat knows, and none for the rest: `[x, y, terrain, overlay, river, owner,
-  visible, resource, improvements]`. `terrain` and `overlay` are the engine's lower-case keys, as in the world
-  snapshot (`overlay` null when it is the base terrain); `river` and `visible` are 0 or 1; `owner` is the index
-  of the player whose borders hold the tile, or -1; `resource` is null unless the seat knows about it (as in
-  `map`); `improvements` are as in `map` (`road`, `mine`, `barbarian_camp`, ...).
+  visible, resource, improvements, bonus]`. `terrain` and `overlay` are the engine's lower-case keys, as in the
+  world snapshot (`overlay` null when it is the base terrain); `visible` is 0 or 1; `owner` is the index of the
+  player whose borders hold the tile, or -1; `resource` is null unless the seat knows about it (as in `map`);
+  `improvements` are as in `map` (`road`, `mine`, ...), plus `barbarian_camp` on a tile with a camp (the engine
+  keeps camps as a tile flag, not an improvement).
+- `river` is a bitmask of the tile's river edges, 0 when no river touches it (so it reads as the old 0/1 flag):
+  `NE=1, SE=2, SW=4, NW=8`, the four edges rivers run along, then `N=16, E=32, S=64, W=128`, the corner flags
+  (only Civ III maps set them; the map generator never does). These are the engine's `Tile.river*` flags, which
+  the OpenCiv3 client's `RiverLayer` reads to pick a river sprite (`C7/MapView.cs`). An edge is flagged on both
+  of its tiles: a tile's NE bit is its NE neighbour's SW bit, SE pairs with NW, N with S, E with W. The client
+  draws one sprite per vertex, on each known tile's east corner: with N, E, S the tile's NE, E and SE neighbours,
+  its 4x4 cell in `mtnRivers.png` is `(N&4 || W&1 ? 1 : 0) + (E&8 || N&2 ? 2 : 0) + (W&2 || S&8 ? 4 : 0) +
+  (S&1 || E&4 ? 8 : 0)` (nothing for 0).
+- `bonus` is 1 on bonus grassland where the client draws its shield marker (`C7/Map/TntLayer.cs`) and the tile
+  yields the extra shield: the engine's `isBonusShield` on a grassland overlay (a forest hides it until cleared).
 - `players` lists every player, barbarians included; `owner` everywhere is an index into it, the same index as
-  the world snapshot's, and `me` marks the seat.
-- `cities` are the cities on known tiles. The seat's own also carry its `id`, `producing`, `turns_to_complete`
-  and `turns_to_grow`, as in `state`.
+  the world snapshot's, and `me` marks the seat. `color` is the player's colour in the OpenCiv3 client, as
+  `#rrggbb`: the client's pick of the civ's primary or secondary colour index, so that players differ where they
+  can (`C7/Textures/PlayerTextureUtil.cs`), from its standalone colour table (`C7/Lua/standalone/textures.lua`).
+  It is not the world snapshot's `color`.
+- `cities` are the cities on known tiles. Each carries what the client draws a city from (`C7/Map/CityScene.cs`):
+  `era`, its owner's era (0 Ancient, 1 Middle Ages, 2 Industrial, 3 Modern), the row of the city sprite;
+  `walls`, whether it has a building that provides walls (the client draws the walled sprite only for towns,
+  size 6 or less); and `disorder`, civil disorder (the fire). The seat's own also carry its `id`, `producing`,
+  `turns_to_complete` and `turns_to_grow`, as in `state`, and `starving`, true when its food per turn is negative
+  (`turns_to_grow` is null both then and when the city stagnates).
 - `units` are on visible tiles only: the seat's own one per unit with its `id` and `count` 1, everyone else's
-  counted per tile, owner and type.
+  counted per tile, owner and type. Each carries what the client's `UnitLayer` draws beside a unit: `hp` and
+  `hp_max` (the hit point bar), `fortified` (a white frame around the bar) and `combat` (attack or defence above
+  0; the client draws no bar for a unit that cannot fight). A group's values are those of the unit the client
+  would draw of it, its best defender (`selectUnitToDisplay`): the healthiest not aboard a transport, fortified
+  first.
 
 ### `city_sites`
 Args: `unit` (a Settler id; default: the first settler, else the capital), `top` (default 5).

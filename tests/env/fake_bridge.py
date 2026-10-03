@@ -32,6 +32,11 @@ OVERLAY = {(14, 8): "Hills", (15, 7): "Forest", (11, 13): "Forest", (16, 10): "M
 SIZES = ["Tiny", "Small", "Standard", "Large", "Huge"]
 CITY_NAMES = ["Rome", "Veii", "Antium", "Cumae", "Neapolis", "Ravenna"]
 CIVS = ["Greece", "Egypt", "Babylon", "Germany", "Persia"]
+# The OpenCiv3 client's (primary, secondary) colour index per civ (ruleset.json) and the hex of those indexes
+# (standalone textures.lua), for known_map's players[].color.
+CIV_COLOR_INDEXES = {"Barbarians": (0, 0), "Rome": (1, 1), "Greece": (10, 10), "Egypt": (3, 3), "Babylon": (1, 13),
+                     "Germany": (6, 6), "Persia": (10, 14)}
+CLIENT_COLORS = {0: "#f0f8ff", 1: "#e6194b", 3: "#ffe119", 6: "#000075", 10: "#aaffc3", 13: "#808000", 14: "#dcbeff"}
 COLORS = {"Rome": [196, 52, 52], "Greece": [52, 96, 196], "Egypt": [212, 180, 40], "Babylon": [120, 60, 160],
           "Germany": [90, 90, 90], "Persia": [40, 160, 140], "Barbarians": [30, 30, 30]}
 TECHS = {  # name: (cost, prerequisites, unlocks)
@@ -121,6 +126,25 @@ def tile_yield(p) -> dict:
     if RESOURCES.get(p) == "Wheat":
         food += 2
     return {"food": food, "shields": shields, "commerce": 1 if p in RIVER else 0}
+
+
+def client_colors(civs: list[str]) -> list[int]:
+    """The client's colour index per player (C7/Textures/PlayerTextureUtil.cs): the primary, or the secondary when
+    the primary is taken; then in order a player whose colour is shared drops it and picks again."""
+    used: dict[int, int] = {}
+
+    def load(i: int) -> None:
+        if i not in used:
+            first, second = CIV_COLOR_INDEXES[civs[i]]
+            used[i] = second if first in used.values() else first
+
+    for i in range(len(civs)):
+        load(i)
+    for i in range(len(civs)):
+        if list(used.values()).count(used[i]) > 1:
+            del used[i]
+            load(i)
+    return [used[i] for i in range(len(civs))]
 
 
 def ceil_div(a, b) -> int:
@@ -798,22 +822,29 @@ class Game:
                 continue
             over = OVERLAY.get(p)
             owner = mine if self.owned(p) else greece if dist(p, athens) <= 1 else -1
+            # The river runs along the NE edges of the RIVER tiles (bit 1); its far bank is left out, like in `map`.
+            # No bonus grassland: the scripted grassland yields no shield.
             tiles.append([p[0], p[1], terrain(*p).lower(), over.lower() if over else None, int(p in RIVER), owner,
-                          int(p in visible), RESOURCES.get(p), []])
+                          int(p in visible), RESOURCES.get(p), [], 0])
         cities = [{"x": c["pos"][0], "y": c["pos"][1], "name": c["name"], "owner": mine, "size": c["size"],
-                   "capital": "Palace" in c["buildings"], "id": c["id"], "producing": c["producing"],
+                   "capital": "Palace" in c["buildings"], "era": 0, "walls": "Walls" in c["buildings"],
+                   "disorder": c["disorder"], "id": c["id"], "producing": c["producing"],
                    "turns_to_complete": self.city_view(c)["turns_to_complete"],
-                   "turns_to_grow": self.city_view(c)["turns_to_grow"]} for c in self.cities.values()]
+                   "turns_to_grow": self.city_view(c)["turns_to_grow"],
+                   "starving": self.city_view(c)["food_per_turn"] < 0} for c in self.cities.values()]
         if athens in self.explored:
             cities.append({"x": athens[0], "y": athens[1], "name": "Athens", "owner": greece, "size": 2,
-                           "capital": True})
-        units = [{"x": u["pos"][0], "y": u["pos"][1], "owner": mine, "type": u["type"], "count": 1, "id": u["id"]}
-                 for u in self.units.values()]
+                           "capital": True, "era": 0, "walls": False, "disorder": False})
+        units = [{"x": u["pos"][0], "y": u["pos"][1], "owner": mine, "type": u["type"], "count": 1, "id": u["id"],
+                  "hp": u["hp"], "hp_max": UNIT_STATS[u["type"]][1], "fortified": u["status"] == "fortified",
+                  "combat": u["type"] not in ("Settler", "Worker")} for u in self.units.values()]
         if (b := self.barbarian()) and b in visible:
-            units.append({"x": b[0], "y": b[1], "owner": len(civs) - 1, "type": "Warrior", "count": 1})
+            units.append({"x": b[0], "y": b[1], "owner": len(civs) - 1, "type": "Warrior", "count": 1,
+                          "hp": 3, "hp_max": 3, "fortified": False, "combat": True})
+        colors = client_colors(civs)
         return {"turn": self.turn, "width": WIDTH, "height": HEIGHT, "wrap_x": True,
-                "players": [{"index": i, "civ": c, "barbarian": c == "Barbarians", "me": i == mine}
-                            for i, c in enumerate(civs)],
+                "players": [{"index": i, "civ": c, "barbarian": c == "Barbarians", "me": i == mine,
+                             "color": CLIENT_COLORS[colors[i]]} for i, c in enumerate(civs)],
                 "tiles": tiles, "cities": cities, "units": units}
 
     def handle(self, cmd, a, on_turn) -> dict:

@@ -209,6 +209,10 @@ hotkeys, the city screen, the advisors, and end turn. The agents wait for you to
 minutes while others wait has its turn ended for it (`human_turn_seconds` in the task's `openciv3_match` step). The
 task waits for the game to end (`openciv3_await_game`), then grades it and saves the recording.
 
+With the client in the image (`agent-env openciv3 setup --client`), the page draws the map in the OpenCiv3 client's
+own art: its terrain, rivers, cities, unit sprites, fog of war and HUD, as the client draws them; **T** switches to
+the plain map ([docs/play.md](docs/play.md#6-the-games-art)).
+
 To seat yourself in any match, add `"humans": {"you": "Rome"}` to its `openciv3_match` step and an
 `openciv3_await_game` step that grading and the recording depend on. [docs/play.md](docs/play.md) has the details.
 On a remote machine, forward the port as for the live view.

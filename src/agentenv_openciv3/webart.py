@@ -8,8 +8,8 @@ and the sheets it names:
 
 - terrain, rivers, improvements, resources, borders, fog, cities, the selection cursor and the disorder fire: the
   client's PNGs as they are (only the variants this art set really has: many of its variant sheets are identical);
-- units: each unit's idle (`Default`) and moving (`Run`) animations from its FLC, as one sheet per animation, a row
-  per direction, plus a mask of the civ-colour pixels for tinting each civ's units;
+- units: from each unit's FLC animations, its idle and fortified poses and its moving (`Run`) animation, as one
+  sheet with a row per action and direction, plus a mask of its civ-colour pixels to tint for each civ (civ3flc.py);
 - the Noto Sans fonts the client's labels use, with their licence.
 
 The play page draws them the way the client does (map.js, ArtPainter); without them it draws its own map.
@@ -39,6 +39,11 @@ SHEETS = {
     "resources": "resources.png", "cities": "Cities/rMIDEAST.png", "walls": "Cities/MIDEASTWALL.png",
     "ruins": "Cities/DESTROY.png", "city_icons": "Cities/city icons.png", "cursor": "Animations/Cursor.png",
     "disorder": "Animations/DisorderDefault.png", "led": "interface/MovementLED.png",
+    # the HUD: the status scroll and its next-turn dome, the minimap frame, the unit order buttons (normal, hover,
+    # pressed)
+    "status_box": "interface/box right color.png", "next_turn": "interface/nextturn states color.png",
+    "minimap_box": "interface/box left color.png", "buttons": "interface/NormButtons.png",
+    "buttons_hover": "interface/rolloverbuttons.png", "buttons_pressed": "interface/highlightedbuttons.png",
 }
 # Unit type -> art folder under Assets/Art/Units, as the client's standalone ruleset maps them
 # (vendor/OpenCiv3/C7/Lua/standalone/ruleset.lua). Types without art are drawn as the page's own markers.
@@ -54,7 +59,6 @@ UNIT_ART = {
     "Crusader": "Black Hospitaller Swordsman", "Ancient Cavalry": "Oscan Companion", "Curragh": "MinoanGalley",
 }
 FONTS = ("NotoSans-Regular.ttf", "NotoSans-Bold.ttf", "LICENSE-NotoSans.txt")
-ANIMATIONS = ("Default", "Run")
 
 
 def find() -> Path | None:
@@ -83,12 +87,15 @@ def convert(c7: Path, out: Path) -> dict:
         src = art / rel
         if not src.is_file():
             raise FileNotFoundError(f"the art has no {rel}")
-        shutil.copyfile(src, out / "sheets" / f"{name}.png")
+        _small_png(src, out / "sheets" / f"{name}.png")
         sheets[name] = f"sheets/{name}.png"
     units = {}
     (out / "units").mkdir()
+    done: dict[str, dict] = {}
     for unit, folder in UNIT_ART.items():
-        units[unit] = civ3flc.convert_unit(art / "Units" / folder, out / "units", slug(unit), ANIMATIONS)
+        if folder not in done:
+            done[folder] = civ3flc.convert_unit(art / "Units" / folder, out / "units", slug(folder))
+        units[unit] = done[folder]
     (out / "fonts").mkdir()
     for f in FONTS:
         if (c7 / "Fonts" / f).is_file():
@@ -97,10 +104,21 @@ def convert(c7: Path, out: Path) -> dict:
     for p in sorted(out.rglob("*")):
         if p.is_file():
             digest.update(p.relative_to(out).as_posix().encode() + p.read_bytes())
+    fonts = sorted(f for f in FONTS if f.endswith(".ttf") and (out / "fonts" / f).is_file())
     manifest = {"version": 1, "id": digest.hexdigest()[:12], "pinned": _pinned(c7), "sheets": sheets,
-                "units": units, "fonts": sorted(f for f in FONTS if f.endswith(".ttf") and (out / "fonts" / f).is_file())}
+                "units": units, "fonts": fonts}
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
     return manifest
+
+
+def _small_png(src: Path, dst: Path) -> None:
+    """The sheet as the smallest lossless PNG: indexed when it has 256 colours or fewer, else re-encoded."""
+    from PIL import Image
+
+    with Image.open(src) as im:
+        civ3flc.save_small(im.convert("RGBA"), dst)
+    if dst.stat().st_size > src.stat().st_size:
+        shutil.copyfile(src, dst)
 
 
 def _pinned(c7: Path) -> str | None:

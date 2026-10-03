@@ -223,13 +223,15 @@ sealed partial class Session {
 			if (!visible || t.unitsOnTile.Count == 0) continue;
 			// As TileUnits: the seat's own units one by one with their ids, everyone else's grouped by owner and type.
 			foreach (MapUnit u in t.unitsOnTile.Where(u => u.owner == human).OrderBy(u => ids.Of(u) is string id ? Ids.Number(id) : int.MaxValue))
-				units.Add(new JsonObject {
+				units.Add(WithHitPoints(new JsonObject {
 					["x"] = t.XCoordinate, ["y"] = t.YCoordinate, ["owner"] = index[human], ["type"] = u.unitType.name, ["count"] = 1, ["id"] = ids.Of(u),
-				});
+				}, u));
+			// A group's hit points are those of the unit the client would draw of it (C7/Map/UnitLayer.cs, selectUnitToDisplay:
+			// the best defender, skipping units aboard a transport). Within one type that is the healthiest, fortified first.
 			foreach (var g in t.unitsOnTile.Where(u => u.owner != human).GroupBy(u => (Owner: index[u.owner], Type: u.unitType.name)))
-				units.Add(new JsonObject {
+				units.Add(WithHitPoints(new JsonObject {
 					["x"] = t.XCoordinate, ["y"] = t.YCoordinate, ["owner"] = g.Key.Owner, ["type"] = g.Key.Type, ["count"] = g.Count(),
-				});
+				}, g.OrderBy(u => u.loadedOnUnitId != null).ThenByDescending(u => u.hitPointsRemaining).ThenByDescending(u => u.isFortified).First()));
 		}
 		var cities = new JsonArray();
 		foreach (City c in gd.cities) {
@@ -283,6 +285,16 @@ sealed partial class Session {
 		o["yield"] = Yield(t.FoodYield(human).yield, t.ProductionYield(human).yield, t.CommerceYield(human).yield);
 		string why = FoundSite(t);
 		o["city_site"] = why == null ? new JsonObject { ["ok"] = true } : new JsonObject { ["ok"] = false, ["reason"] = why };
+		return o;
+	}
+
+	/// <summary>What the client's UnitLayer draws beside a unit: the hit point bar, only for a unit that can fight, framed when
+	/// it is fortified.</summary>
+	static JsonObject WithHitPoints(JsonObject o, MapUnit u) {
+		o["hp"] = u.hitPointsRemaining;
+		o["hp_max"] = u.maxHitPoints;
+		o["fortified"] = u.isFortified;
+		o["combat"] = u.unitType.attack > 0 || u.unitType.defense > 0;
 		return o;
 	}
 

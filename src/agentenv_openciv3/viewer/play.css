@@ -119,3 +119,28 @@ table.civs th { font-weight: 500; color: var(--muted); font-size: 11px; }
 .center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
   font-size: 16px; color: var(--text2); text-align: center; padding: 20px; }
 @media (max-width: 1100px) { .commands { max-width: calc(100% - 20px); bottom: 150px; } .research { min-width: 0; } }
+
+/* the client's HUD art (art.js), when the env has it and it is on (key T) */
+body.art .status { width: 294px; height: 137px; right: 17px; bottom: 12px; background: no-repeat 0 0; border: 0; border-radius: 0;
+  box-shadow: none; overflow: visible; color: #000; font: 12px/14px "C7 Noto Sans", system-ui, sans-serif; }
+body.art .status .dome { position: absolute; left: 0; top: 0; width: 47px; height: 28px; padding: 0; border: 0; border-radius: 0;
+  background: no-repeat 0 0; cursor: pointer; }
+body.art .status .dome:hover:not(:disabled) { background-position: -47px 0; }
+body.art .status .dome.lit { animation: dome 1.2s steps(1) infinite; }
+@keyframes dome { 0% { background-position: -47px 0; } 50% { background-position: -94px 0; } }
+body.art .status .dome:disabled { opacity: 1; cursor: default; }
+body.art .status .hint { position: absolute; right: calc(294px - 249px); top: 25px; font-size: 11px; animation: blink 1.2s steps(1) infinite; }
+body.art .status .unitline { position: absolute; right: calc(294px - 259px); text-align: right; max-width: 150px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+body.art .status .unitline.small { color: #5b4a2a; font-size: 11px; }
+body.art .status .uid { color: #6d5a33; font-size: 10px; }
+body.art .status .thumb { position: absolute; left: 63px; top: 22px; width: 70px; height: 60px; image-rendering: pixelated; }
+body.art .status .mid { position: absolute; left: 30px; width: 248px; text-align: center; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; }
+body.art .minimap { left: 17px; bottom: 12px; width: 280px; height: 130px; padding: 0; background: no-repeat 0 0; border: 0;
+  border-radius: 0; }
+body.art .minimap canvas { position: absolute; left: 25px; top: 12px; border-radius: 0; image-rendering: pixelated; }
+body.art .commands { background: rgba(0,0,0,.35); border-color: rgba(255,255,255,.12); gap: 4px; padding: 4px; }
+body.art .commands button.icon { width: 32px; height: 32px; min-width: 0; padding: 0; border: 0; border-radius: 0;
+  background-color: transparent; background-repeat: no-repeat; position: relative; }
+body.art .commands button.icon kbd { position: absolute; right: -3px; bottom: -4px; font-size: 8px; padding: 0 2px; opacity: .85; }

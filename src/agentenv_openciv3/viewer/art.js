@@ -37,24 +37,44 @@ class Art {
     }
   }
   img(name) { return this.images[name]; }
-  // A unit type's sheets, loaded on first use: null while loading or when the type has no art.
+  // A unit type's art, loaded on first use: null while it loads, or when the type has none.
   unit(type, redraw) {
     const spec = this.m.units[type];
     if (!spec) return null;
     let u = this.units.get(type);
     if (!u) {
-      u = {spec, anims: {}, ready: false};
+      u = {spec, sheet: new Image(), mask: spec.mask ? new Image() : null, ready: false, cells: new Map()};
       this.units.set(type, u);
-      const loads = [];
-      for (const [name, a] of Object.entries(spec.animations)) {
-        const anim = {...a, sheet: new Image(), mask: a.mask ? new Image() : null};
-        u.anims[name] = anim;
-        loads.push(new Promise(ok => { anim.sheet.onload = ok; anim.sheet.onerror = ok; anim.sheet.src = this.url(a.sheet); }));
-        if (anim.mask) loads.push(new Promise(ok => { anim.mask.onload = ok; anim.mask.onerror = ok; anim.mask.src = this.url(a.mask); }));
-      }
-      Promise.all(loads).then(() => { u.ready = true; redraw && redraw(); });
+      const load = im => new Promise(ok => { im.onload = ok; im.onerror = ok; });
+      const waits = [load(u.sheet), ...(u.mask ? [load(u.mask)] : [])];
+      u.sheet.src = this.url(spec.sheet);
+      if (u.mask) u.mask.src = this.url(spec.mask);
+      Promise.all(waits).then(() => { u.ready = true; redraw && redraw(); });
     }
     return u.ready ? u : null;
+  }
+  // One frame of a unit in a civ's colour, cached: the unit, then its civ-colour pixels tinted with the colour and
+  // shaded by the artist's grey (UnitTint.gdshader paints them flat; keeping the shade reads better).
+  unitCell(u, action, dir, frame, color) {
+    const a = u.spec.actions[action] || u.spec.actions.default;
+    const row = a.row + Math.max(0, u.spec.directions.indexOf(dir)), col = Math.min(frame, a.frames - 1);
+    const key = `${row},${col},${color}`;
+    let c = u.cells.get(key);
+    if (c) return c;
+    const {w, h} = u.spec, sx = col * w, sy = row * h;
+    c = document.createElement("canvas"); c.width = w; c.height = h;
+    const g = c.getContext("2d");
+    g.drawImage(u.sheet, sx, sy, w, h, 0, 0, w, h);
+    if (u.mask) {
+      const t = document.createElement("canvas"); t.width = w; t.height = h;
+      const tg = t.getContext("2d");
+      tg.drawImage(u.mask, sx, sy, w, h, 0, 0, w, h);
+      tg.globalCompositeOperation = "multiply"; tg.fillStyle = color; tg.fillRect(0, 0, w, h);
+      tg.globalCompositeOperation = "destination-in"; tg.drawImage(u.mask, sx, sy, w, h, 0, 0, w, h);
+      g.drawImage(t, 0, 0);
+    }
+    u.cells.set(key, c);
+    return c;
   }
   // An image with the template colours swapped for a civ's, cached (Util.TransformColors: exact RGBA matches).
   recolor(name, swaps, key) {
@@ -103,7 +123,26 @@ class ArtPainter {
     this.cache = null; this.cacheKey = "";
   }
   // The same calls as PlayPainter: draw() and minimap().
-  minimap(...a) { this.plain.minimap(...a); }
+  // The minimap as the client draws it (MiniMapLayers.cs): a pixel per tile in its terrain's colour, tinted a
+  // quarter toward its owner's, cities white, water steel blue, what isn't in sight half dark; the camera's frame.
+  minimap(ctx, world, cam, w, h, viewW, viewH) {
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, w, h);
+    const sx = w / world.W, sy = h / (world.H / 2);
+    for (const t of world.tiles.values()) {
+      let c = ART_WATER.has(t.terrain) ? [70, 130, 180] : MINI[t.overlay || t.terrain] || MINI[t.terrain] || [143, 188, 143];
+      if (t.owner >= 0 && !ART_WATER.has(t.terrain)) c = mix(world.color(t.owner), c, 0.25);
+      if (world.city(t.x, t.y)) c = [255, 255, 255];
+      if (!t.visible) c = mix(c, [0, 0, 0], 0.5);
+      ctx.fillStyle = rgb(c);
+      ctx.fillRect(Math.floor(t.x / 2 * sx * 2), Math.floor(Math.floor(t.y / 2) * sy), Math.ceil(sx * 2), Math.ceil(sy));
+    }
+    const fw = viewW / cam.hw * sx, fh = viewH / cam.hw * sy;
+    const fx = (((cam.cx * sx - fw / 2) % w) + w) % w, fy = cam.cy / 2 * sy - fh / 2;
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 1;
+    if (fw >= w) { ctx.strokeRect(0.5, fy, w - 1, fh); return; }
+    ctx.strokeRect(fx + 0.5, fy + 0.5, fw, fh);
+    if (fx + fw > w) ctx.strokeRect(fx - w + 0.5, fy + 0.5, fw, fh);
+  }
 
   // ---- the static picture (terrain to fog), cached until the world or the camera changes ----
   // It is drawn as the client draws it, at the art's own scale (tiles 128x64, every sprite on whole pixels, so the
@@ -374,8 +413,94 @@ class ArtPainter {
     g.stroke();
   }
 
-  // ---- units: drawn every frame over the cached picture (they animate) ----
+  // ---- units: drawn every frame over the cached picture (they move and the cursor turns) ----
+  // One unit per tile, as the client shows it (UnitLayer.selectUnitToDisplay): the selected one, else the seat's own
+  // (a fighting one first), else the first. Under it its HP bar, movement light and stack marks, and the selection
+  // cursor; an idle unit holds its last frame, facing where it last moved (south-east at first); a unit that has
+  // just moved slides from its old tile playing its run.
   _units(ctx, world, cam, w, h, o) {
-    this.plain.unitsOnly(ctx, world, cam, w, h, o);   // replaced once the unit art is wired in
+    const z = cam.hw / 64, W = world.wrap ? world.W : 0, now = performance.now(), sel = o.selected;
+    const mine = o.mine || new Map(), hz = 1 / clamp(z, 0.5, 1);   // the HUD keeps its size from zoom 0.5 to 1
+    this._track(world, mine, now);
+    ctx.save();
+    ctx.imageSmoothingEnabled = z < 0.999;
+    const tiles = this.plain._onScreen(world, cam, w, h).filter(([t]) => t.visible && world.unitsAt(t.x, t.y).length)
+      .sort((a, b) => a[0].y - b[0].y || a[2] - b[2]);
+    for (const [t, sx, sy] of tiles) {
+      const us = world.unitsAt(t.x, t.y), own = us.filter(u => u.owner === world.me);
+      const top = (sel && own.find(u => u.id === sel.id)) || own.find(u => !NONCOMBAT.has(u.type)) || own[0] || us[0];
+      const count = us.reduce((n, u) => n + (u.count || 1), 0);
+      const st = top.id != null ? mine.get(top.id) : null, mv = top.id != null ? this.moves.get(top.id) : null;
+      let ox = 0, oy = 0, action = (st?.status ?? (top.fortified ? "fortified" : "")) === "fortified" ? "fortify" : "default", frame = 0;
+      const facing = (top.id != null && this.facing.get(top.id)) || "SE";
+      const art = this.art.unit(top.type, () => draw());
+      if (mv && art) {
+        const run = art.spec.actions.run, dur = run.frames * run.ms, p = (now - mv.t0) / dur;
+        if (p < 1) { ox = -mv.dx * (1 - p) * 64 * z; oy = -mv.dy * (1 - p) * 32 * z; action = "run"; frame = Math.floor(p * run.frames); }
+        else this.moves.delete(top.id);
+      }
+      const cx = sx + ox, cy = sy + oy;
+      // the HUD first, as the client has it under the unit
+      const inForeignCity = world.city(t.x, t.y) && top.owner !== world.me;
+      const hp = st ? st.hp : top.hp, hpMax = st ? st.hp_max : top.hp_max, combat = top.combat ?? !NONCOMBAT.has(top.type);
+      let barTop;
+      if (combat && hp != null && hpMax) {
+        const s = hz * z, seg = (hpMax <= 6 ? 4 : hpMax <= 12 ? 2 : 1) * s, total = seg * hpMax + (hpMax - 1) * s;
+        const bx = cx - 26 * z, by = cy - 8 * z - total;
+        ctx.fillStyle = "#000"; ctx.fillRect(bx, by, 2 * s, total);
+        const f = hp / hpMax;
+        ctx.fillStyle = f >= 0.67 ? "#0f0" : f >= 0.34 && hpMax > 2 ? "#ff0" : "#f00";
+        for (let i = 0; i < hp; i++) ctx.fillRect(bx, by + total - seg - (seg + s) * i, 2 * s, seg);
+        if (action === "fortify") { ctx.strokeStyle = "#fff"; ctx.lineWidth = s; ctx.strokeRect(bx - 0.5 * s, by - 0.5 * s, 3 * s, total + s); }
+        barTop = by;
+      } else barTop = cy - 34 * z;
+      if (top.owner === world.me && st && !inForeignCity) {
+        const led = this.art.img("led"), i = !(st.moves_left > 0.01) ? 4 : st.moves_left >= st.moves_max ? 0 : 2, s = hz * z;
+        if (led) ctx.drawImage(led, 1 + 7 * i, 1, 6, 6, cx - 28 * z, barTop - 6 * s, 6 * s, 6 * s);
+      }
+      if (count > 1 && !inForeignCity) {
+        const s = hz * z;
+        for (let k = 0; k < Math.min(count, 8); k++) {
+          const lx = cx - 27 * z, ly = cy - 5 * z + 3 * s * k;
+          ctx.fillStyle = "#fff"; ctx.fillRect(lx, ly, 4 * s, s);
+          ctx.fillStyle = "rgb(75,75,75)"; ctx.fillRect(lx, ly + s, 4 * s, Math.max(1, s * 0.6));
+        }
+      }
+      if (sel && top.id === sel.id) {   // the turning cursor, under the unit
+        const cur = this.art.img("cursor"), f = Math.floor((now - this.t0) / 120) % 18;
+        if (cur) ctx.drawImage(cur, (f % 9) * 100, Math.floor(f / 9) * 50, 100, 50, cx - 50 * z, cy - 25 * z, 100 * z, 50 * z);
+      }
+      if (art) {
+        const cell = this.art.unitCell(art, action, facing, frame, rgb(world.color(top.owner)));
+        const [ax, ay] = art.spec.anchor;
+        ctx.drawImage(cell, cx - ax * z, cy - ay * z, cell.width * z, cell.height * z);
+      } else this.plain.unitMarker(ctx, world, top, count, cx, cy - 10 * z, cam.hw, false);
+    }
+    ctx.restore();
+  }
+  // Notice the seat's units that moved since the last view: they face the way they went and slide there.
+  _track(world, mine, now) {
+    if (!this.pos) { this.pos = new Map(); this.moves = new Map(); this.facing = new Map(); this.seen = -1; }
+    if (this.seen === world.version) return;
+    this.seen = world.version;
+    for (const [id, u] of mine) {
+      const was = this.pos.get(id);
+      this.pos.set(id, [u.x, u.y]);
+      if (u.status === "fortified") this.facing.set(id, "SE");
+      if (!was || (was[0] === u.x && was[1] === u.y)) continue;
+      let dx = u.x - was[0];
+      if (world.wrap) dx = ((dx % world.W) + world.W + world.W / 2) % world.W - world.W / 2;
+      const dy = u.y - was[1];
+      // the way it went: a single step is one of DIRS; a longer move faces its general direction
+      const dir = !dy ? (dx > 0 ? "E" : "W") : !dx ? (dy > 0 ? "S" : "N") : (dy < 0 ? "N" : "S") + (dx > 0 ? "E" : "W");
+      this.facing.set(id, dir);
+      if (Object.values(DIRS).some(d => d[0] === dx && d[1] === dy)) this.moves.set(id, {dx, dy, t0: now});
+    }
   }
 }
+// The minimap's terrain colours (MiniMapLayers.cs, the CSS colour names).
+const MINI = {desert: [169, 169, 169], plains: [189, 183, 107], grassland: [143, 188, 143], tundra: [211, 211, 211],
+  floodplain: [173, 216, 230], "flood plain": [173, 216, 230], hills: [192, 192, 192], mountains: [188, 143, 143],
+  forest: [143, 188, 143], jungle: [95, 158, 160], marsh: [119, 136, 153], volcano: [105, 105, 105]};
+// Units the client draws no HP bar for (attack and defence 0).
+const NONCOMBAT = new Set(["Settler", "Worker", "Scout", "Explorer", "Catapult", "Cannon", "Trebuchet", "Leader"]);

@@ -128,6 +128,7 @@ async def test_the_play_page_is_served():
     from agentenv_openciv3 import viewer
     page = viewer.play_page()
     assert "/*__" not in page and "<script>" in page
+    assert "class World" in page and "class ArtPainter" in page and "function boot" in page   # map.js, art.js, play.js
 
 
 async def test_play_page_route(env):
