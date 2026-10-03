@@ -8,10 +8,12 @@ Starts the env locally (no Docker) on a copy of the bridge, starts a match the w
 `urn:openciv3:new-game/v1` extension with civs, seats, labels, size and turn limit), and plays one asyncio task per
 seat. Each is an MCP client sending its seat's `X-OpenCiv3-Seat` header and plays its turns with real tool calls:
 get_turn_brief, list_units, find_city_sites + settle, set_production, research, auto_work, fortify and explore,
-buy, revolution, set_rates, plan, view_map and diplomacy, then end_turn. Seats have personalities (expansionist,
-builder, aggressive); the aggressive ones declare war on a neighbour mid-game, build an army, march on its cities and
-attack them, and later make peace. About 2% of the calls are deliberately wrong (an unknown unit, an item the city
-cannot build, ...) so the failure display has something to show.
+buy, revolution, set_rates, plan, view_map, diplomacy and message, then end_turn with a note on what it did. Seats
+have personalities (expansionist, builder, aggressive); the aggressive ones threaten a neighbour, declare war on it
+mid-game, build an army, march on its cities and attack them, and later offer peace; the others now and then greet,
+warn or court the other leaders, and answer what they are sent. So a match shows everything spectators can see: plans,
+notes and messages too. About 2% of the calls are deliberately wrong (an unknown unit, an item the city cannot build,
+...) so the failure display has something to show.
 
 The output directory gets everything a viewer needs: record/ (the bridge's turn-*.json.gz snapshots), saves/ (the
 engine's per-turn saves), autosave/, actions.jsonl (the env's action log, every seat) and actions/<label>.jsonl,
@@ -112,6 +114,32 @@ WAR_SHARE = (0.30, 0.42)        # when an aggressive seat starts its war, as a s
 WAR_LENGTH = (0.15, 0.25)       # how long it fights before offering peace, as a share of the turn limit
 MAX_CALLS_PER_TURN = 90
 MAX_ATTACKS_PER_TURN = 10
+MESSAGES_PER_TURN = 2           # of the env's 3
+# What a turn's note leads with: the most notable kind of move.
+NOTABLE = {"war": 6, "razed": 6, "peace": 5, "attack": 4, "revolution": 4, "found": 3, "settle": 3, "march": 3,
+           "buy": 2, "research": 1, "build": 1, "explore": 1}
+QUIET_NOTES = {"expansionist": "settlers on their way, every city growing",
+               "builder": "cities growing, buildings coming", "aggressive": "the army gathers"}
+THREATS = ["{target}, your borders are thin and your cities are rich. Send tribute, or {me} marches before T{turn}.",
+           "{target}, {city} sits on land {me} wants. Give it up, or we take it.",
+           "Last warning, {target}: {me}'s legions are ready."]
+WAR_CRIES = ["War, {target}. {city} will fly the banner of {me}.", "War, {target}. Your cities will fly our banner."]
+WAR_NEWS = ["{me} is at war with {target}. Keep out of it, and you keep your cities."]
+TAUNTS = ["{target}, your lines are breaking. Give up {city} and live.",
+          "Every turn you hold out costs you, {target}.", "{city} is next, {target}."]
+OFFERS = ["{target}, enough blood. I offer peace: take it before I change my mind.",
+          "{target}, this war has made its point. Peace, now."]
+GREETINGS = ["Greetings from {me}. We seek peace and open roads with every leader.",
+             "{me} sends its greetings. Trade, not war."]
+COURTING = ["{target}, {rival} grows too fast for either of us. An alliance?",
+            "{target}, {me} would rather have you as a friend. Peace between us for good?",
+            "{target}, keep your settlers off our borders and we stay friends."]
+ATTACKED = ["{target} attacked {me} without cause. Who stands with us?",
+            "We will defend every city, {target}. Make peace while you can."]
+DEFIANT = ["We will not kneel, {target}. Come and try.", "Your threats change nothing, {target}."]
+FRIENDLY = ["Agreed, {target}. Let our borders stay quiet.", "Well said, {target}. We are with you."]
+HOSTILE_WORDS = ("tribute", "war", "march", "legions", "take it", "give up", "next", "costs you", "breaking",
+                 "kneel", "threats")
 
 UNIT_LINE = re.compile(r"^(u\d+) (.+?) \((-?\d+),(-?\d+)\) ([\d.]+)/([\d.]+)mv · (.*)$")
 TARGET = re.compile(r"\((-?\d+),(-?\d+)\) (\S+) (.+?) (\d+)% to win")
@@ -122,6 +150,8 @@ CIV_LINE = re.compile(r"^  (.+?)( \(another agent\))? · (at peace|AT WAR[^·]*?
 SETTLE_CALL = re.compile(r'unit_order\(unit="(u\d+)", order="settle", x=(-?\d+), y=(-?\d+)\)')
 SITE_LINE = re.compile(r"^#\d+ \((-?\d+),(-?\d+)\) score")
 RATES_CALL = re.compile(r"set_rates\(science=(\d+), luxury=(\d+)\)")
+# A message read: a reply's ✉ line, or a brief's MESSAGES line ("you to ..." are the seat's own).
+RECEIVED = re.compile(r'^(?:✉ |  T\d+ )(.+?)(?: \([^()]*\))? to (you|all): "(.*)"$', re.M)
 
 
 def ts() -> str:
@@ -394,6 +424,14 @@ class Bot:
         self.unreachable: Counter = Counter()
         self.over = False
         self.result = ""
+        self.did: list[tuple[str, str]] = []              # this turn's moves for its note: (kind, text)
+        self.inbox: list[tuple[str, bool, str]] = []      # messages read and not yet answered: (from, to all, text)
+        self.heard: set[tuple[str, str]] = set()
+        self.sent_this_turn = 0
+        self.threatened: str | None = None
+        self.greeted = False
+        self.last_taunt = -10
+        self.defending: set[str] = set()                  # the leaders who attacked us, told off once per war
 
     # -- the MCP client --
 
@@ -429,6 +467,10 @@ class Bot:
                     self.log(f"✗ {tool}({json.dumps(args)}): {text.splitlines()[0][:160] if text else ''}")
                 else:
                     self.log(f"✓ {tool}({json.dumps(args)})")
+                for m in RECEIVED.finditer(text):
+                    if m[1] != "you" and (m[1], m[3]) not in self.heard:
+                        self.heard.add((m[1], m[3]))
+                        self.inbox.append((m[1], m[2] == "all", m[3]))
                 return not res.isError, text
             except Exception as e:      # the transport broke: reconnect and retry
                 self.log(f"! {tool} transport error ({type(e).__name__}: {e}); reconnecting", notable=True)
@@ -462,6 +504,8 @@ class Bot:
             return tool, {**args, "x": args["x"] + 1}
         if tool == "diplomacy" and args.get("action") in ("declare_war", "propose_peace"):
             return tool, {**args, "civ": r.choice(["Atlantis", "Lemuria"])}
+        if tool == "message":
+            return tool, {**args, "to": r.choice(["Atlantis", "Lemuria"])}
         if tool == "get_turn_brief":
             city = r.choice(self.cities).id if self.cities else "c1"
             return r.choice([("city_info", {"city": f"c{r.randint(40, 99)}"}),
@@ -509,10 +553,23 @@ class Bot:
                 await self.stack.aclose()
         self.log(f"done: {self.result or 'stopped'}", notable=True)
 
+    def note(self) -> str:
+        """One line for the people watching: the turn's two most notable moves."""
+        if not self.did:
+            score = re.search(r"^SCORE (\d+)", self.brief.text, re.M)
+            where = f"{len(self.cities)} cit{'y' if len(self.cities) == 1 else 'ies'}" + (
+                f", score {score[1]}" if score else "")
+            return f"Quiet turn at {where}: {QUIET_NOTES[self.personality]}."
+        moves = list(dict.fromkeys(text for _, text in sorted(self.did, key=lambda d: -NOTABLE[d[0]])))[:2]
+        line = "; ".join(moves)
+        return line[0].upper() + line[1:] + "."
+
     async def end_turn(self) -> None:
         skip = self.rng.random() < 0.9
+        note = self.note()
         for _ in range(30):
-            ok, text = await self.call("end_turn", {"skip_idle": True} if skip else {}, inject=False)
+            ok, text = await self.call("end_turn", {"skip_idle": True, "note": note} if skip else {"note": note},
+                                       inject=False)
             if "GAME OVER" in text or "no further actions are possible" in text:
                 self.over = True
                 self.result = next((line for line in text.splitlines() if line.startswith("GAME OVER")), "GAME OVER")
@@ -542,7 +599,8 @@ class Bot:
                     self.log(f"event: {item[:200]}", notable=True)
 
     async def play_turn(self) -> None:
-        self.calls_this_turn = 0
+        self.calls_this_turn = self.sent_this_turn = 0
+        self.did = []
         ok, text = await self.call("get_turn_brief")
         if not ok:
             if "game is over" in text or "GAME OVER" in text:
@@ -566,6 +624,7 @@ class Bot:
         await self.research()
         await self.government()
         await self.diplomacy()
+        await self.talk()
         await self.scout()
         await self.settlers()
         await self.workers()
@@ -604,7 +663,9 @@ class Bot:
         if goal == b.research_current:
             return
         ok, text = await self.call("research", {"tech": goal})
-        if not ok and "already" not in text:
+        if ok:
+            self.did.append(("research", f"researching {goal}"))
+        elif "already" not in text:
             self.bad_goals.add(goal)
 
     async def government(self) -> None:
@@ -620,6 +681,7 @@ class Bot:
                 ok, _ = await self.call("revolution", {"government": want})
                 if ok:
                     self.revolutions += 1
+                    self.did.append(("revolution", f"revolution: {b.government} to {want}"))
                     self.log(f"revolution: {b.government} → {want}", notable=True)
                 return
 
@@ -648,6 +710,7 @@ class Bot:
                 if self.personality != "aggressive" or accept:
                     ok, _ = await self.call("diplomacy", {"action": "propose_peace", "civ": civ})
                     if ok:
+                        self.did.append(("peace", f"accepted peace with {civ}"))
                         self.log(f"accepted peace with {civ}", notable=True)
                         if mine:
                             self.end_war()
@@ -655,6 +718,8 @@ class Bot:
             if mine and self.turn >= (self.war_until or 10 ** 6):
                 ok, _ = await self.call("diplomacy", {"action": "propose_peace", "civ": civ})
                 if ok:
+                    self.did.append(("peace", f"offered {civ} peace"))
+                    await self.say(civ, OFFERS)
                     self.log(f"proposed peace to {civ} after {self.turn - (self.war_started or 0)} turns of war",
                              notable=True)
             elif not mine and self.personality != "aggressive" and self.rng.random() < 0.12:
@@ -699,7 +764,78 @@ class Bot:
         self.target, self.war_started = civ, self.turn
         self.war_until = self.turn + int(self.limit * self.rng.uniform(*WAR_LENGTH))
         self.wars_declared.append(civ)
+        self.did.append(("war", f"declared war on {civ}"))
+        await self.say(civ, WAR_CRIES)
+        if self.rng.random() < 0.5:
+            await self.say("all", WAR_NEWS, target=civ)
         self.log(f"DECLARED WAR on {civ} (until about T{self.war_until})", notable=True)
+
+    # -- talk --
+
+    def leaders(self) -> list[str]:
+        """The other civs played by an agent or a person: the ones that read messages."""
+        return [c for c in self.m.leaders if c != self.civ]
+
+    def city_of(self, civ: str) -> str | None:
+        return next((c["name"] for c in self.foreign.values() if c["owner"] == civ), None)
+
+    async def say(self, to: str, lines: list[str], **fields: str) -> None:
+        """Send one of `lines` (filled in; one naming a city only when it knows one) to a leader, or to all; within
+        this turn's share."""
+        target = fields.pop("target", to)
+        city = self.city_of(target)
+        lines = [line for line in lines if city or "{city}" not in line]
+        if self.sent_this_turn >= MESSAGES_PER_TURN or (to != "all" and to not in self.m.leaders) or not lines:
+            return
+        text = self.rng.choice(lines).format(me=self.civ, target=target, city=city, turn=self.war_turn, **fields)
+        ok, _ = await self.call("message", {"to": to, "text": text})
+        if ok:
+            self.sent_this_turn += 1
+            self.log(f"to {to}: {text}")
+
+    async def talk(self) -> None:
+        """An aggressive seat threatens the leader it means to attack and taunts it during the war (its war cry and
+        peace offer go with the diplomacy calls); the others greet, court and warn now and then, and protest a war on
+        them. Everyone answers some of what it is sent."""
+        others = self.leaders()
+        if not others:
+            return
+        r = self.rng
+        heard, self.inbox = self.inbox, []
+        for sender, to_all, text in heard:
+            if not to_all and sender in others and r.random() < 0.4:
+                hostile = sender in self.at_war_with() or any(w in text.lower() for w in HOSTILE_WORDS)
+                await self.say(sender, DEFIANT if hostile else FRIENDLY)
+                break
+        if self.personality == "aggressive":
+            if self.target and self.turn - self.last_taunt >= 4 and r.random() < 0.6:
+                self.last_taunt = self.turn
+                await self.say(self.target, TAUNTS)
+            elif not self.target and self.threatened is None and self.war_turn - 4 <= self.turn < self.war_turn:
+                self.threatened = self.likely_target()
+                await self.say(self.threatened, THREATS)
+            return
+        for enemy in sorted(set(self.brief.wars) & set(others) - self.defending):
+            self.defending.add(enemy)
+            await self.say("all", ATTACKED[:1], target=enemy)
+            await self.say(enemy, ATTACKED[1:])
+        self.defending &= set(self.brief.wars)
+        if not self.greeted and self.turn <= 3 and r.random() < 0.3:
+            self.greeted = True
+            await self.say("all", GREETINGS)
+        elif r.random() < 0.06:
+            to = r.choice(others)
+            rival = max((c for c in self.known_civs if c != to), key=lambda c: self.known_civs[c]["score"], default="")
+            await self.say(to, COURTING if rival else COURTING[1:], rival=rival)
+
+    def likely_target(self) -> str:
+        """The leader an aggressive seat will most likely attack: the nearest with a city it has seen, else one it
+        has met, else any."""
+        home = self.home()
+        seen = [(dist(home, xy, self.m.width), c["owner"]) for xy, c in self.foreign.items()
+                if home and c["owner"] in self.m.leaders]
+        met = sorted(set(self.known_civs) & set(self.leaders()))
+        return min(seen)[1] if seen else met[0] if met else self.rng.choice(self.leaders())
 
     # -- seeing the world --
 
@@ -742,6 +878,7 @@ class Bot:
             if u.can_found and (not self.cities or self.rng.random() < 0.25):
                 ok, _ = await self.call("unit_order", {"unit": u.id, "order": "found_city"})
                 if ok:
+                    self.did.append(("found", "founded a city"))
                     continue
             ok, text = await self.call("find_city_sites", {"unit": u.id, "top": 3})
             if not ok:
@@ -759,7 +896,9 @@ class Bot:
                     await self.call("unit_order", {"unit": u.id, "order": "hold"})
                 continue
             ok, text = await self.call("unit_order", {"unit": u.id, "order": "settle", "x": site[0], "y": site[1]})
-            if not ok and u.can_found:
+            if ok:
+                self.did.append(("settle", f"sent a settler to ({site[0]},{site[1]})"))
+            elif u.can_found:
                 await self.call("unit_order", {"unit": u.id, "order": "found_city"})
 
     async def workers(self) -> None:
@@ -802,10 +941,12 @@ class Bot:
             attacks += 1
             if ok:
                 what = f"{t['owner']} " + (f"city {t['city']}" if t["city"] else "unit")
+                self.did.append(("attack", f"attacked {what}"))
                 self.log(f"{u.id} {u.type} attacked {what} at ({t['x']},{t['y']}) ({round(t['chance'] * 100)}%): "
                          f"{text.splitlines()[0][:160]}", notable=bool(t["city"]) or "razed" in text)
                 if "razed" in text or "fell" in text:
                     self.foreign.pop((t["x"], t["y"]), None)
+                    self.did.append(("razed", f"razed {t['city']} of {t['owner']}"))
                     self.log(f"RAZED {t['city']} of {t['owner']} — {text.splitlines()[0][:200]}", notable=True)
             await self.refresh_units()
 
@@ -855,6 +996,7 @@ class Bot:
                 ok, _ = await self.call("unit_order", {"unit": u.id, "order": "explore"})
                 if ok:
                     explorers.add(u.id)
+                    self.did.append(("explore", f"sent a {u.type} exploring"))
                     continue
             if self.target and (self.personality == "aggressive"):
                 army.append(u)
@@ -891,6 +1033,7 @@ class Bot:
                 if self.budget(4):
                     await self.call("unit_order", {"unit": u.id, "order": "explore"})
             return
+        self.did.append(("march", f"{len(army)} units marching on {self.target}"))
         for u in army:
             if not self.budget(4):
                 return
@@ -1005,6 +1148,7 @@ class Bot:
                 continue
             ok, _ = await self.call("set_production", {"city": c.id, "item": item})
             if ok:
+                self.did.append(("build", f"{c.name} builds {item}"))
                 if c.producing:
                     n["building:" + c.producing] -= 1
                 n["building:" + item] += 1
@@ -1031,6 +1175,7 @@ class Bot:
         self.last_buy = self.turn
         ok, text = await self.call("buy", {"city": c.id})
         if ok:
+            self.did.append(("buy", f"bought {c.producing} in {c.name}"))
             self.log(f"bought {c.producing} in {c.name}")
 
     async def rates(self) -> None:
@@ -1062,6 +1207,7 @@ class Match:
         self.proc: subprocess.Popen | None = None
         self.logf = None
         self.bots: list[Bot] = []
+        self.leaders: set[str] = set()         # the civs of every seat, bots' and people's
         self.humans: dict[str, str] = {}        # civ -> label
         if args.humans:
             self.humans = dict(tuple(h.split("=", 1)) if "=" in h else (h, h.lower()) for h in args.humans.split(","))
@@ -1179,6 +1325,8 @@ class Match:
                     "labels": {s[0]: s[1] for s in seats} | self.humans}
             if self.humans:
                 args |= {"humans": list(self.humans), "human_turn_seconds": self.args.human_turn_seconds}
+            if self.args.min_turn_seconds:
+                args["min_turn_seconds"] = self.args.min_turn_seconds
             game = await env_client.invoke_extension(self.base, card, NEW_GAME, args, 600)
             self.play = {civ: self.base + path for civ, path in (game.get("play") or {}).items()}
             self.turn_limit, self.width = game["turn_limit"], game["map"]["width"] if game["map"].get("wrap_x") else 0
@@ -1192,6 +1340,7 @@ class Match:
                 {"live_url": self.live_url, "base": self.base, "humans": self.humans, "play": self.play}, indent=2))
             self.log(f"LIVE VIEW: {self.live_url}    (MCP: {self.mcp_url}; output: {self.out})")
             self.bots = [Bot(self, civ, label, kind, i) for i, (civ, label, kind) in enumerate(seats)]
+            self.leaders = set(civs)
             self.write_meta(started=datetime.datetime.fromtimestamp(started).isoformat(timespec="seconds"),
                             status="playing")
             await asyncio.gather(*(b.play() for b in self.bots), self.progress(), self.watch_game())
@@ -1359,6 +1508,8 @@ def main() -> int:
     p.add_argument("--human-turn-seconds", type=int, default=900,
                    help="a human seat idle this long has its turn ended for it; 0: never (default 900)")
     p.add_argument("--ai-opponents", type=int, default=0, help="engine-AI civs besides the seats (default 0)")
+    p.add_argument("--min-turn-seconds", type=int, default=0,
+                   help="the broadcast pace: no turn ends sooner than this after it began (default 0)")
     p.add_argument("--port", type=int, default=0, help="env port (default: a free one)")
     p.add_argument("--bridge", help="CIVBRIDGE_CMD (default: a copy of build/bridge in the output dir)")
     p.add_argument("--no-saves", dest="saves", action="store_false", help="don't keep the engine's per-turn saves")
