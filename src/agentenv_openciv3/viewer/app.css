@@ -241,6 +241,7 @@ body.stream .agentcard .head b { font-size: 20px; }
 body.stream ul.lines { max-height: 200px; }
 body.stream svg.chart { height: 200px; }
 body.stream .clientpane { right: auto; left: 16px; top: auto; bottom: 16px; width: 40%; }
+body.stream .clientpane.big { inset: 12px; width: auto; }
 body.stream .timeline { padding: 6px 22px 10px; }
 body.stream .acard .hd b { font-size: 17px; } body.stream .acard .stats { font-size: 14px; } body.stream .acard .act { font-size: 13px; }
 body.stream .summary .wrap { max-width: 1600px; }

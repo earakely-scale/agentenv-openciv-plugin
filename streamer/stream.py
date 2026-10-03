@@ -48,6 +48,7 @@ def main() -> int:
     p.add_argument("--fps", type=int, default=30)
     p.add_argument("--bitrate", default="4500k")
     p.add_argument("--linger", type=float, default=60)
+    p.add_argument("--client-view", action="store_true", help="show the spotlit agent's real-client view full size")
     args = p.parse_args()
     target = os.environ["STREAM_URL"]
     secret = target.rsplit("/", 1)[-1].split("?")[0]
@@ -60,10 +61,11 @@ def main() -> int:
     env = {**os.environ, "DISPLAY": DISPLAY}
     procs = [subprocess.Popen(["Xvfb", DISPLAY, "-screen", "0", f"{width}x{height}x24", "-nolisten", "tcp"])]
     time.sleep(2)
+    page = f"{args.url}{'&' if '?' in args.url else '?'}stream" + ("&client" if args.client_view else "")
     procs.append(subprocess.Popen(
         ["chromium", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--no-first-run", "--noerrdialogs",
          "--disable-infobars", "--hide-scrollbars", "--kiosk", "--window-position=0,0",
-         f"--window-size={width},{height}", f"--app={args.url}{'&' if '?' in args.url else '?'}stream"],
+         f"--window-size={width},{height}", f"--app={page}"],
         env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
     time.sleep(8)
     rate = int(args.bitrate.rstrip("k"))

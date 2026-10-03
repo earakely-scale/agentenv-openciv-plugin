@@ -184,7 +184,8 @@ def test_stream_sends_the_newest_game_under_way_without_showing_the_key(tmp_path
     assert "--network host -e STREAM_URL openciv3-streamer --url http://127.0.0.1:42000/live" in args
     assert "live_123_secret" not in args and args.endswith("--linger 30")
     assert url == "rtmp://live.twitch.tv/app/live_123_secret"
-    assert CliRunner().invoke(openciv3, ["stream", "--test"]).exit_code == 0
+    assert CliRunner().invoke(openciv3, ["stream", "--test", "--client-view"]).exit_code == 0
+    assert log.read_text().splitlines()[0].endswith("--linger 60 --client-view")
     assert log.read_text().splitlines()[1] == "rtmp://live.twitch.tv/app/live_123_secret?bandwidthtest=true"
 
 

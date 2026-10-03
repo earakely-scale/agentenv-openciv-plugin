@@ -305,12 +305,14 @@ def _playing(url: str) -> bool:
 @click.option("--fps", default=30, show_default=True)
 @click.option("--bitrate", default="4500k", show_default=True)
 @click.option("--linger", default=60, show_default=True, help="Seconds to keep streaming the final standings.")
+@click.option("--client-view", is_flag=True,
+              help="Show the real OpenCiv3 client's view of each agent full size (the env needs setup --client).")
 @click.option("--test", "bandwidth_test", is_flag=True,
               help="Send to Twitch without going live (its bandwidth test): the stream shows only in Twitch Inspector.")
 @click.option("--source", type=click.Path(exists=True, file_okay=False, path_type=Path),
               help="Checkout to build the streamer image from when it isn't built yet.")
 def stream(url: str | None, server: str, key_secret: str, size: str, fps: int, bitrate: str, linger: int,
-           bandwidth_test: bool, source: Path | None):
+           client_view: bool, bandwidth_test: bool, source: Path | None):
     """Stream a game's live view to Twitch, or any RTMP server, while the agents play it. A headless browser in Docker
     shows the page and ffmpeg sends it; the stream starts with the game and ends after GAME OVER."""
     key = get_config().get_secret_store().get(key_secret)
@@ -335,7 +337,8 @@ def stream(url: str | None, server: str, key_secret: str, size: str, fps: int, b
     test = " as a bandwidth test (not live; see Twitch Inspector)" if bandwidth_test else ""
     click.echo(f"Streaming {url} to {server.rstrip('/')}/<stream key>{test}; Ctrl-C ends the stream")
     cmd = ["docker", "run", "--rm", "--shm-size", "1g", *network, "-e", "STREAM_URL", STREAMER_IMAGE,
-           "--url", page, "--size", size, "--fps", str(fps), "--bitrate", bitrate, "--linger", str(linger)]
+           "--url", page, "--size", size, "--fps", str(fps), "--bitrate", bitrate, "--linger", str(linger),
+           *(["--client-view"] if client_view else [])]
     code = subprocess.run(cmd, env={**os.environ, "STREAM_URL": target}).returncode
     if code:
         raise click.ClickException(f"the stream ended with an error ({code})")

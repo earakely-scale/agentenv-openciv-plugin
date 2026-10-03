@@ -488,8 +488,10 @@ function star(ctx, cx, cy, r) {
 const M = new Match();
 let P = null;                           // the painter, made when the first document arrives
 const LIVE = !window.OPENCIV_DATA;
-// ?stream: a full-screen layout for broadcasting (agent-env openciv3 stream), with a director instead of controls.
+// ?stream: a full-screen layout for broadcasting (agent-env openciv3 stream), with a director instead of controls;
+// ?stream&client puts the spotlit agent's client view full size instead of in the corner.
 const STREAM = new URLSearchParams(location.search).has("stream");
+const STREAM_CLIENT = STREAM && new URLSearchParams(location.search).has("client");
 const VIDEOS = window.OPENCIV_VIDEOS || {};
 const S = {
   ti: 0, follow: true, view: "map", pov: null, focus: null, metric: 0, speed: 5, playing: null,
@@ -1372,7 +1374,8 @@ addEventListener("hashchange", () => {
 
 // The stream's director, on a 90 s loop: the whole map (20 s), three agents in the spotlight (15 s each: the map flies
 // to the civ, its card shows its turn, and with the client its client view sits in the corner), then every agent's
-// panel (25 s). Once the game is over, the summary stays up.
+// panel (25 s). With ?stream&client and the client, it shows the whole map (20 s), then every agent's client view full
+// size in turn (15 s each). Once the game is over, the summary stays up.
 let shot = null;
 function direct() {
   if (!STREAM || !M.ready) return;
@@ -1381,17 +1384,25 @@ function direct() {
     if (shot !== "summary") { shot = "summary"; closeClient(); setView("summary"); }
     return;
   }
-  const now = Math.floor(Date.now() / 1000), loop = Math.floor(now / 90), t = now % 90;
+  const now = Math.floor(Date.now() / 1000);
   let next, p = null;
-  if (t < 20) next = "overview";
-  else if (t < 65) { p = seats[(loop * 3 + Math.floor((t - 20) / 15)) % seats.length]; next = "agent:" + p.index; }
-  else next = "agents";
+  if (STREAM_CLIENT && M.live?.client) {
+    const t = now % (20 + 15 * seats.length);
+    if (t < 20) next = "overview";
+    else { p = seats[Math.floor((t - 20) / 15)]; next = "agent:" + p.index; }
+  } else {
+    const loop = Math.floor(now / 90), t = now % 90;
+    if (t < 20) next = "overview";
+    else if (t < 65) { p = seats[(loop * 3 + Math.floor((t - 20) / 15)) % seats.length]; next = "agent:" + p.index; }
+    else next = "agents";
+  }
   if (next === shot) return;
   shot = next;
   if (next === "agents") { closeClient(); setFocus(null); setView("agents"); return; }
   if (S.view !== "map") setView("map");
   if (next === "overview") { closeClient(); setFocus(null); S.userMoved = false; fitMap(); draw(); return; }
   setFocus(p.index, {fly: true});
+  S.client.big = STREAM_CLIENT;
   if (M.live?.client && p.seat != null) openClient(p.index); else closeClient();
 }
 
