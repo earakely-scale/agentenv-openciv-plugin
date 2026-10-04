@@ -135,23 +135,34 @@ def test_wall_street_pays_interest(launch, tmp_path):
 
 
 def test_the_ai_values_a_building_by_what_it_adds_in_order(launch, tmp_path):
-    """The engine picks what a city builds next by ChooseProducible's scores: a capital whose science comes from four
-    Scientists, at the end of its Settler, picks a Library, which adds half of it (with only its culture to count, it
-    picks a Worker). In a city that riots and makes nothing, a Library's option says what it would add once order
-    returns, the figure the AI counts too, not +0."""
+    """The engine picks what a city builds next by ChooseProducible's scores: a capital whose science comes from eight
+    Scientists, at the end of a unit that costs no population, picks a Library, which adds half of it (with only its
+    culture to count, it picks a Settler). In a city that riots and makes nothing, a Library's option says what it
+    would add once order returns, the figure the AI counts too, not +0.
+
+    At T100 the civ is still expanding however the game went, and a Settler scores up to about 45 before the +/-10%
+    draw (40 for sites at home, 45 with a ship to take one overseas); the Library scores 5 a beaker it adds. Eight
+    Scientists make that 76 here against the Settler's 40, and a Library on each of seeds 1-8. With four, as this
+    test once had, the two were close and which won turned on how many cities and sites the civ had. A Settler
+    finished there would take two citizens, and the re-assignment can take Scientists with them, so the capital
+    finishes a unit that costs none."""
     save, _, me = saved_game(launch, tmp_path)
     capital = next(c for c in save["game"]["cities"] if c["owner"] == me and c["capital"])
     nationality = capital["residents"][0]["nationality"]
+    free = {u["name"] for u in save["game"]["unitPrototypes"] if not u.get("populationCost")}
 
     def scientists(g: dict) -> None:
         c = next(x for x in g["cities"] if x["id"] == capital["id"])
         c["buildings"] = [b for b in c["buildings"] if b["building"] not in ECONOMY]
         c["shieldsStored"] = 400   # whatever it builds is done at the turn's end
-        c["residents"] += [{"citizenType": "CitizenType-4", "nationality": nationality, "city": c["id"]}] * 4
+        c["residents"] += [{"citizenType": "CitizenType-4", "nationality": nationality, "city": c["id"]}] * 8
     b = load_with(launch, tmp_path, save, scientists)
     b.call("set_rates", science=6, luxury=0)
+    options = b.call("city", city=capital["name"])["options"]
+    unit = next(o["name"] for o in options if o["kind"] == "unit" and o["name"] in free)
+    assert b.call("set_production", city=capital["name"], item=unit)["city"]["producing"] == unit
     info = b.call("city", city=capital["name"])
-    assert info["commerce"]["science"] >= 20 and not info["disorder"]
+    assert info["commerce"]["science"] >= 30 and not info["disorder"]
     assert "Library" in {o["name"] for o in info["options"]}
     b.call("end_turn", skip_idle=True)
     assert b.call("city", city=capital["name"])["producing"] == "Library"
