@@ -325,11 +325,12 @@ async function artForeign() {
   const war = civs.filter(r => r.at_war), peace = civs.filter(r => !r.at_war);
   if (tab === 1) {   // trades: the offers standing for you, with Accept and Decline; then a Trade button per civ at peace
     const offers = civs.filter(r => r.trade_offered), lines = [];
-    for (const r of offers) lines.push(`<div style="margin-bottom:4px">${esc(offerText(r.civ, r.trade_offered))}<br>
-      <button class="cs-tbtn" style="position:static" data-accept="${esc(r.civ)}">Accept</button> · <button class="cs-tbtn" style="position:static" data-decline="${esc(r.civ)}">Decline</button></div>`);
+    // the panel lets clicks through to the civ rows' orbs under it (cs-lb); only its buttons take them
+    const tb = "position:static;pointer-events:auto";
+    for (const r of offers) lines.push(`<div style="margin-bottom:4px">${esc(offerText(r.civ, r.trade_offered))}<br><button class="cs-tbtn" style="${tb}" data-accept="${esc(r.civ)}">Accept</button> · <button class="cs-tbtn" style="${tb}" data-decline="${esc(r.civ)}">Decline</button></div>`);
     for (const r of war.filter(r => r.peace_price != null)) lines.push(`<div>${esc(`${r.civ} asks ${r.peace_price} gold for peace`)}</div>`);
-    for (const r of peace.filter(r => r.talks !== false)) lines.push(`<div><button class="cs-tbtn" style="position:static" data-trade="${esc(r.civ)}">Trade with ${esc(r.civ)}…</button></div>`);
-    h += `<div class="cs-lb cs-panel" style="left:750px;top:326px;max-height:200px;overflow:auto;pointer-events:auto">${lines.join("") || "No offers."}</div>`;
+    for (const r of peace.filter(r => r.talks !== false)) lines.push(`<div><button class="cs-tbtn" style="${tb}" data-trade="${esc(r.civ)}">Trade with ${esc(r.civ)}…</button></div>`);
+    h += `<div class="cs-lb cs-panel" style="left:750px;top:326px;max-height:200px;overflow:auto">${lines.join("") || "No offers."}</div>`;
   } else {
     const body = tab === 0 ? [...peace.map(r => `Peace with ${r.civ}`), ...war.map(r => `War with ${r.civ}`)].join("\n") || "No treaties."
       : `${civs.length} civilization${civs.length === 1 ? "" : "s"} met${d.unmet ? `, ${d.unmet} not yet` : ""}\nYour government: ${me.government}`;
@@ -491,7 +492,7 @@ async function artCity(id, {keepProd = false} = {}) {
   h += lab(5, 4, "STRATEGIC RESOURCES") + lab(714, 4, "CULTURE") + lab(7, 514, "IMPROVEMENTS") + lab(162, 514, "LUXURIES");
   // culture: per turn, and the total against the next border growth
   if (c.culture) h += lab(790, 4, `${c.culture.per_turn | 0}/turn`) + lab(714, 60, `Total: ${c.culture.total | 0}/${c.culture.next_border | 0}`);
-  if (bonusText(c)) h += `<div class="cs-lb cs-clip" style="left:714px;top:78px;width:300px;font-size:11px" title="${esc(bonusText(c))}">${esc(bonusText(c))}</div>`;
+  if (bonusText(c)) h += `<div class="cs-lb cs-clip" style="left:714px;top:78px;width:300px;font-size:11px;pointer-events:auto" title="${esc(bonusText(c))}">${esc(bonusText(c))}</div>`;
   // strategic resources: resources.png's icon at 45x45, the count centred under it
   if (c.strategic) h += `<div class="cs-list cs-strat" style="left:4px;top:24px;width:290px;height:65px">${c.strategic.map(r =>
     `<div class="cs-res" title="${esc(r.name)}">${sprAt("resources", [50 * (r.icon % 6), 50 * Math.floor(r.icon / 6), 50, 50], 0, 0, 45, 45)}` +
@@ -548,7 +549,7 @@ async function artCity(id, {keepProd = false} = {}) {
     <i class="cs-pqi"></i><span>Then: ${esc(c.queue.join(", "))}</span><span>${keepsCurrent(c) ? "clear" : ""}</span></li>` : "";
   h += `<div class="cs-pq${prodOpen ? "" : " closed"}" style="background-image:url('${scrUrl("prod_queue")}')"><ul>${queued}${(c.options || []).map(o => {
     const a = optionArt(o, era);
-    return `<li tabindex="0" data-item="${esc(o.name)}" class="${o.name === prodItem ? "cur" : ""}" title="${esc(o.name)}${o.cost ? `: ${o.cost} shields` : ""}${(o.effects || []).length ? `\n${o.effects.join("\n")}` : ""}${prodItem && keepsCurrent(c) ? `\nShift+click: queue it after ${esc(prodItem)}` : ""}">
+    return `<li tabindex="0" data-item="${esc(o.name)}" class="${o.name === prodItem ? "cur" : ""}" title="${esc(o.name)}${o.cost ? `: ${o.cost} shields` : ""}${(o.effects || []).length ? `\n${esc(o.effects.join("\n"))}` : ""}${queuesAfter(c) ? `\nShift+click: queue it after ${esc(prodItem)}` : ""}">
       <i class="cs-pqi">${a.icon}</i><span>${esc(a.text)}</span><span>${o.turns != null ? `${o.turns} turns` : ""}</span></li>`;
   }).join("")}</ul></div>`;
   scrOpen("city", h, {city: c, saved, prodOpen, onClose: () => { Object.assign(S.cam, saved); draw(); }, onKey: e => {

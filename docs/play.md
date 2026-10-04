@@ -191,8 +191,9 @@ centre, Tab next unit); the arrow keys and the number pad move it a tile, attack
 goes to a tile (or settles a suggested site, or attacks). The orders are the ones the bridge lists for the unit, the
 agents' too:
 
-- **Upgrade (U)** shows its price on the button and in the unit's panel ("Can upgrade to Pikeman for 30 gold", or
-  why not: not in a city, not enough gold) and asks before spending it.
+- **Upgrade (U)**, for a unit in one of your cities whose type has a better one you can build: the button's tooltip
+  and the unit's panel give the price ("Can upgrade to Pikeman for 30 gold", or why not now: no moves left, not
+  enough gold), and it asks before spending it.
 - **Board (O)** puts a land unit on a ship of yours with room: in port, or on the water next to it (with several
   ships next to it, click the one). A ship's panel lists its passengers ("Carrying 1/2: Archer u16"), a passenger's
   says "Aboard Galley u45", and the tile's tooltip marks who is aboard. **Unload (L)** sets them ashore in a city; at
@@ -201,7 +202,8 @@ agents' too:
 Clicking a city opens the city screen: food, production, buy, its units, what to build with what each building adds
 there (the bridge's `effects`: "+50% science (+4 here)"), and what its buildings add ("Buildings: +50% science, +50%
 tax (6 commerce this turn)"). A click builds an item now; **Shift+click queues it** after the current one, as
-`set_production`'s `then`, and the queue shows under the production with a Clear button. (An item the engine's AI
+`set_production`'s `then`, and the queue shows under the production with a Clear button (after Wealth, which never
+completes, Shift+click builds the item now). (An item the engine's AI
 picked that the city can no longer be given, such as a wonder another city builds, can't be kept with a queue: the
 city screen then offers no queue until something else is picked.)
 
@@ -226,7 +228,8 @@ turn 220", "You win by domination on turn 180!") and where you finished by score
 
 `playtest/bots.py --humans Rome=you` starts a local match with a human seat against scripted bots, and
 `playtest/play_e2e.mjs` plays that seat in a headless browser through this UI, end to end.
-`playtest/serve_midgame.py` serves a game well under way (the engine's AI plays the seat first, then it saves gold),
+`playtest/serve_midgame.py` serves a game well under way (the engine's AI plays the seat first, then with
+`--gold-turns` it saves gold),
 and `playtest/play_features_e2e.mjs` checks the rest in it: the bar's race, an upgrade, boarding and unloading a ship
 it buys, a queue, an AI's offer, a trade quoted, balanced and proposed, and the game-over dialog, with the art on or
 off (`ART=on`).

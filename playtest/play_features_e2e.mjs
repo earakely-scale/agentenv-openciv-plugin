@@ -199,8 +199,9 @@ if (!inPort(await st())[0]) {
     if (ART && await page.$("#dialog .cs-pq.closed")) await page.click("#dialog [data-prodbtn]");   // the production list
     body = await page.$eval("#dialog", el => [el.innerText, ...[...el.querySelectorAll("[title]")].map(e => e.title)].join("\n"));
     items = await page.$$eval("#dialog li[data-item]", ls => ls.map(l => l.dataset.item));
-    if (items.includes(city.producing)) { c = city; break; }
-    check(!/Shift\+click/.test(body), `${city.name}'s ${city.producing} is no longer an option: no queue hint`);
+    if (items.includes(city.producing) && city.producing !== "Wealth") { c = city; break; }
+    // the current item no longer an option (an engine pick), or Wealth (never completes): nothing to queue after
+    check(!/Shift\+click/.test(body), `${city.name} builds ${city.producing}: no queue hint`);
   }
   if (c) {
     const pick = items.find(i => i !== c.producing) || items[0];
@@ -268,12 +269,10 @@ if (!inPort(await st())[0]) {
       check(canPay === !(await page.$eval("#t-balance", b => b.disabled)), `Balance is offered only when you can pay it (${canPay})`);
       if (canPay) {
         await page.click("#t-balance");
-        await waitFor(() => page.$eval("#t-quote", el => /accepts|refuses|decides/.test(el.innerText) && !el.innerText.includes("Pick")), 15_000, "a new quote");
-        await sleep(500);
-        const q2 = await page.$eval("#t-quote", el => el.innerText);
-        const gold = await page.$eval("#t-give-gold", i => +i.value);
+        const q2 = await waitFor(() => page.$eval("#t-quote", (el, q) => el.innerText !== q && /accepts|refuses|decides/.test(el.innerText) && el.innerText, q), 15_000, "a new quote");
+        const gold = await page.$eval("#t-give-gold", i => +i.value), max = await page.$eval("#t-give-gold", i => +i.max);
         log("balanced:", gold, "gold →", q2.replace(/\n/g, " | "));
-        check(/accepts/.test(q2) || gold > +(await page.$eval("#t-give-gold", i => i.max)), `Balance adds gold until ${who} accepts (${gold} gold)`);
+        check(/accepts/.test(q2) && gold <= max, `Balance adds gold you have until ${who} accepts (${gold} of ${max} gold)`);
       }
       await shot("trade");
       if (!(await page.$eval("#t-propose", b => b.disabled))) {

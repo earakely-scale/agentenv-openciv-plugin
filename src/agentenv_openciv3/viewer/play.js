@@ -268,7 +268,10 @@ function cultureShown(s) {
 }
 function raceTip(s) {
   const r = s.race; if (!r) return "";
-  const lines = [`Score: ${r.rank ? `${ordinal(r.rank)} of ${r.civs_left}` : "out"}${r.leader && !r.leader.you ? `, ${raceName(r.leader)} leads with ${r.leader.score}` : ""}.`,
+  // the bridge's leader is one of the top scores: on a tie with you it is "tied with", not "leads"
+  const lead = !r.leader || r.leader.you ? "" : r.leader.score > (r.you?.score ?? -1) ? `, ${raceName(r.leader)} leads with ${r.leader.score}`
+    : `, tied with ${raceName(r.leader)}`;
+  const lines = [`Score: ${r.rank ? `${ordinal(r.rank)} of ${r.civs_left}` : "out"}${lead}.`,
     `Domination needs ${pct100(r.domination)} of the land and of the people: you ${pct100(r.you?.land)} and ${pct100(r.you?.pop)}`
       + (r.nearest_domination && !r.nearest_domination.you ? `; nearest ${raceName(r.nearest_domination)} ${pct100(r.nearest_domination.land)} and ${pct100(r.nearest_domination.pop)}.` : ".")];
   if (r.nearest_culture) lines.push(`Culture wins at ${(r.culture_goal || 100000).toLocaleString()} with twice the next civ's, or ${(r.city_culture_goal || 20000).toLocaleString()} in one city: `
@@ -320,7 +323,7 @@ function renderArtStatus() {
       <div class="unitline" style="top:18px">${esc(u.type)} <span class="uid">${esc(u.id)}</span></div>
       <div class="unitline" style="top:32px">HP ${u.hp}/${u.hp_max} · ${fmtMoves(u.moves_left)}/${u.moves_max}</div>
       <div class="unitline" style="top:46px">${esc(where)}</div>
-      <div class="unitline small" style="top:60px" title="${esc(unitNotes(u).join("\n"))}">${esc(statusText(u))}${u.capacity ? ` · ${(u.cargo || []).length}/${u.capacity} aboard` : ""}</div>` : ""}
+      <div class="unitline small" style="top:60px" title="${esc(unitNotes(u).join("\n"))}">${u.capacity ? `${(u.cargo || []).length}/${u.capacity} aboard · ` : ""}${esc(statusText(u))}</div>` : ""}
     <div class="mid" style="top:80px">${esc(s.civ)} - ${esc(s.government)}${s.anarchy_until ? ` (until T${s.anarchy_until})` : ""}</div>
     <div class="mid" style="top:94px">${s.date ? esc(s.date) : `Turn ${g.turn}`}  ${s.gold} Gold (${s.gold_per_turn >= 0 ? "+" : ""}${s.gold_per_turn} per turn)</div>
     <div class="mid" style="top:108px">${res.current ? `${esc(res.current)} (${res.turns_left ?? "--"} turns)` : "Not selected (-- turns)"}</div>`;
@@ -396,7 +399,8 @@ async function command(order) {
   if (order === "bombard") {
     if (!(u.attack_targets || []).length) { S.mode = "bombard"; $("#map").classList.add("goto"); toast("Click what to bombard"); return; }
   }
-  if (order === "disband" && !confirm(`Disband ${u.type} ${u.id}?${(u.cargo || []).length ? " Its passengers are lost with it at sea." : ""}`)) return;
+  const atSea = !(state().cities || []).some(c => c.x === u.x && c.y === u.y);
+  if (order === "disband" && !confirm(`Disband ${u.type} ${u.id}?${(u.cargo || []).length && atSea ? " Its passengers are lost with it at sea." : ""}`)) return;
   if (order === "upgrade" && u.upgrade && !(await ask("Upgrade", `Upgrade ${esc(u.type)} ${esc(u.id)} to ${esc(u.upgrade.to)} for
     ${u.upgrade.gold} gold? It keeps its experience and has no moves left this turn.`, "Upgrade"))) return;
   if (order === "board") return board(u);
@@ -418,8 +422,9 @@ async function board(u) {
   const at = (x, y) => room.some(s => s.x === x && s.y === y);
   let order = {unit: u.id, order: "board"};
   if (!at(u.x, u.y)) {
-    const near = Object.keys(DIRS).map(d => S.world.step(u.x, u.y, d)).filter(([x, y]) => at(x, y));
-    if (!near.length) { toast(`No ship of yours with room is in ${u.type} ${u.id}'s tile or next to it.`, true); return; }
+    // from land a unit boards a ship on the water next to it (a ship in a city next to it: go into the city first)
+    const near = Object.keys(DIRS).map(d => S.world.step(u.x, u.y, d)).filter(([x, y]) => at(x, y) && WATER.has(S.world.tile(x, y)?.terrain));
+    if (!near.length) { toast(`No ship of yours with room is in ${u.type} ${u.id}'s tile or on the water next to it.`, true); return; }
     if (near.length > 1) { S.mode = "board"; $("#map").classList.add("goto"); toast("Click the ship to board (Esc cancels)"); return; }
     order = {...order, x: near[0][0], y: near[0][1]};
   }
@@ -666,10 +671,15 @@ function turnReport() {
     <div class="body"><ul class="plain events">${items.map(ev =>
       `<li class="${HOT.has(ev.kind) || ev.kind === "notice" ? "hot" : ""}" ${ev.x != null ? `data-x="${ev.x}" data-y="${ev.y}" tabindex="0" style="cursor:pointer"` : ""}>${esc(ev.text)}</li>`).join("")}</ul>
     <div class="actions"><button class="primary" data-x>Continue</button>${events.some(ev => ev.kind === "trade_offered")
-      ? `<button id="seeoffers">See the offers (F4)</button>` : ""}</div></div>`,
+      ? `<button id="seeoffers">See the offers</button>` : ""}</div></div>`,
     {kind: "report", onClose: () => { if (noResearch) advisor("science"); }});
   for (const li of $$("#dialog li[data-x]")) li.onclick = () => { closeDialog(); centerOn(+li.dataset.x, +li.dataset.y); };
-  if ($("#seeoffers")) $("#seeoffers").onclick = () => { SCR.foreignTab = 1; closeDialog(); advisor("foreign"); };
+  // the offers first; the science advisor the report would open (nothing being researched) once they are closed
+  if ($("#seeoffers")) $("#seeoffers").onclick = async () => {
+    S.dialog.onClose = null; closeDialog(); SCR.foreignTab = 1;
+    await advisor("foreign");
+    if (noResearch && S.dialog?.kind === "foreign") S.dialog.onClose = () => advisor("science");
+  };
   $("#dialog .primary").focus();
 }
 
@@ -685,13 +695,19 @@ function bonusText(c) {
 // Picking what a city builds: a click builds it now; Shift+click adds it to the queue, built after the current item.
 // A queue is set along with the current item, so it needs that item to still be one of the city's options (the
 // engine's AI may have picked one the city can no longer be given, such as a wonder another city of yours builds).
+// Wealth never completes, so nothing queued after it would be built: Shift+click then builds the item now.
 const keepsCurrent = c => !c.producing || (c.options || []).some(o => o.name === c.producing);
-function chooseProduction(c, item, queue) {
-  if (queue && c.producing) {
-    if (!keepsCurrent(c)) { toast(`${c.name} can't queue after ${c.producing}: it is no longer among what the city can build. Pick what to build first.`, true); return null; }
-    return act("set_production", {city: c.id, item: c.producing, then: [...(c.queue || []), item]});
+const queuesAfter = c => !!c.producing && keepsCurrent(c) && (c.options || []).find(o => o.name === c.producing)?.kind !== "wealth";
+async function chooseProduction(c, item, queue) {
+  if (queue && c.producing && !keepsCurrent(c)) {
+    toast(`${c.name} can't queue after ${c.producing}: it is no longer among what the city can build. Pick what to build first.`, true);
+    return null;
   }
-  return act("set_production", {city: c.id, item});
+  const res = await act("set_production", queue && queuesAfter(c) ? {city: c.id, item: c.producing, then: [...(c.queue || []), item]}
+    : {city: c.id, item});
+  // what the city builds now, for a click that comes before the screen is drawn again
+  if (res?.result?.city) Object.assign(c, {producing: res.result.city.producing, queue: res.result.city.queue || []});
+  return res;
 }
 
 async function openCity(id) {
@@ -717,7 +733,7 @@ async function openCity(id) {
       <div class="actions"><button id="buy" ${c.producing && c.producing !== "Wealth" ? "" : "disabled"}>Buy ${esc(c.producing || "")}</button></div>
       ${(c.queue || []).length ? `<div class="box" style="margin-top:6px"><div class="l">Then</div><div class="v">${c.queue.map(esc).join(" → ")}
         ${keepsCurrent(c) ? `<button id="clearq" style="margin-left:8px">Clear</button>` : ""}</div></div>` : ""}
-      <h3>Build${c.producing && keepsCurrent(c) ? ` <span class="muted" style="font-size:12px;font-weight:400">· Shift+click queues it after ${esc(c.producing)}</span>` : ""}</h3>
+      <h3>Build${queuesAfter(c) ? ` <span class="muted" style="font-size:12px;font-weight:400">· Shift+click queues it after ${esc(c.producing)}</span>` : ""}</h3>
       <ul class="opts">${(c.options || []).map(o => `<li tabindex="0" data-item="${esc(o.name)}" class="${o.name === c.producing ? "cur" : ""}">
         <span>${esc(o.name)} <span class="k">${esc(o.kind)}</span></span><span class="k">${o.cost ?? ""} shields</span><span class="k">${o.turns != null ? o.turns + " t" : ""}</span>
         ${(o.effects || []).length ? `<span class="sub">${o.effects.map(esc).join(" · ")}</span>` : ""}</li>`).join("")}</ul>
@@ -818,8 +834,10 @@ const offerText = (civ, t) => `${civ} offers ${dealSide(t.you_get)} (worth ${t.y
   + ` (worth ${t.you_value_give ?? "?"} to you), until the end of turn ${t.until_turn}.`;
 // The Accept, Decline and Trade buttons of an open advisor; `again` reopens it after.
 function tradeButtons(again) {
-  for (const b of $$("#dialog [data-accept]")) b.onclick = async () => { await act("diplomacy", {action: "accept_trade", civ: b.dataset.accept}); again(); };
-  for (const b of $$("#dialog [data-decline]")) b.onclick = async () => { await act("diplomacy", {action: "decline_trade", civ: b.dataset.decline}); again(); };
+  // reopened only if still open: the player may have closed it, or a new turn's report replaced it
+  const reopen = () => { if (S.dialog?.kind === "foreign") again(); };
+  for (const b of $$("#dialog [data-accept]")) b.onclick = async () => { await act("diplomacy", {action: "accept_trade", civ: b.dataset.accept}); reopen(); };
+  for (const b of $$("#dialog [data-decline]")) b.onclick = async () => { await act("diplomacy", {action: "decline_trade", civ: b.dataset.decline}); reopen(); };
   for (const b of $$("#dialog [data-trade]")) b.onclick = () => tradeDialog(b.dataset.trade, again);
 }
 // A trade with a civ at peace: the techs and gold each side can give, quoted as you pick (the AI's own values decide
@@ -877,7 +895,7 @@ async function tradeDialog(civ, back) {
   };
   $("#t-propose").onclick = async () => {
     const res = await act("diplomacy", {action: "propose_trade", ...read()});
-    if (res) (back || closeDialog)();
+    if (res && S.dialog?.kind === "trade") (back || closeDialog)();
   };
   $("#t-back").onclick = () => (back || closeDialog)();
 }
