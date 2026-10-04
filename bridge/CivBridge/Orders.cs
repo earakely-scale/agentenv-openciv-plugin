@@ -12,7 +12,7 @@ namespace CivBridge;
 sealed partial class Session {
 	static readonly string[] AllOrders =
 		["settle", "found_city", "goto", "explore", "auto_work", "fortify", "wake", "hold", "disband", "build_road", "build_mine", "irrigate", "clear_forest",
-		 "attack", "bombard"];
+		 "attack", "bombard", "upgrade"];
 
 	static readonly Dictionary<string, string> Jobs = new() {
 		["build_road"] = C7Action.UnitBuildRoad,
@@ -52,6 +52,9 @@ sealed partial class Session {
 				break;
 			case "auto_work":
 				message = AutoWork(u);
+				break;
+			case "upgrade":
+				message = Upgrade(u);
 				break;
 			case "fortify":
 				if (!u.unitType.actions.Contains(UnitAction.Fortify)) throw Invalid(u, $"{Label(u)} cannot fortify.");
@@ -119,6 +122,7 @@ sealed partial class Session {
 		if (Status(u) is not ("idle" or "done")) list.Add("wake");
 		if (moves) list.Add("hold");
 		if (actions.Contains(UnitAction.Disband)) list.Add("disband");
+		if (u.CanUpgrade()) list.Add("upgrade");
 		if (moves && u.unitType.isWorker) list.AddRange(Jobs.Keys.Where(j => Job(u, j) != null));
 		return list;
 	}
@@ -205,6 +209,30 @@ sealed partial class Session {
 		}
 		return ($"{Label(u)} is heading to {At(target)} (about {info["turns"]} turn(s)), now at {At(u.location)}."
 			+ (stuck != null ? $" It stopped early: {stuck}; it will retry next turn." : ""), info);
+	}
+
+	/// <summary>Upgrades the unit in place, in one of the civ's cities, for gold (patches/0019): same id, experience and hit points.</summary>
+	string Upgrade(MapUnit u) {
+		if (WhyNoUpgrade(u) is string why) throw Invalid(u, $"{Label(u)} cannot upgrade: {why}.");
+		string label = Label(u);
+		// A standing order ends with the upgrade, as it uses up the unit's moves; a fortified unit stays fortified.
+		orders.Remove(u);
+		u.isAutomated = false;
+		int cost = u.Upgrade();
+		return $"{label} is now a {u.unitType.name} ({cost} gold; {human.gold} left). It has no moves left this turn.";
+	}
+
+	/// <summary>Why the unit cannot upgrade now, or null: MapUnit.CanUpgrade's checks, in order, with what is missing.</summary>
+	string WhyNoUpgrade(MapUnit u) {
+		var chain = u.unitType.GetUpgradeChain(u.owner.civilization);
+		if (chain.Count == 0) return $"nothing replaces the {u.unitType.name}";
+		City c = u.UpgradeCity();
+		if (c == null) return $"units upgrade only in one of your cities, and {At(u.location)} is not one";
+		UnitPrototype target = u.UpgradeTarget();
+		if (target == null) return $"{c.name} cannot build {chain[0].name}, the next in its line: {WhyNot(c, chain[0]) ?? "not yet"}";
+		if (!u.movementPoints.canMove) return "it has no moves left this turn";
+		int cost = u.UpgradeCost(target);
+		return human.gold < cost ? $"a {target.name} costs {cost} gold and you have {human.gold}" : null;
 	}
 
 	// Both check feasibility before Stop(u), so a refused order leaves the unit's orders as they were.

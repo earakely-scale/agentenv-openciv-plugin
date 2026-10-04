@@ -114,6 +114,10 @@ The human player's full situation. Result:
 - `target` is `{"x", "y", "dist", "dir"}` for `goto`/`settle`, else null.
 - `orders` lists the orders `unit_order` would accept for this unit right now. A unit with moves next to an
   enemy also has `attack_targets` (see `unit_order`).
+- A unit in one of the seat's cities whose line has a better unit the city can build has `"upgrade": {"to":
+  "Longbowman", "gold": 60, "ok": true}`, also when it cannot upgrade now: then `ok` is false and `reason` says why
+  (no moves left, not enough gold). `ok` is true exactly when `orders` has `upgrade`, and `gold` is what the order
+  charges.
 - `era` is the civ's era (`Player.EraIndex()`): 0 Ancient Times, 1 Middle Ages, 2 Industrial Age, 3 Modern Era.
   The client picks its advisors' heads and the science advisor's background by it.
 - `governments` lists the governments a revolution can change to now, as in `revolution`'s result;
@@ -303,6 +307,7 @@ Args: `unit` (id), `order`, and `x`, `y` where the order needs a target.
 | `build_road`, `build_mine`, `irrigate`, `clear_forest` | — | Worker job on the current tile. |
 | `attack` | x, y | Attack the adjacent tile: the top defender of a civ at war with you (barbarians always are), or move into an undefended enemy city, which is captured: it loses a citizen, its palace, small wonders and what it was building, and one of size 1 is destroyed (patch 0011). |
 | `bombard` | x, y | Bombard a tile in range (`bombard` units): an enemy unit, city or improvement, at war. |
+| `upgrade` | — | In one of your cities: the unit becomes the furthest unit along its civ's upgrade chain that the city can build now (tech known, a coastal city for ships, strategic resources connected), for `max(1, shield difference) × 3` gold (patch 0019). It keeps its id, experience, hit points and fortification, has no moves left this turn, and any other standing order (goto, explore) ends. Refused (`invalid_order`, with the reason) outside your cities, when nothing in its line can be built there (naming the next unit and what it needs), with no moves left, or without the gold. |
 
 `attack_targets` on a unit: `[{"x", "y", "dir", "owner", "defender": "Spearman 3/3 hp"|null, "city": name|null,
 "win_chance": 0.62}]`. The chance comes from the engine's own strengths: each combat round the attacker wins
@@ -313,6 +318,8 @@ Result: `{"message": "<one line>", "unit": {<unit object as in state, or null if
 "city": {<city object as in state>}|null, "path": {"length", "turns"}|null, "battle": {...}|null}`. `battle` is
 the battle an `attack` or `bombard` fought, as `known_map` lists it (null for any other order, an undefended
 city entered, or a bombardment of no unit).
+
+An `upgrade` reports `"u5 Archer is now a Longbowman (60 gold; 40 left). It has no moves left this turn."`.
 
 Error codes: `unknown_unit`, `invalid_order` (alternatives = the unit's valid orders),
 `cannot_found` (alternatives = top city sites; suggest = a `settle` call), `bad_target` (off map,
@@ -363,7 +370,10 @@ And the rest of the client's city screen (`C7/UIElements/CityScreen/CityScreen.c
 
 ### `set_production`
 Args: `city`, `item`, `then` (optional list of up to 10 names). Result: `{"message", "city": {...}}`. Errors:
-`unknown_city`, `unknown_item` (alternatives = option names), `no_cities`, `bad_args`.
+`unknown_city`, `unknown_item` (alternatives = option names), `no_cities`, `bad_args`. A unit the city cannot build
+says why: another civ's unique unit, the tech it needs, a city off the coast for a ship, the strategic resources not
+connected, or that it is obsolete, with the unit that replaces it (the engine's `UnitPrototype.CanProduce`, which
+leaves out a unit once one of its upgrades can be built there).
 
 - `then` is the city's queue (the city object's `queue`): each time the city completes something, or the engine
   changes what it builds, the bridge sets the first queued item it can build now and takes it off the queue; an item
@@ -407,7 +417,9 @@ Event kinds: `city_founded`, `city_grew`, `city_starved`, `built` (unit/building
 `tech_learned`, `unit_lost`, `unit_promoted`, `settle_failed`, `goto_blocked`, `explore_done`,
 `job_done`, `contact` (met a civ), `war_declared`, `threat` (a foreign or barbarian unit within 3
 tiles of a city or a settler), `city_destroyed`, `city_captured` (the seat took a city, or a civ it knows
-took one in sight), `city_lost` (one of the seat's cities was taken), `civ_destroyed`, `disorder`. Each event is
+took one in sight), `city_lost` (one of the seat's cities was taken), `civ_destroyed`, `disorder`, `unit_upgraded`
+(`autoplay`'s `engine_ai` upgraded one of the seat's units in its city: "u5 Archer was upgraded to a Longbowman in
+Rome."). Each event is
 `{"turn", "kind", "text"}`, plus `"x", "y"` when it has a location.
 
 ### `autoplay`
@@ -541,6 +553,23 @@ submodule itself stays untouched):
    and a traded tech further down the queue stayed in it; at the head, `PlayerAI.MaybePickTechToResearch` picked it
    again forever and the turn hung (a seat with a `set_research` queue, played by `autoplay`'s `engine_ai`). The
    completed tech now leaves the queue wherever it is, and a known tech at the head is skipped.
+18. `0018-the-standalone-ruleset-keeps-every-unit-it-can-play.patch`: the standalone ruleset
+   (`C7/Lua/standalone/ruleset.lua`) kept only the 27 units with community art, and dropped every unit's upgrades (it
+   looked the `upgradesTo` list up as a key), so no unit ever went obsolete and 25 civs had lost a unit class to their
+   missing unique units. It now keeps 76 units: those 27, the 12 later land units (Rifleman to Modern Armor, Artillery,
+   Radar Artillery), the 7 later sea units (Ironclad to AEGIS Cruiser, Transport) and the 30 unique units, each new one
+   drawn with the art of the unit it replaces or descends from, and their upgrades to units kept. It leaves out air
+   units, missiles, nukes, the Carrier, Nuclear Submarine, Flak and Mobile SAM (the engine has no air movement, air
+   missions or nuclear attack) and the leaders and armies (no rule behind them). `UnitPrototype.GetUnitUpgrade` takes
+   the next step where several targets fit a civ (the Spearman goes to the Pikeman, or to the Musketman for the
+   Dutch), instead of the alphabetically first with a warning.
+19. `0019-units-upgrade-in-a-city-for-gold.patch`: `MapUnit.Upgrade` (`MapUnit_Upgrade.cs`) upgrades a unit in one of
+   its owner's cities to the furthest unit of its civ's chain the city can build (`UnitPrototype.UpgradeTargetIn`), for
+   the shield difference (at least 1) times `Rules.UpgradeCostPerShield` gold (3; Conquests' value is not imported).
+   It keeps its id, experience, hit points and fortification and uses up its moves. The AI
+   (`PlayerAI.MaybeUpgradeUnits`) spends the gold above a reserve of a turn's upkeep (at least 50) on its combat units
+   in its cities, the largest defence gain first; while a city's best defender could upgrade, it keeps one tenth of
+   its commerce from science for it. The bridge's `upgrade` order and the units' `upgrade` field use it.
 
 Measured over full 540-turn Standard games with 7 AIs at Regent (seeds 1-3), patches 0005-0009 take:
 - mean AI techs at T540 from 32 to 43-45, and civs with an Industrial-era tech from 0 to 3-7;

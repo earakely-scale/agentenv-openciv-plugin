@@ -289,6 +289,11 @@ sealed partial class Session {
 			o["can_found_city"] = why == null ? new JsonObject { ["ok"] = true } : new JsonObject { ["ok"] = false, ["reason"] = why };
 		}
 		o["orders"] = Json.Strings(ValidOrders(u));
+		if (u.UpgradeTarget() is UnitPrototype up) {
+			string why = WhyNoUpgrade(u);
+			o["upgrade"] = new JsonObject { ["to"] = up.name, ["gold"] = u.UpgradeCost(up), ["ok"] = why == null };
+			if (why != null) o["upgrade"]["reason"] = why;
+		}
 		if (AttackTargets(u) is { Count: > 0 } targets) o["attack_targets"] = Json.Array(targets, e => TargetJson(u, e));
 		o["needs_orders"] = NeedsOrders(u);
 		return o;
@@ -537,6 +542,20 @@ sealed partial class Session {
 		return null;
 	}
 
+	/// <summary>Why the engine's UnitPrototype.CanProduce refuses this unit here, in its own order, or null.</summary>
+	string WhyNot(City c, UnitPrototype u) {
+		if (u.unproducible) return "no city can build it";
+		if (!u.producibleBy.Contains(human.civilization))
+			return $"it is a unique unit of {string.Join(", ", u.producibleBy.Select(x => x.name).Order())}";
+		if (!human.HasRequiredTechnology(u)) return $"it needs {u.requiredTech.Name}";
+		if (u.IsSeaUnit() && !c.location.NeighborsWater()) return $"{c.name} is not on the coast";
+		HashSet<Resource> have = c.GetAccessibleResources(gd);
+		var missing = u.requiredResources.Where(r => !have.Contains(r)).Select(r => r.Name).Order().ToList();
+		if (missing.Count > 0) return $"it needs {string.Join(" and ", missing)} connected to {c.name}";
+		if (u.GetProducibleUpgrade(c, have) is UnitPrototype better) return $"it is obsolete: {c.name} can build the {better.name} that replaces it";
+		return null;
+	}
+
 	/// <summary>Sets what a city builds now, and with `then` what it builds after; `city` may name several (Batch.cs).</summary>
 	JsonObject SetProduction(Args a) {
 		EnsurePlaying();
@@ -577,7 +596,11 @@ sealed partial class Session {
 			Tech missing = known?.requiredTech is Tech t && !human.knownTechs.Contains(t.id) ? t : null;
 			string why = known == null ? $"'{wanted}' is not something a city can build"
 				: missing != null ? $"{known.name} requires {missing.Name}"
-				: $"{c.name} cannot build {known.name} now" + (known is Building building && WhyNot(c, building) is string reason ? $": {reason}" : "");
+				: $"{c.name} cannot build {known.name} now" + (known switch {
+					Building building => WhyNot(c, building),
+					UnitPrototype unit => WhyNot(c, unit),
+					_ => null,
+				} is string reason ? $": {reason}" : "");
 			IProducible close = known == null ? options.FirstOrDefault(o => Close(o.name, wanted)) : null;
 			throw new BridgeError("unknown_item", $"{why}. {c.name} can build: {string.Join(", ", options.Select(o => o.name))}.",
 				BridgeError.Names(options.Select(o => o.name)),

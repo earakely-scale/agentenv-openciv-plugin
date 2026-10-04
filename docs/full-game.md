@@ -62,7 +62,7 @@ rotated at a 100K context cap.
 | Government | revolutions | Despotism only: no command for the agent, no code for the AI |
 | War and peace | both | the AI declares war and never makes peace; the agent has neither |
 | City capture | yes | yes (patch 0011): the city loses a citizen, its palace and small wonders; one of size 1 is destroyed; the loser gets a new capital (patch 0013) |
-| Late eras | Industrial and Modern | nobody reaches them. Bank, University and Cathedral are never buildable, because of a prerequisite check (`Building.cs:145`) |
+| Late eras | Industrial and Modern | 3 to 7 civs reach the Industrial era by T540; its land and sea units are in the game and units upgrade (patches 0018, 0019); no air units |
 
 ## What is missing
 
@@ -90,8 +90,25 @@ rotated at a 100K context cap.
    - An AI now asks a price for peace (`Player.PeacePriceFor`) and makes peace with other AIs.
    - It offers the player peace, and remembers a broken treaty.
    - At Regent, 6 to 15 wars per game end in peace, where none did.
-5. **Military tops out around 1700.** The standalone ruleset keeps 27 of 124 units, and there are no
-   upgrades, air units or armies (S to switch the ruleset, M to L for the rest).
+5. **Military topped out around 1700: land and sea fixed** by patches 0018 and 0019.
+   - The standalone ruleset kept 27 of 124 units and, by a bug, none of their upgrades, so no unit ever went
+     obsolete and 25 civs had lost a unit class to their missing unique units. It now keeps 76: the Industrial and
+     Modern land and sea units (Rifleman to Modern Armor, Ironclad to AEGIS Cruiser, the Transport) and the 30
+     unique units, drawn with the art of the unit each replaces. A unit leaves a city's options once its upgrade can
+     be built there.
+   - Units upgrade in their own cities for gold (3 per shield of difference), the agent's with the `upgrade` order
+     and the AI's garrisons on their own; while a city's best defender could upgrade, the AI keeps a tenth of its
+     commerce from science to pay for it.
+   - Measured in 540-turn Standard games at Regent (seeds 1-2, engine AI in every seat): 44 and 114 AI units
+     upgraded by T540 (Spearmen to Pikemen and Riflemen, Archers to Longbowmen, Knights to Cavalry), Riflemen and
+     Musketmen in the field where there were none, mean techs 38.5 and 41.5 (41.9 and 36.1 before: within the
+     games' spread), and the same wall time.
+   - Left out: air units, missiles, nukes, the Carrier, Nuclear Submarine, Flak and Mobile SAM (the engine has no
+     air movement, air missions, interception or nuclear attack: L), armies and Great Leaders (no rule spawns or
+     uses them: L), Leonardo's Workshop's free upgrade (wonders have no effects yet: M), paradrop, amphibious
+     assault and submarine stealth (these units keep their stats only: M each), and the naval AI (item 6).
+   - Most later units still need strategic resources few civs have (seed 1 places one Saltpeter and no Coal),
+     which is the map generator's to fix.
 6. **The AI ignores water**, so play on Pangaea only (L).
 
 **Tools** (what the agent can do):

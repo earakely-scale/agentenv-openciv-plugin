@@ -237,6 +237,7 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 				// (costs, support, trade offers) still apply during everyone else's turns.
 				orders.Clear();
 				ID research = human.currentlyResearchedTech;
+				var types = human.units.ToDictionary(u => u, u => (Label: Label(u), Type: u.unitType));
 				human.isHuman = false;
 				try {
 					await Pump(PlayerAI.PlayTurn(human, gd));
@@ -246,6 +247,10 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 				} finally {
 					human.isHuman = true;
 				}
+				// The AI upgrades garrisons in its own turn (patches/0019), before the snapshot the turn's events start from.
+				foreach (var (u, was) in types)
+					if (Alive(u) && u.unitType != was.Type)
+						s.Incoming.Add(Event("unit_upgraded", $"{was.Label} was upgraded to a {u.unitType.name} in {u.location.cityAtTile?.name}.", u.location));
 				if (human.currentlyResearchedTech != research) researchSource = Source.Engine;
 			} else {
 				foreach (MapUnit u in human.units.ToList()) if (NeedsOrders(u)) u.SkipTurn();

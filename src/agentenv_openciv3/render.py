@@ -97,7 +97,16 @@ def unit_line(u: dict, detail: bool = False) -> str:
         parts.append(found)
     if targets := u.get("attack_targets"):
         parts.append("attack: " + ", ".join(target_text(t) for t in targets))
+    if up := u.get("upgrade"):
+        parts.append(upgrade_text(up, detail))
     return " · ".join(parts)
+
+
+def upgrade_text(up: dict, detail: bool = False) -> str:
+    text = f"upgrade → {up['to']} {up['gold']}g"
+    if up.get("ok"):
+        return text
+    return text + (f" (not now: {up['reason']})" if detail and up.get("reason") else " (not now)")
 
 
 def target_text(t: dict) -> str:
@@ -464,6 +473,8 @@ def attention_lines(state: dict) -> list[str]:
     for c in (c for c in cities if c.get("capped")):
         lost = f", {c['shields_lost_last_turn']} shields lost last turn" if c.get("shields_lost_last_turn") else ""
         out.append(f"{c['id']} {c['name']} {production_text(c)}{lost}")
+    if line := upgrades_line(state):
+        out.append(line)
     gold = state.get("gold", 0)
     if gold >= IDLE_GOLD:
         hints = [h for h in (science_fix(state),) if h]
@@ -471,6 +482,23 @@ def attention_lines(state: dict) -> list[str]:
             hints.append('buy(city="...") rushes a city\'s production')
         out.append(f"gold {gold} unspent" + (" → " + " · ".join(hints) if hints else ""))
     return out
+
+
+def upgrades_line(state: dict) -> str | None:
+    """Units in their cities that can upgrade now, by type, with the gold it takes, and the call for the commonest."""
+    ready = [u for u in state.get("units", []) if (u.get("upgrade") or {}).get("ok")]
+    if not ready:
+        return None
+    kinds: dict[tuple[str, str], int] = {}
+    for u in ready:
+        key = (u["type"], u["upgrade"]["to"])
+        kinds[key] = kinds.get(key, 0) + 1
+    top = sorted(kinds.items(), key=lambda kv: (-kv[1], kv[0]))
+    named = ", ".join(f"{n} {a}→{b}" for (a, b), n in top[:3]) + (f", +{len(top) - 3} more" if len(top) > 3 else "")
+    gold = sum(u["upgrade"]["gold"] for u in ready)
+    first = top[0][0][0]
+    return (f"{len(ready)} unit{'s' if len(ready) > 1 else ''} can upgrade for {gold} gold in all ({named}) → "
+            + call("unit_orders", orders=[{"unit": f"all:{first}", "order": "upgrade"}]))
 
 
 def science_fix(state: dict) -> str | None:
