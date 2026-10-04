@@ -25,12 +25,16 @@ CMD = shlex.split(os.environ.get("CIVBRIDGE_CMD", str(ROOT / "build" / "bridge" 
 pytestmark = pytest.mark.skipif(not Path(CMD[0]).exists(), reason="CivBridge is not built; run scripts/build-bridge.sh")
 
 SEED = 1
-# With Raging barbarians the do-nothing player on seed 21 loses its settler mid-game (checked when written, after
-# patches 0018-0019 shifted the random stream; seed 15 did before them).
-DEFEAT_SEED = 21
-# With the engine AI in every seat and Raging barbarians, the seat takes a city by T240 on this seed (seed 1 did
-# before patches 0018-0019 changed what the AIs build).
-CAPTURE_SEED = 14
+# Seeds on which, with Raging barbarians, the do-nothing player loses its settler within 60 turns; the test plays them
+# in order until one does. Which seeds do moves whenever a patch shifts the random stream (15, then 21, no longer do on
+# the build with patches 0016-0022): measured then, seed 7 loses it at T23 (T21 on main and on every feature branch but
+# naval's), seed 49 at T53 on main, on each feature branch and on them all together.
+DEFEAT_SEEDS = (7, 49)
+# Seeds on which, with the engine AI in every seat and Raging barbarians, the seat takes a city well within the test's
+# window; played in order until one does. Measured on the build with patches 0016-0022: seed 24 at T121 (the test is
+# done at T185), seed 1 at T196; each also on main and on every feature branch alone, by T262. (Seed 14 no longer does:
+# 23 of seeds 1-24 have the seat take a city by T390, seed 14 not, the seat losing four cities instead.)
+CAPTURE_SEEDS = (24, 1)
 SCORE_KEYS = {"total", "cities", "pop", "tiles", "techs"}
 DIRS = {"N", "NE", "E", "SE", "S", "SW", "W", "NW", "here"}
 
@@ -699,11 +703,15 @@ def test_same_seed_and_commands_give_the_same_game(launch):
 
 
 def test_null_autoplay_survives_defeat(launch):
-    b = launch()
-    b.call("new_game", seed=DEFEAT_SEED, barbarians="Raging")
-    res = b.call("autoplay", turns=60, policy="null", record=True, timeout=120)
-    assert res["turn"] == 60 and res["game_over"]
-    assert res["defeated"], "seed no longer loses its settler; pick another DEFEAT_SEED"
+    for seed in DEFEAT_SEEDS:
+        b = launch()
+        b.call("new_game", seed=seed, barbarians="Raging")
+        res = b.call("autoplay", turns=60, policy="null", record=True, timeout=120)
+        assert res["turn"] == 60 and res["game_over"]
+        if res["defeated"]:
+            break
+    else:
+        pytest.fail(f"no seed of {DEFEAT_SEEDS} loses its settler; find another")
     s = b.call("state")
     assert s["defeated"] and s["units"] == [] and s["blockers"] == []
     assert len(res["trajectory"]) == 61
@@ -877,12 +885,11 @@ def check_cities_and_borders(world: dict) -> None:
     assert set(capitals) == with_cities, f"civs with cities and no capital: {with_cities - set(capitals)}"
 
 
-def test_cities_change_hands(launch, tmp_path):
-    """The engine AI plays every civ, at war with raging barbarians. A city taken (patches/0011) changes hands with a
-    citizen fewer, its capital status and palace gone, its borders its new owner's, and the seats are told; one of
-    size 1 is destroyed instead. Checked each turn, until the seat has taken a city."""
-    b = launch("--autosave", str(tmp_path / "a"))
-    b.call("new_game", seed=CAPTURE_SEED, opponents=5, barbarians="Raging", turn_limit=400)
+def play_until_the_seat_takes_a_city(b: Bridge, seed: int) -> tuple[bool, list[tuple]]:
+    """Plays the engine AI in every seat of a new game on `seed`, checking each turn that every city that changed
+    hands did so as patches/0011 says, until the seat has taken a city and two have changed hands, or T390. Returns
+    whether the seat took one, and the cities taken: (turn, name, old owner, new owner)."""
+    b.call("new_game", seed=seed, opponents=5, barbarians="Raging", turn_limit=400)
     prev = b.call("world")
     taken = []
     for _ in range(390):
@@ -911,13 +918,27 @@ def test_cities_change_hands(launch, tmp_path):
         check_known_map(b.call("known_map"), world, state)
         prev = world
         if any(t[3] == me for t in taken) and len(taken) >= 2:
+            return True, taken
+    return False, taken
+
+
+def test_cities_change_hands(launch, tmp_path):
+    """The engine AI plays every civ, at war with raging barbarians. A city taken (patches/0011) changes hands with a
+    citizen fewer, its capital status and palace gone, its borders its new owner's, and the seats are told; one of
+    size 1 is destroyed instead. Checked each turn, until the seat has taken a city."""
+    tried = {}
+    for seed in CAPTURE_SEEDS:
+        saves = tmp_path / f"seed{seed}"
+        b = launch("--autosave", str(saves))
+        done, tried[seed] = play_until_the_seat_takes_a_city(b, seed)
+        if done:
             break
     else:
-        pytest.fail(f"cities taken by T{world['turn']}: {taken}")
+        pytest.fail(f"the seat takes no city by T390 on any of {CAPTURE_SEEDS}; cities taken: {tried}")
 
     # The game, saved after the captures, loads as it was.
     restored = launch()
-    restored.call("load", path=str(tmp_path / "a" / "autosave.json"))
+    restored.call("load", path=str(saves / "autosave.json"))
     assert restored.call("world")["cities"] == b.call("world")["cities"]
 
 
