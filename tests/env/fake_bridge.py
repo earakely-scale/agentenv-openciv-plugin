@@ -925,7 +925,8 @@ class Game:
                      research=self.research if me else None,
                      at_war=sorted(index[c] for c in self.wars) if me else [0] if p["civ"] in self.wars else [],
                      contacts=[index["Greece"]] if me and self.met else [0] if p["civ"] == "Greece" and self.met
-                     else [])
+                     else [], culture=self.turn * (3 if me else 2), era=0, land=0.05 if me else 0.02,
+                     pop=0.3 if me else 0.2)
         athens = self.foreign_city["pos"]
         tiles = []
         for y in range(HEIGHT):
@@ -938,9 +939,9 @@ class Game:
                               int(p in self.explored), RESOURCES.get(p), [], 0])
         cities = [{"id": int(c["id"][1:]), "x": c["pos"][0], "y": c["pos"][1], "name": c["name"], "owner": 0,
                    "size": c["size"], "capital": "Palace" in c["buildings"], "production": c["producing"],
-                   "era": 0, "walls": "Walls" in c["buildings"]} for c in self.cities.values()]
+                   "era": 0, "walls": "Walls" in c["buildings"], "wonders": []} for c in self.cities.values()]
         cities.append({"id": 1000, "x": athens[0], "y": athens[1], "name": "Athens", "owner": 1, "size": 2,
-                       "capital": True, "production": "Warrior", "era": 0, "walls": False})
+                       "capital": True, "production": "Warrior", "era": 0, "walls": False, "wonders": []})
         units = [{"id": int(u["id"][1:]), "x": u["pos"][0], "y": u["pos"][1], "owner": 0, "type": u["type"],
                   "hp": u["hp"], "hp_max": UNIT_STATS[u["type"]][1], "fortified": u["status"] == "fortified",
                   "aboard": None}
@@ -949,10 +950,12 @@ class Game:
             units.append({"id": 1000, "x": b[0], "y": b[1], "owner": len(civs) - 1, "type": "Warrior", "hp": 3,
                           "hp_max": 3, "fortified": False, "aboard": None})
         return {"schema": 2, "turn": self.turn, "turn_limit": self.turn_limit, "seed": self.seed,
+                "date": f"{4000 - 50 * self.turn} BC",
                 "map": {"width": WIDTH, "height": HEIGHT, "wrap_x": True},
                 "seats": [{"index": index[c], "civ": c, "label": self.labels.get(c)} for c in self.seats],
                 "players": players, "tiles": tiles,
-                "cities": cities, "units": units, "moves": [], "battles": [], "events": list(self.last_events)}
+                "cities": cities, "units": units, "moves": [], "battles": [], "trades": [],
+                "events": list(self.last_events)}
 
     def known_map(self, a) -> dict:
         """docs/play.md section 3: the explored tiles, the cities on them and the units on visible ones. The seat

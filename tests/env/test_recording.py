@@ -185,6 +185,22 @@ def test_the_later_games_stories_are_events_for_every_civ(game):
     assert m.players[0]["name"] == "Opus 5.5" and "name" not in m.players[1]
 
 
+def test_a_city_named_like_one_its_civ_lost_is_a_new_city(game):
+    """Greece loses Athens to Rome on T4 and founds a new Athens on T5: one capture and one founding, and nothing more
+    the turns after (cities are told apart by id, not by name)."""
+    snaps = copy.deepcopy(game)
+    for s in snaps:
+        for c in s["cities"]:
+            if c["name"] == "Athens" and s["turn"] >= 4:
+                c["owner"] = 0
+        if s["turn"] >= 5:
+            s["cities"].append({"id": 777, "x": 22, "y": 8, "name": "Athens", "owner": 1, "size": 1, "capital": False,
+                                "production": "Warrior", "era": 0, "walls": False})
+    m = MatchData.from_snapshots(snaps)
+    athens = [(t["turn"], e["kind"]) for t in m.turns for e in t["events"] if "Athens" in e.get("text", "")]
+    assert athens == [(4, "city_captured"), (5, "city_founded")]
+
+
 def test_older_snapshots_keep_the_bridges_contact_events(game):
     snaps = copy.deepcopy(game)
     for s in snaps:

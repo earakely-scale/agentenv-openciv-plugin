@@ -284,18 +284,22 @@ class MatchData:
         live = [p for p in snap["players"] if not is_barbarian(p)]
         if prev is not None:
             name = self.name
-            before = {c["name"]: c for c in prev["cities"]}
-            now = {c["name"]: c for c in snap["cities"]}
+            # a city by its engine id (schema 2): a civ that lost a city may found another of the same name
+            key = (lambda c: c.get("id") or c["name"]) if all(c.get("id") for c in snap["cities"]) and all(
+                c.get("id") for c in prev["cities"]) else (lambda c: c["name"])
+            before = {key(c): c for c in prev["cities"]}
+            now = {key(c): c for c in snap["cities"]}
             for c in snap["cities"]:
-                was = before.get(c["name"])
+                was = before.get(key(c))
                 if was is None:
                     out.append(_ev("city_founded", c["owner"], f"{name(c['owner'])} founded {c['name']}", c))
                 elif was["owner"] != c["owner"]:
                     out.append(_ev("city_captured", c["owner"], f"{name(c['owner'])} took {c['name']} from "
                                    f"{name(was['owner'])}", c, frm=was["owner"]))
-            for n, c in before.items():
-                if n not in now:
-                    out.append(_ev("city_destroyed", c["owner"], f"{name(c['owner'])} lost {n}; it was razed", c))
+            for k, c in before.items():
+                if k not in now:
+                    out.append(_ev("city_destroyed", c["owner"], f"{name(c['owner'])} lost {c['name']}; it was razed",
+                                   c))
             old = {p["index"]: p for p in prev["players"]}
             for p in live:
                 o = old.get(p["index"])
