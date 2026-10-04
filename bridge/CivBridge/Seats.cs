@@ -207,6 +207,17 @@ sealed partial class Session {
 
 	const double Domination = 2.0 / 3;
 
+	/// <summary>
+	/// A one-seat game ends at once when its civ is defeated in its own turn (its last unit disbanded or lost), so no
+	/// turn ends to check for a winner: check now (the last civilization left, say). With seats the others play on,
+	/// and the end of the turn checks.
+	/// </summary>
+	string VictoryNow() {
+		if (MultiSeat || victory != null || !human.defeated || CheckVictory() is not Victory won) return "";
+		victory = won;
+		return " " + VictoryText(won);
+	}
+
 	/// <summary>The civilizations in the game, the barbarians aside.</summary>
 	IEnumerable<Player> Civs() => gd.players.Where(p => !p.isBarbarians);
 

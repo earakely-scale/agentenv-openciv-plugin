@@ -34,7 +34,8 @@ only client: it renders the facts the bridge returns into text for the agent.
   AI's (the engine has none of its own): conquest, when it is the last civilization left (with several seats, also
   when its seat is the last one an agent still plays); domination, when it holds two thirds of the world's land
   tiles and two thirds of its population; and, at the turn limit, score, when it has the highest score (a tie on
-  top is no one's victory). The game is then over: every seat gets a `victory` event, `game_over` turns true, and
+  top is no one's victory). A one-seat game whose civilization is defeated in its own turn (its last units
+  disbanded or lost) is checked at once, since no turn ends after that. The game is then over: every seat gets a `victory` event, `game_over` turns true, and
   `state`, `score` and the world snapshot carry `"victory": {"kind": "conquest"|"domination"|"score", "civ",
   "label", "turn"}` (`label` is the seat's, null for an AI civ; null until someone wins). `autoplay` plays on
   after a victory, as after a defeat, so baselines cover every turn they were asked for.

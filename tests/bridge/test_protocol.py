@@ -593,7 +593,19 @@ def test_disbanding_everything_is_defeat(game):
     assert res["unit"] is None and "defeated" in res["message"]
     s = game.call("state")
     assert s["defeated"] and s["game_over"] and s["units"] == []
+    assert s["victory"] is None   # three civs are left: no one has won
     assert game.error("end_turn", skip_idle=True)["code"] == "game_over"
+
+
+def test_the_last_civ_left_wins_when_the_seat_disbands_itself(launch):
+    """A one-seat game ends in the seat's own turn when it is defeated; the last civ left has won by conquest."""
+    b = launch()
+    b.call("new_game", seed=SEED, size="Tiny", opponents=1)
+    b.call("unit_order", unit="u2", order="disband")
+    res = b.call("unit_order", unit="u1", order="disband")
+    rival = next(p["civ"] for p in b.call("score")["players"] if not p["is_human"])
+    assert res["message"].endswith(f"the game is over. {rival} won by conquest: it is the last civilization left.")
+    assert b.call("state")["victory"] == {"kind": "conquest", "civ": rival, "label": None, "turn": 0}
 
 
 def test_a_unit_disbanded_in_its_city_adds_its_shields(game):

@@ -90,6 +90,7 @@ sealed partial class Session {
 				message = StartJob(u, order);
 				break;
 		}
+		message += VictoryNow();
 		DrainUi();
 		ids.Sync(gd, human);
 		return new JsonObject {
