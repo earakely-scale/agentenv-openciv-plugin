@@ -442,6 +442,28 @@ def test_unit_order_errors(game):
     assert [e["kind"] for e in r["events"]].count("city_founded") == 1
 
 
+def test_a_tech_got_out_of_order_leaves_the_research_queue(launch, tmp_path):
+    """patches/0015: a tech further down the research queue that the seat got another way (a trade) stayed in it;
+    once it came to the head the engine picked it again and again, and the turn hung."""
+    b = launch("--autosave", str(tmp_path / "a"))
+    b.call("new_game", seed=SEED, turn_limit=200)
+    found_capital(b)
+    queue = b.call("set_research", tech="Monarchy")["queue"]
+    assert len(queue) >= 3
+    b.call("end_turn", skip_idle=True)
+    path = tmp_path / "a" / "autosave.json"
+    save = json.loads(path.read_text())
+    me = next(p for p in save["game"]["players"] if p["human"])
+    me["knownTechs"].append(me["researchQueue"][1])   # as if traded for
+    path.write_text(json.dumps(save))
+    r = launch("--timeout", "15")
+    r.call("load", path=str(path))
+    res = r.call("autoplay", turns=60, policy="null")
+    research = r.call("state")["research"]
+    assert res["turn"] > 30 and queue[0] in r.call("techs")["known"]
+    assert queue[1] not in research["queue"] and research["current"] not in r.call("techs")["known"]
+
+
 def test_game_over_at_turn_limit(launch):
     b = launch()
     b.call("new_game", seed=SEED, turn_limit=2)
@@ -460,6 +482,20 @@ def test_disbanding_everything_is_defeat(game):
     s = game.call("state")
     assert s["defeated"] and s["game_over"] and s["units"] == []
     assert game.error("end_turn", skip_idle=True)["code"] == "game_over"
+
+
+def test_a_unit_disbanded_in_its_city_adds_its_shields(game):
+    """patches/0014: the ruleset's disband script runs (it failed anywhere inside the civ's borders) and gives the
+    city on the unit's tile a share of the unit's cost."""
+    city = found_capital(game)
+    worker = unit(game.call("state"), "u2")
+    assert (worker["x"], worker["y"]) == (city["x"], city["y"])
+    before = game.call("city", city="c1")["production_stored"]
+    res = game.call("unit_order", unit="u2", order="disband")
+    after = game.call("city", city="c1")["production_stored"]
+    assert after > before
+    gained = f"Rome gained {after - before} shields toward {city['producing']}."
+    assert res["message"] == f"u2 Worker was disbanded. {gained}"
 
 
 @pytest.mark.parametrize("policy", ["null", "found_capital", "engine_ai"])
@@ -694,7 +730,8 @@ def test_battles_the_seat_saw_this_turn_and_the_last(launch):
 
 
 def check_cities_and_borders(world: dict) -> None:
-    """Every city has citizens and sits on a tile its owner owns; a civ owns tiles only while it has a city."""
+    """Every city has citizens and sits on a tile its owner owns; a civ owns tiles only while it has a city; every
+    civ with a city has one capital (patches/0013: the palace moves when the capital falls)."""
     owner_at = {(t[0], t[1]): t[4] for t in world["tiles"]}
     with_cities = {c["owner"] for c in world["cities"]}
     for c in world["cities"]:
@@ -703,6 +740,7 @@ def check_cities_and_borders(world: dict) -> None:
     assert {o for o in owner_at.values() if o >= 0} <= with_cities, "a civ with no city owns tiles"
     capitals = [c["owner"] for c in world["cities"] if c["capital"]]
     assert len(capitals) == len(set(capitals)), "a civ has two capitals"
+    assert set(capitals) == with_cities, f"civs with cities and no capital: {with_cities - set(capitals)}"
 
 
 def test_cities_change_hands(launch, tmp_path):
@@ -748,13 +786,14 @@ def test_cities_change_hands(launch, tmp_path):
     assert restored.call("world")["cities"] == b.call("world")["cities"]
 
 
-def city_next_to_a_soldier(launch, tmp_path, size: int, capital: bool) -> tuple[Bridge, dict, dict, dict]:
+def city_next_to_a_soldier(launch, tmp_path, size: int, capital: bool, owner_cities: int = 1,
+                           turns: int = 40) -> tuple[Bridge, dict, dict, dict]:
     """A saved game edited so that one of the seat's soldiers stands next to an enemy city of `size` (its capital or
     not) with no defender in it, only an enemy Worker; loaded, at war with the city's owner. Returns the bridge, the
     soldier (state), the city (world) and the save's game."""
     b = launch("--autosave", str(tmp_path / "a"))
     b.call("new_game", seed=SEED, opponents=3, turn_limit=400)
-    b.call("autoplay", turns=40, policy="engine_ai")
+    b.call("autoplay", turns=turns, policy="engine_ai")
     b.call("end_turn", skip_idle=True)
     save = json.loads((tmp_path / "a" / "autosave.json").read_text())
     g = save["game"]
@@ -773,7 +812,8 @@ def city_next_to_a_soldier(launch, tmp_path, size: int, capital: bool) -> tuple[
         x, y = at(c)
         return [(x + dx, y + dy) for dx, dy in ((1, 1), (-1, 1), (1, -1), (-1, -1)) if (x + dx, y + dy) in free]
 
-    city = next(c for c in g["cities"] if c["owner"] in met and c["capital"] == capital and free_next_to(c))
+    city = next(c for c in g["cities"] if c["owner"] in met and c["capital"] == capital and free_next_to(c)
+                and sum(x["owner"] == c["owner"] for x in g["cities"]) >= owner_cities)
     cx, cy = at(city)
     spot = free_next_to(city)[0]
     soldier = next(u for u in g["units"]
@@ -802,8 +842,8 @@ def city_next_to_a_soldier(launch, tmp_path, size: int, capital: bool) -> tuple[
 
 def test_taking_a_city_keeps_it(launch, tmp_path):
     """patches/0011: a soldier walks into an undefended enemy capital of size 3. The seat holds it at size 2, with
-    no palace, empty production and food boxes and something new to build; the enemy Worker in it is gone, the old
-    owner has no capital, and the borders around it are the seat's."""
+    no palace, empty production and food boxes and something new to build; the enemy Worker in it is gone, and the
+    borders around it are the seat's. patches/0013: the old owner's palace moves to its largest city left."""
     b, soldier, city, _ = city_next_to_a_soldier(launch, tmp_path, size=3, capital=True)
     before = b.call("world")
     loser = city["owner"]
@@ -816,7 +856,10 @@ def test_taking_a_city_keeps_it(launch, tmp_path):
     me = next(p["index"] for p in world["players"] if p["is_human"])
     now = next(c for c in world["cities"] if c["name"] == city["name"])
     assert (now["owner"], now["size"], now["capital"]) == (me, 2, False)
-    assert not any(c["capital"] for c in world["cities"] if c["owner"] == loser), "the old owner kept a capital"
+    left = [c for c in world["cities"] if c["owner"] == loser]
+    capitals = [c for c in left if c["capital"]]
+    assert len(capitals) == (1 if left else 0), capitals
+    assert not left or capitals[0]["size"] == max(c["size"] for c in left), "the palace went to the largest city"
     assert sum(c["capital"] for c in world["cities"] if c["owner"] == me) == 1, "the seat's own capital stays the one"
     assert not [u for u in world["units"] if (u["x"], u["y"]) == (city["x"], city["y"]) and u["owner"] != me]
     mine = next(c for c in state["cities"] if c["name"] == city["name"])
@@ -831,6 +874,23 @@ def test_taking_a_city_keeps_it(launch, tmp_path):
     # The game goes on: the next turn plays, and the city is still a city.
     b.call("end_turn", skip_idle=True)
     check_cities_and_borders(b.call("world"))
+
+
+def test_losing_the_capital_moves_the_palace(launch, tmp_path):
+    """patches/0013: a civ whose capital is taken gets a new one at once, free: its largest city left."""
+    b, soldier, city, _ = city_next_to_a_soldier(launch, tmp_path, size=3, capital=True, owner_cities=2, turns=80)
+    loser = city["owner"]
+    left = [c for c in b.call("world")["cities"] if c["owner"] == loser and c["name"] != city["name"]]
+    assert left and not any(c["capital"] for c in left)
+    res = b.call("unit_order", unit=soldier["id"], order="attack", x=city["x"], y=city["y"])
+    assert "is yours now" in res["message"]
+    world = b.call("world")
+    check_cities_and_borders(world)
+    now = [c for c in world["cities"] if c["owner"] == loser]
+    [capital] = [c for c in now if c["capital"]]
+    assert capital["size"] == max(c["size"] for c in now)
+    b.call("end_turn", skip_idle=True)
+    assert [c["name"] for c in b.call("world")["cities"] if c["owner"] == loser and c["capital"]] == [capital["name"]]
 
 
 def test_taking_a_city_of_size_1_destroys_it(launch, tmp_path):
@@ -855,6 +915,91 @@ def test_a_game_with_captures_replays_the_same(launch):
         worlds.append({k: w[k] for k in ("turn", "players", "cities", "units", "tiles")})
         b.close()
     assert worlds[0] == worlds[1]
+
+
+def test_a_production_queue_goes_before_the_engines_pick(launch, tmp_path):
+    """set_production's `then`: each time the city completes something it builds the next queued item it can, and no
+    choice waits on the agent; an item it cannot build leaves the queue with a note; once the queue is empty the
+    engine picks again. The queue survives a save."""
+    b = launch("--autosave", str(tmp_path / "a"))
+    b.call("new_game", seed=SEED, turn_limit=100)
+    found_capital(b)
+    res = b.call("set_production", city="c1", item="Warrior", then=["Palace", "Warrior", "warrior"])
+    assert res["city"]["queue"] == ["Palace", "Warrior", "Warrior"]
+    assert "Then: Palace, Warrior, Warrior." in res["message"]
+    assert b.call("state")["cities"][0]["queue"] == ["Palace", "Warrior", "Warrior"]
+    built = []
+    for _ in range(40):
+        events = b.call("end_turn", skip_idle=True)["events"]
+        built += [e["text"] for e in events if e["kind"] == "built"]
+        s = b.call("state")
+        if s["cities"][0]["queue"] == ["Warrior"]:
+            assert not any(x["kind"] == "choose_production" for x in s["blockers"])
+            assert s["cities"][0]["producing"] == "Warrior" and s["cities"][0]["producing_source"] == "agent"
+            break
+    else:
+        pytest.fail(f"the queue never moved: {built}")
+    assert "next from your queue: Warrior (Palace left the queue: " in built[-1], built
+    # saved and restored with the game
+    restored = launch()
+    restored.call("load", path=str(tmp_path / "a" / "autosave.json"))
+    assert restored.call("state")["cities"][0]["queue"] == ["Warrior"]
+    for _ in range(40):
+        events = b.call("end_turn", skip_idle=True)["events"]
+        texts = [e["text"] for e in events if e["kind"] == "built"]
+        if texts:
+            break
+    assert "next from your queue: Warrior" in texts[-1] and b.call("state")["cities"][0]["queue"] == []
+    for _ in range(40):
+        events = b.call("end_turn", skip_idle=True)["events"]
+        texts = [e["text"] for e in events if e["kind"] == "built"]
+        if texts:
+            break
+    assert "the engine picked" in texts[-1]
+    assert any(x["kind"] == "choose_production" for x in b.call("state")["blockers"])
+    # what a queue takes
+    assert b.error("set_production", city="c1", item="Warrior", then=["Warrior"] * 11)["code"] == "bad_args"
+    err = b.error("set_production", city="c1", item="Warrior", then=["Warior"])
+    assert err["code"] == "unknown_item" and "The closest is Warrior." in err["message"]
+    assert b.call("set_production", city="c1", item="Warrior", then=[])["city"]["queue"] == []
+
+
+def test_orders_for_many_units_and_cities_at_once(launch):
+    """unit_orders: one call orders many units, by id or by group (idle, idle:Type, all:Type); one order that fails
+    doesn't stop the rest. set_production names several cities at once: a list, all, or pending."""
+    b = launch()
+    b.call("new_game", seed=SEED, turn_limit=200)
+    res = b.call("unit_orders", orders=[
+        {"unit": "u1", "order": "found_city"}, {"unit": "idle:worker", "order": "auto_work"},
+        {"unit": "u99", "order": "fortify"}, {"unit": "all", "order": "fortify"},
+        {"unit": "idle:Tank", "order": "fortify"}, {"unit": "idle", "order": "hold"}])
+    assert [(r["unit"], r["ok"]) for r in res["results"]] == [
+        ("u1", True), ("u2", True), ("u99", False), ("all", False), ("idle:Tank", False), ("idle", False)]
+    codes = [r.get("code") for r in res["results"] if not r["ok"]]
+    assert codes == ["unknown_unit", "bad_args", "unknown_unit", "no_units"]
+    assert (res["ok"], res["failed"]) == (2, 4) and res["message"] == "2 orders done, 4 failed."
+    s = b.call("state")
+    assert len(s["cities"]) == 1 and unit(s, "u2")["status"] == "auto_work"
+    assert not [x for x in s["blockers"] if x["kind"] == "idle_unit"]
+    assert b.error("unit_orders", orders=[])["code"] == "bad_args"
+    assert b.error("unit_orders", orders=[{"unit": "u2", "order": "hold"}] * 101)["code"] == "bad_args"
+    # many cities: the engine AI builds an empire to try it on
+    b.call("autoplay", turns=60, policy="engine_ai")
+    cities = [c["id"] for c in b.call("state")["cities"]]
+    assert len(cities) >= 3
+    res = b.call("set_production", city="all", item="Warrior", then=["Warrior"])
+    assert res["ok"] == len(cities) and res["failed"] == 0 and {c["producing"] for c in res["cities"]} == {"Warrior"}
+    assert all(c["queue"] == ["Warrior"] for c in res["cities"])
+    err = b.error("set_production", city=f"{cities[0]},{cities[1]}", item="Palace")
+    assert err["code"] == "unknown_item"     # none of them can: the first city's reason
+    res = b.call("set_production", city=f"{cities[0]},{cities[1]}", item="Warrior")
+    assert [r["city"] for r in res["results"]] == cities[:2] and res["ok"] == 2
+    assert b.error("set_production", city="c1,c999", item="Warrior")["code"] == "unknown_city"
+    assert b.error("set_production", city=" , ", item="Warrior")["code"] == "unknown_city"
+    pending = b.call("set_production", city="pending", item="Warrior") if any(
+        x["kind"] in ("choose_production", "no_production") for x in b.call("state")["blockers"]) else None
+    assert pending is None or pending["ok"] >= 1
+    assert b.error("set_production", city="pending", item="Warrior")["code"] == "no_cities"
 
 
 def test_saves_keeps_every_turn_as_a_loadable_save(launch, tmp_path):

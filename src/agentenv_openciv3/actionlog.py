@@ -15,8 +15,13 @@ def describe(tool: str, args: dict) -> str | None:
     if tool == "unit_order":
         target = f" → ({args['x']},{args['y']})" if args.get("x") is not None and args.get("y") is not None else ""
         return f"{args.get('unit')} {args.get('order')}{target}"
+    if tool == "unit_orders":
+        orders = args.get("orders") or []
+        more = f" (+{len(orders) - 4})" if len(orders) > 4 else ""
+        return "; ".join(describe("unit_order", o) or "?" for o in orders[:4]) + more
     if tool == "set_production":
-        return f"{args.get('city')} builds {args.get('item')}"
+        then = f", then {', '.join(args['then'])}" if args.get("then") else ""
+        return f"{args.get('city')} builds {args.get('item')}{then}"
     if tool == "research" and args.get("tech"):
         return f"research {args['tech']}"
     if tool == "set_rates":

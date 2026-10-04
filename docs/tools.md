@@ -1,6 +1,6 @@
 # Agent tools
 
-The env (`agentenv_openciv3.server.OpenCiv3Env`, card name `openciv3`) exposes fifteen MCP tools. They
+The env (`agentenv_openciv3.server.OpenCiv3Env`, card name `openciv3`) exposes sixteen MCP tools. They
 return compact text, not JSON: briefs are under about 600 tokens (plus up to about 300 for the messages between
 leaders), a radius-3 map under about 700.
 Every tool that changes the game ends with a one-line footer: `[T23/60 · needs orders: u7, c1]`.
@@ -11,12 +11,13 @@ the valid alternatives and the exact call to make instead.
 | Tool | Args | Returns |
 |---|---|---|
 | `get_turn_brief` | — | Turn and limit, gold, research and ETA, score, a pace line against the targets and both baselines (null and built-in AI on the same seed), what needs orders, standing orders, one line per city, the last turn's events, and the agent's plan. Self-contained: "lost context? call get_turn_brief". |
-| `list_units` | `filter`: `needs_orders` (default) or `all` | One line per unit: id, type, `(x,y)`, moves, status or standing order, valid orders, and why `found_city` is or isn't possible here. |
+| `list_units` | `filter`: `needs_orders` (default) or `all`; `type` (optional, e.g. `"Worker"`) | One line per unit: id, type, `(x,y)`, moves, status or standing order, valid orders, and why `found_city` is or isn't possible here; with many idle units, the `unit_orders` call that orders them by type. |
 | `view_map` | `x`, `y`, `radius` (default 3, max 6), or `around` (`"u7"`, `"c1"`) | Staggered ASCII of the explored tiles, a legend, then a "notable" list (resources, rivers, foreign units, cities, good sites) with distance and direction. Unexplored tiles are blank. |
 | `find_city_sites` | `unit` (optional), `top` (default 5) | Ranked sites: `(x,y)`, score, distance and direction, travel turns, yields, river or coast. |
 | `unit_order` | `unit`, `order`, `x`, `y` | Result line plus footer. `settle` walks to the site and founds the city on arrival. `attack` (an adjacent enemy unit or city of a civ at war) and `bombard` (in range) fight with the engine's own combat; a unit next to an enemy lists its targets with an estimated chance to win, and a city that falls is captured (one of size 1 is destroyed). |
-| `city_info` | `city` (optional; all cities when omitted) | Size, food, growth ETA, production and ETA, and what it can build with cost and turns. |
-| `set_production` | `city`, `item` | Result line plus footer. |
+| `unit_orders` | `orders`: 1 to 100 of `{unit, order, x, y}`; `unit` is an id or a group, `"idle"`, `"idle:Worker"` or `"all:Warrior"` | One line saying how many orders were done and failed, then one line per unit (the first 30), plus footer. One that fails doesn't stop the rest. |
+| `city_info` | `city` (optional; all cities when omitted) | Size, food, growth ETA, production and ETA, queue, and what it can build with cost and turns. With more than 4 cities and none named: one line per city, those waiting on a production choice first. |
+| `set_production` | `city`: an id, several (`"c1,c3"`), `"all"` or `"pending"`; `item`; `then` (optional, up to 10: the queue; `[]` clears it) | Result line, a line per city (and per city that could not), plus footer. With a queue, each completion starts the next queued item the city can build; the engine picks only when it is empty. |
 | `research` | `tech` (optional) | With no tech: researchable techs with turns and what each unlocks. With a tech: sets it, queuing any prerequisites. |
 | `end_turn` | `skip_idle` (default false), `until_attention` (default false), `max_turns` (default 5), `note` (optional) | Either END TURN BLOCKED with each blocker and the call that resolves it, or the turn report plus the next brief. At the turn limit: `GAME OVER` and final metrics. `note`: one line for the people watching, what the agent did this turn and why (see [What spectators read](#what-spectators-read)). |
 | `revolution` | `government` | Starts anarchy (no taxes or science for a few turns), then the chosen government. The brief lists the choices. |

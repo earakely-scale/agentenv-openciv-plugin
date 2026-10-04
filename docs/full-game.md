@@ -60,7 +60,7 @@ rotated at a 100K context cap.
 | Victory | conquest, domination, space, UN, culture, score | none |
 | Government | revolutions | Despotism only: no command for the agent, no code for the AI |
 | War and peace | both | the AI declares war and never makes peace; the agent has neither |
-| City capture | yes | yes (patch 0011): the city loses a citizen, its palace and small wonders; one of size 1 is destroyed |
+| City capture | yes | yes (patch 0011): the city loses a citizen, its palace and small wonders; one of size 1 is destroyed; the loser gets a new capital (patch 0013) |
 | Late eras | Industrial and Modern | nobody reaches them. Bank, University and Cathedral are never buildable, because of a prerequisite check (`Building.cs:145`) |
 
 ## What is missing
@@ -83,7 +83,7 @@ rotated at a 100K context cap.
      shields; one of size 1 is destroyed. Great wonders and other buildings stay, and borders follow the new owner.
    - In 540-turn Standard games at Regent (seeds 1-6), 46 to 73 cities change hands per game, where 12 to 27
      were destroyed.
-   - Still missing: a civ that loses its capital does not get a new palace.
+   - A civ that loses its capital gets a new one at once, in its largest city (patch 0013).
 4. **Diplomacy only went one way: fixed** by patch 0009.
    - An AI now asks a price for peace (`Player.PeacePriceFor`) and makes peace with other AIs.
    - It offers the player peace, and remembers a broken treaty.
@@ -99,7 +99,7 @@ rotated at a 100K context cap.
 | Attack and bombard | **done:** `attack` and `bombard` orders through the engine's combat, with an estimated chance to win |
 | Revolution | **done:** the `revolution` tool |
 | Diplomacy | **done for war and peace:** the `diplomacy` tool, with peace at the AI's price and AI offers reported as events. Trading techs and gold is not done (M) |
-| Acting at scale | at T300 all 13 cities waited on a production choice, and the brief cuts off at 6 cities; needs orders for many units, production queues and filtered views (M) |
+| Acting at scale | **done:** `unit_orders` orders many units at once (by id, or every idle unit of a type), `set_production` sets many cities at once (`"all"`, `"pending"`, a list) and takes a queue (`then`) the bridge follows after each completion, `list_units` filters by type, and with many cities the brief folds the engine's picks into one line and `city_info` gives one line per city |
 | Seeing rivals | a rivals view and seen foreign cities (S) |
 | The date and victory status | in the brief and `data/get` (S) |
 

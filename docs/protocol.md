@@ -79,7 +79,7 @@ The human player's full situation. Result:
     "id": "c1", "name": "Rome", "x": 12, "y": 10, "size": 3, "capital": true,
     "food_stored": 4, "food_needed": 20, "food_per_turn": 2, "turns_to_grow": 8,
     "shields_per_turn": 3, "producing": "Settler", "production_stored": 12, "production_cost": 30,
-    "turns_to_complete": 6, "disorder": false, "buildings": ["Palace"],
+    "turns_to_complete": 6, "disorder": false, "buildings": ["Palace"], "queue": ["Warrior", "Granary"],
     "food_eaten": 6, "commerce": {"total": 5, "taxes": 2, "science": 3, "luxury": 0, "corrupt": 0, "wealth": 0},
     "shields": {"total": 3, "useful": 3, "corrupt": 0}, "maintenance": 0
   }],
@@ -340,8 +340,28 @@ And the rest of the client's city screen (`C7/UIElements/CityScreen/CityScreen.c
   (`CityTileAssignmentAI`).
 
 ### `set_production`
-Args: `city`, `item`. Result: `{"message", "city": {...}}`. Errors: `unknown_city`, `unknown_item`
-(alternatives = option names).
+Args: `city`, `item`, `then` (optional list of up to 10 names). Result: `{"message", "city": {...}}`. Errors:
+`unknown_city`, `unknown_item` (alternatives = option names), `no_cities`, `bad_args`.
+
+- `then` is the city's queue (the city object's `queue`): each time the city completes something, or the engine
+  changes what it builds, the bridge sets the first queued item it can build now and takes it off the queue; an item
+  it cannot build any more leaves the queue, and the `built` event says so. Only when the queue is empty does the
+  engine pick, and the `choose_production` blocker asks the agent to keep or change that pick. `then: []` clears the
+  queue; leaving `then` out keeps it. Queues are saved with the game.
+- `city` may name several cities: ids or names separated by commas, `"all"`, or `"pending"` (the cities whose
+  next item the engine picked and nobody has kept or changed, and those building nothing). The result is then
+  `{"message": "3 cities now build Warrior, then Granary; 1 could not.", "ok", "failed", "results": [{"city",
+  "ok", "message", "code"?}], "cities": [...]}`; when none of them can, the first city's error is raised.
+  `no_cities`: `"pending"` names no city now.
+
+### `unit_orders`
+Args: `orders`, 1 to 100 of `{"unit", "order", "x"?, "y"?}`, each as `unit_order` takes it, in order. `unit` is a
+unit id or a group: `"idle"` (every unit waiting for orders), `"idle:Worker"` (those of a type) or `"all:Warrior"`
+(every unit of a type). One that fails doesn't stop the rest. Result: `{"message": "5 orders done, 1 failed.", "ok",
+"failed", "results": [{"unit", "ok", "message", "code"?}]}`, one result per unit (a group gives one per unit it
+names, or one `no_units` failure when it names none now); a failure's `code` is the error `unit_order` would give,
+or `unknown_unit` for a type the civ has none of, `bad_args` for `"all"` without a type. Errors: `bad_args` (no
+orders, or more than 100), `game_over`.
 
 ### `techs`
 Result: `{"current", "turns_left", "known": [...], "available": [{"name", "cost", "turns", "era",
@@ -481,11 +501,26 @@ submodule itself stays untouched):
    is destroyed), its palace, small wonders, stored food and shields; great wonders and other buildings stay, the
    loser's units in it are lost, its citizens keep their nationality and are put back to work, its borders follow
    the new owner's culture, and the new owner's AI picks what it builds. `MsgCityCaptured` tells the UI. The loser
-   is left without a capital (the engine has no palace relocation). Barbarians still take gold.
+   gets a new capital from patch 0013. Barbarians still take gold.
 12. `0012-moves-are-observable.patch`: `MapUnit.moveObserver` (an `IMoveObserver`) is told of every step a unit
    takes in `MapUnit.Move` (a move, the last step of a won attack, or a retreat), once the unit is on its new tile
    and before it enters it (`OnEnterTile`). The bridge records `known_map`'s `moves` and the world snapshot's
    `moves` with it; like 0010's observer it draws nothing from `GameData.rng` and changes nothing.
+13. `0013-the-palace-moves-when-the-capital-falls.patch`: a civ whose capital is taken (`CaptureCity`) or
+   destroyed (`DestroyCity`) gets a new one at once and free, as in Civ III (`CityInteractions.RelocatePalace`):
+   its largest city (the oldest of those), preferring one without a Forbidden Palace; a Forbidden Palace where the
+   palace lands is lost. Corruption is measured again from there.
+14. `0014-units-disbanded-in-a-city-add-their-shields.patch`: the ruleset's disband script
+   (`C7/Lua/civ3/behaviors/gameplay.lua`) failed for every unit disbanded inside its civ's borders (`HasCity`
+   read as a method, then `GetType().Name` on a MoonSharp static userdata), so none gave shields. A unit disbanded
+   in one of its civ's cities now adds `ShieldRateForDisbanding` (a quarter) of its cost to what the city builds,
+   unless that is a great wonder or wealth (`City.TakesDisbandShields`); `unit_order`'s `disband` message says how
+   many.
+15. `0015-a-tech-got-out-of-order-leaves-the-research-queue.patch`: `Player.CompleteResearchingTech` dropped the
+   research queue's head whatever tech was completed, so a tech got in a trade dropped the one being researched,
+   and a traded tech further down the queue stayed in it; at the head, `PlayerAI.MaybePickTechToResearch` picked it
+   again forever and the turn hung (a seat with a `set_research` queue, played by `autoplay`'s `engine_ai`). The
+   completed tech now leaves the queue wherever it is, and a known tech at the head is skipped.
 
 Measured over full 540-turn Standard games with 7 AIs at Regent (seeds 1-3), patches 0005-0009 take:
 - mean AI techs at T540 from 32 to 43-45, and civs with an Industrial-era tech from 0 to 3-7;

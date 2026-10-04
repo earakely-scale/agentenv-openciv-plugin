@@ -1,0 +1,44 @@
+The palace moves when the capital is lost: a civ whose capital is taken (CityInteractions.CaptureCity) or destroyed (DestroyCity) gets a new one, as in Civilization III. The palace goes, free, to its largest city (the oldest of those), preferring one without a Forbidden Palace; a Forbidden Palace where it lands is lost. Without this, patch 0011 left a civ that lost its capital without one for the rest of the game, its corruption measured from whichever city came first.
+
+--- a/C7Engine/EntryPoints/CityInteractions.cs
++++ b/C7Engine/EntryPoints/CityInteractions.cs
+@@ -112,12 +112,31 @@
+ 
+ 			new MsgCityCaptured(city, loser).send();
+ 			gameData.CheckForCivDestructionAndNotifyUi(loser);
++			RelocatePalace(loser);
+ 
+ 			// Rank corruption depends on each civ's cities.
+ 			loser.DoCorruptionCalculations(gameData);
+ 			conqueror.DoCorruptionCalculations(gameData);
+ 		}
+ 
++		/// <summary>
++		/// A civ left without a capital (it was taken or destroyed) gets a new one, as in Civilization III: the palace
++		/// goes, free, to its largest city (the oldest of those), preferring one without a Forbidden Palace; a Forbidden
++		/// Palace where it lands is lost. Nothing happens to a civ that has a capital or no city.
++		/// </summary>
++		public static void RelocatePalace(Player player) {
++			if (player.cities.Count == 0 || player.cities.Any(c => c.IsCapital())) return;
++			GameData gameData = EngineStorage.gameData;
++			City next = player.cities
++				.OrderBy(c => c.GetBuildings().Any(b => b.building.isForbiddenPalace))
++				.ThenByDescending(c => c.residents.Count)
++				.First();
++			next.constructed_buildings.RemoveAll(cb => cb.building.isForbiddenPalace);
++			next.capital = true;
++			if (gameData.Buildings.Find(x => x.isCenterOfEmpire) is Building palace) next.AddBuilding(palace);
++			player.DoCorruptionCalculations(gameData);
++		}
++
+ 		public static void DestroyCity(City city) {
+ 			DestroyCity(city.location);
+ 		}
+@@ -144,6 +163,7 @@
+ 			new MsgCityDestroyed(tile.cityAtTile).send();
+ 
+ 			gameData.CheckForCivDestructionAndNotifyUi(owner);
++			RelocatePalace(owner);
+ 
+ 			tile.cityAtTile = null;
+ 

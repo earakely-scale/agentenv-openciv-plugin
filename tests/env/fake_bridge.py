@@ -317,6 +317,7 @@ class Game:
                 "capital": "Palace" in c["buildings"], "food_stored": c["food"], "food_needed": needed,
                 "food_per_turn": food_pt, "turns_to_grow": ceil_div(needed - c["food"], food_pt),
                 "shields_per_turn": spt, "producing": item, "producing_source": c["source"] if item else None,
+                "queue": list(c.get("queue") or []),
                 "production_stored": c["shields"], "production_cost": cost,
                 "turns_to_complete": ceil_div(cost - c["shields"], spt) if item and cost and spt else None,
                 "disorder": c["disorder"], "happy": happy, "content": content, "unhappy": unhappy,
@@ -914,6 +915,65 @@ class Game:
                 "battles": [b for b in self.battles if b["turn"] >= self.turn - 1],
                 "moves": []}   # the scripted game's units jump: no steps
 
+    def set_production(self, a) -> dict:
+        """One city, or several (a list, all, pending), with an optional queue (`then`) shown on the city."""
+        sel = a["city"].strip()
+        if sel.lower() == "all":
+            cities = list(self.cities.values())
+        elif sel.lower() == "pending":
+            cities = [c for c in self.cities.values() if c.get("pending") or not c["producing"]]
+        else:
+            cities = [self.city(x.strip()) for x in sel.split(",") if x.strip()]
+        many = sel.lower() in ("all", "pending") or len(cities) > 1
+        if many and not cities:
+            raise Refused("no_cities", f"No city of yours matches {sel!r} now.")
+        results, done, first = [], [], None
+        for c in cities:
+            names = [o["name"] for o in self.options(c)]
+            item = next((n for n in names if n.lower() == a["item"].lower()), None)
+            if item is None:
+                err = Refused("unknown_item", f"{c['name']} cannot build {a['item']!r}.", names)
+                if not many:
+                    raise err
+                first = first or err
+                results.append({"city": c["id"], "ok": False, "code": "unknown_item", "message": str(err)})
+                continue
+            c["producing"], c["source"], c["pending"] = item, "agent", False
+            if a.get("then") is not None:
+                c["queue"] = list(a["then"])
+            results.append({"city": c["id"], "ok": True, "message": f"{c['name']} now builds {item}."})
+            done.append(self.city_view(c))
+        if not many:
+            return {"message": results[0]["message"], "city": done[0]}
+        if not done:
+            raise first
+        return {"message": f"{len(done)} cities now build {done[0]['producing']}.", "ok": len(done),
+                "failed": len(results) - len(done), "results": results, "cities": done}
+
+    def unit_orders(self, a) -> dict:
+        """Each order for a unit id or a group (idle, idle:Type, all:Type); one that fails doesn't stop the rest."""
+        results = []
+        for o in a["orders"]:
+            sel = o.get("unit", "")
+            scope, _, kind = sel.partition(":")
+            if scope in ("idle", "all"):
+                units = [u for u in self.units.values() if (scope == "all" or self.unit_view(u)["needs_orders"])
+                         and (not kind or u["type"].lower() == kind.lower())]
+                ids = [u["id"] for u in units]
+            else:
+                ids = [sel]
+            if not ids:
+                results.append({"unit": sel, "ok": False, "code": "no_units", "message": f"No unit matches {sel!r}."})
+            for uid in ids:
+                try:
+                    r = self.unit_order({"unit": uid, **{k: o[k] for k in ("order", "x", "y") if k in o}})
+                    results.append({"unit": uid, "ok": True, "message": r["message"]})
+                except Refused as e:
+                    results.append({"unit": uid, "ok": False, **e.error})
+        ok = sum(r["ok"] for r in results)
+        return {"message": f"{ok} orders done" + (f", {len(results) - ok} failed" if ok < len(results) else "") + ".",
+                "ok": ok, "failed": len(results) - ok, "results": results}
+
     def handle(self, cmd, a, on_turn) -> dict:
         if a.get("seat", self.civ) not in self.seats:
             raise Refused("unknown_seat", f"{a['seat']!r} is not a seat.", self.seats)
@@ -949,13 +1009,9 @@ class Game:
                     "workable": [[p[0], p[1]] for p in area(c["pos"], 2) if p != c["pos"] and on_map(p)],
                     **self.city_screen(c, worked)}
         if cmd == "set_production":
-            c = self.city(a["city"])
-            names = [o["name"] for o in self.options(c)]
-            item = next((n for n in names if n.lower() == a["item"].lower()), None)
-            if item is None:
-                raise Refused("unknown_item", f"{c['name']} cannot build {a['item']!r}.", names)
-            c["producing"], c["source"], c["pending"] = item, "agent", False
-            return {"message": f"{c['name']} now builds {item}.", "city": self.city_view(c)}
+            return self.set_production(a)
+        if cmd == "unit_orders":
+            return self.unit_orders(a)
         if cmd == "set_rates":
             return self.set_rates(a)
         if cmd == "revolution":

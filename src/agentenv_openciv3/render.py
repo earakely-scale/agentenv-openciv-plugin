@@ -24,6 +24,7 @@ TERRAIN_NAMES = {"g": "grassland", "p": "plains", "d": "desert", "t": "tundra", 
                  "m": "mountains", "F": "forest", "j": "jungle", "s": "marsh", "v": "volcano", "~": "water"}
 BASELINE_LABELS = {"engine_ai": "built-in AI", "settler_bot": "settler bot", "null": "do-nothing"}
 MAX_UNIT_LINES, MAX_STANDING, MAX_CITY_LINES, MAX_EVENTS, MAX_AUTO, MAX_MESSAGES = 5, 6, 6, 5, 3, 12
+MAX_DETAILED_CITIES, MAX_PICKS, MAX_BATCH_LINES = 4, 8, 30
 # The characters of messages a brief lists at most (about 300 tokens; the oldest are left out first): every brief
 # repeats them, and the seat has read each one in full once already.
 MESSAGE_CHARS = 1200
@@ -105,15 +106,48 @@ def target_text(t: dict) -> str:
     return f"({t['x']},{t['y']}) {t.get('dir', '')} {what} {round(100 * t.get('win_chance', 0))}% to win"
 
 
-def units_list(state: dict, everything: bool) -> str:
+def units_list(state: dict, everything: bool, kind: str | None = None) -> str:
     units = state.get("units", [])
+    if kind:
+        units = [u for u in units if u.get("type", "").lower() == kind.strip().lower()]
     shown = units if everything else [u for u in units if u.get("needs_orders")]
-    head = (f"UNITS (all {len(units)}) T{state['turn']}" if everything
-            else f"UNITS needing orders ({len(shown)} of {len(units)}) T{state['turn']}")
+    of = f" {kind.strip()}" if kind else ""
+    head = (f"UNITS{of} (all {len(units)}) T{state['turn']}" if everything
+            else f"UNITS{of} needing orders ({len(shown)} of {len(units)}) T{state['turn']}")
     if not shown:
         rest = "" if everything else " — list_units(filter=\"all\") shows the rest"
         return f"{head}\nnone{rest}"
-    return "\n".join([head, *(unit_line(u, detail=True) for u in shown)])
+    lines = [head, *(unit_line(u, detail=True) for u in shown)]
+    if not everything and len(shown) > MAX_UNIT_LINES:
+        lines.append("many at once → " + batch_hint(shown))
+    return "\n".join(lines)
+
+
+def idle_groups(units: list[dict]) -> list[tuple[str, int]]:
+    """(type, count) of units, the commonest first."""
+    counts: dict[str, int] = {}
+    for u in units:
+        counts[u.get("type", "?")] = counts.get(u.get("type", "?"), 0) + 1
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+def batch_hint(units: list[dict]) -> str:
+    """A unit_orders call for idle units, by type: workers work, settlers settle, the rest fortify."""
+    def order(t: str) -> str:
+        return "auto_work" if t == "Worker" else "explore" if t in ("Scout", "Explorer") else "fortify"
+    groups = [t for t, _ in idle_groups(units) if t != "Settler"][:2]
+    if not groups:
+        return 'unit_orders(orders=[{"unit": "idle", "order": "..."}])'
+    return "unit_orders(orders=[" + ", ".join(f'{{"unit": "idle:{t}", "order": "{order(t)}"}}' for t in groups) + "])"
+
+
+def batch_lines(results: list[dict], key: str) -> list[str]:
+    """One line per result of a batch (unit_orders, set_production for many cities), failures marked."""
+    lines = [f"  {r[key]}: {'' if r.get('ok') else '✗ '}{r.get('message', '')}".rstrip()
+             for r in results[:MAX_BATCH_LINES]]
+    if len(results) > MAX_BATCH_LINES:
+        lines.append(f"  +{len(results) - MAX_BATCH_LINES} more")
+    return lines
 
 
 def is_military(u: dict) -> bool:
@@ -171,7 +205,27 @@ def city_flags(c: dict) -> list[str]:
 
 def city_line(c: dict) -> str:
     parts = [f"{c['id']} {c['name']} {pos(c)} size {c['size']}", "food " + growth_text(c), production_text(c)]
+    if c.get("queue"):
+        parts.append("then " + ", ".join(c["queue"]))
     return " · ".join(parts + city_flags(c))
+
+
+def needs_look(c: dict) -> bool:
+    """A city whose line the brief keeps: an engine pick or nothing to build, disorder or its risk, starving, full
+    production, or no defender."""
+    return (not c.get("producing") or c.get("producing_source") == "engine" or bool(city_flags(c))
+            or c.get("food_per_turn", 0) < 0 or bool(c.get("capped")))
+
+
+def cities_table(state: dict) -> str:
+    """Every city in one line each, those that need a look first."""
+    cities = sorted(state.get("cities", []), key=lambda c: not needs_look(c))
+    pending = sum(1 for c in cities if not c.get("producing") or c.get("producing_source") == "engine")
+    lines = [f"CITIES ({len(cities)}, {pending} waiting on a production choice) T{state['turn']}"]
+    lines += ["  " + city_line(c) for c in cities]
+    lines.append('city_info(city="c1") lists what one city can build · set_production(city="pending", item=..., '
+                 'then=[...]) sets every waiting city at once')
+    return "\n".join(lines)
 
 
 def mood_text(c: dict) -> str | None:
@@ -278,6 +332,13 @@ def _rank(e: dict) -> int:
     if e.get("kind") == "threat":
         return 2 if is_urgent(e) else 3
     return 0 if e.get("kind") in FIRST else 1
+
+
+def short_event(e: dict) -> dict:
+    """An event as the brief lists it: disorder without its fixes, which NEEDS ORDERS gives while it lasts."""
+    if e.get("kind") in ("disorder", "disorder_started") and ": " in e.get("text", ""):
+        return {**e, "text": e["text"].split(": ", 1)[0] + "."}
+    return e
 
 
 def events_lines(events: list[dict], cap: int = MAX_EVENTS) -> list[str]:
@@ -431,10 +492,22 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
     if blockers:
         lines.append(f"NEEDS ORDERS ({len(blockers)})")
         units = [b for b in blockers if b.get("kind") == "idle_unit"]
-        for b in [b for b in blockers if b.get("kind") != "idle_unit"] + units[:MAX_UNIT_LINES]:
+        picks = [b for b in blockers if b.get("kind") == "choose_production"]
+        grouped = picks if len(picks) > 2 else []
+        for b in [b for b in blockers if b.get("kind") != "idle_unit" and b not in grouped] + units[:MAX_UNIT_LINES]:
             lines.append("  " + blocker_line(b, s, (sites or {}).get(b.get("id"))))
+        if grouped:
+            named = [f"{b['id']} {_city(s, b['id']).get('name', '?')}: {_city(s, b['id']).get('producing', '?')}"
+                     for b in grouped[:MAX_PICKS]]
+            more = f", +{len(grouped) - MAX_PICKS} more" if len(grouped) > MAX_PICKS else ""
+            lines.append(f"  {len(grouped)} cities: the engine picked their next item ({', '.join(named)}{more}) → "
+                         'set_production(city="pending", item="...", then=[...]) sets them all; a queue (then) '
+                         "saves the choice after each completion")
         if len(units) > MAX_UNIT_LINES:
-            lines.append(f"  +{len(units) - MAX_UNIT_LINES} more idle units → list_units()")
+            idle = [u for u in s.get("units", []) if u.get("needs_orders")]
+            kinds = ", ".join(f"{n} {t}" for t, n in idle_groups(idle))
+            lines.append(f"  +{len(units) - MAX_UNIT_LINES} more idle units ({kinds} in all) → list_units() · "
+                         + batch_hint(idle))
         if any(b.get("kind") in ("choose_production", "choose_research") for b in blockers):
             lines.append("  end_turn(skip_idle=true) accepts the engine's picks and holds idle units")
     elif attention:
@@ -455,14 +528,17 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
     cities = s.get("cities", [])
     if cities:
         lines.append("CITIES")
-        lines += ["  " + city_line(c) for c in cities[:MAX_CITY_LINES]]
+        # the cities that need a look first (an engine pick, disorder, starving, ...), then the rest in order
+        shown = sorted(cities, key=lambda c: not needs_look(c))[:MAX_CITY_LINES] if len(cities) > MAX_CITY_LINES \
+            else cities
+        lines += ["  " + city_line(c) for c in shown]
         if len(cities) > MAX_CITY_LINES:
             lines.append(f"  +{len(cities) - MAX_CITY_LINES} more → city_info()")
     else:
         lines.append("CITIES none yet — found one: find_city_sites(), then unit_order(order=\"settle\", ...)")
 
     if events and s.get("last_events"):
-        lines.append("EVENTS " + " | ".join(events_lines(s["last_events"])))
+        lines.append("EVENTS " + " | ".join(events_lines([short_event(e) for e in s["last_events"]])))
     if messages:
         shown = messages[-MAX_MESSAGES:]
         while len(shown) > 1 and sum(map(len, shown)) > MESSAGE_CHARS:

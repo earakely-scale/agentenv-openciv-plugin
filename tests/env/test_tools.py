@@ -30,11 +30,11 @@ async def settle_everything(tools):
     await tools("unit_order", unit="u4", order="explore")
 
 
-async def test_fifteen_tools_with_descriptions(env):
+async def test_sixteen_tools_with_descriptions(env):
     listed = {t.name: t for t in await env.mcp.list_tools()}
-    assert set(listed) == {"get_turn_brief", "list_units", "view_map", "find_city_sites", "unit_order", "city_info",
-                           "set_production", "research", "set_rates", "buy", "revolution", "diplomacy", "end_turn",
-                           "plan", "message"}
+    assert set(listed) == {"get_turn_brief", "list_units", "view_map", "find_city_sites", "unit_order", "unit_orders",
+                           "city_info", "set_production", "research", "set_rates", "buy", "revolution", "diplomacy",
+                           "end_turn", "plan", "message"}
     assert all(t.description and t.outputSchema is None for t in listed.values())
     assert "Lost context? Call get_turn_brief." in listed["get_turn_brief"].description
 
@@ -243,6 +243,33 @@ async def test_set_production(tools):
     assert FOOTER.search(err)
     text = await tools("set_production", city="c1", item="warriors")
     assert text.splitlines()[0] == "(read 'warriors' as 'Warrior') Rome now builds Warrior."
+
+
+async def test_production_for_many_cities_and_a_queue(tools, env_vars):
+    await found_capital(tools)
+    text = await tools("set_production", city="c1", item="Warrior", then=["Settler", "Warrior"])
+    assert text.splitlines()[0] == "Rome now builds Warrior."
+    assert " · then Settler, Warrior" in text.splitlines()[1]
+    text = await tools("set_production", city="all", item="Settler")
+    assert text.splitlines()[0] == "1 cities now build Settler." and "then Settler, Warrior" in text   # queue kept
+    err = await tools.error("set_production", city="all", item="Pyramids")   # no city can: the first one's reason
+    assert "Rome cannot build 'Pyramids'." in err
+    log = [json.loads(line) for line in open(env_vars["OPENCIV_ACTION_LOG"])]
+    assert any(r["tool"] == "set_production" and r["args"].get("then") == ["Settler", "Warrior"] for r in log)
+
+
+async def test_unit_orders_gives_many_units_their_orders(tools):
+    await found_capital(tools)
+    text = await tools("unit_orders", orders=[{"unit": "idle:Worker", "order": "auto_work"},
+                                              {"unit": "u4", "order": "explore"}, {"unit": "u99", "order": "hold"}])
+    lines = text.splitlines()
+    assert lines[0] == "2 orders done, 1 failed."
+    assert lines[1].startswith("  u2: ") and lines[2].startswith("  u4: ") and lines[3].startswith("  u99: ✗ ")
+    assert FOOTER.search(lines[-1])
+    units = await tools("list_units", filter="all", type="worker")
+    assert units.splitlines()[0].startswith("UNITS worker (all 1)") and "auto" in units
+    err = await tools.error("unit_orders", orders=[])
+    assert "orders" in err
 
 
 async def test_research(tools):
