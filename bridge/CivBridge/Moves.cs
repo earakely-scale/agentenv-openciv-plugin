@@ -46,8 +46,9 @@ sealed partial class Session : IMoveObserver {
 	}
 
 	/// <summary>
-	/// Steps as paths: a unit's run of steps with nothing else in between (no other step or battle) and the same `key`
-	/// (who saw them), each as {seq of its first step, the steps, the key}.
+	/// Steps as paths: a unit's run of steps with nothing else in between (no other step or battle), in one turn and with
+	/// the same `key` (who saw them), each as {seq of its first step, the steps, the key}. A run never spans two turns, so
+	/// an entry stays the same while known_map lists it: the turn that goes takes whole runs with it.
 	/// </summary>
 	static List<(int Seq, List<Step> Steps, TKey Key)> Paths<TKey>(IEnumerable<Step> list, Func<Step, TKey> key) {
 		var paths = new List<(int, List<Step>, TKey)>();
@@ -56,8 +57,8 @@ sealed partial class Session : IMoveObserver {
 		foreach (Step s in list) {
 			TKey k = key(s);
 			Step last = run?[^1];
-			if (last != null && s.Unit == last.Unit && s.Seq == last.Seq + 1 && s.FromX == last.ToX && s.FromY == last.ToY
-				&& EqualityComparer<TKey>.Default.Equals(k, runKey)) {
+			if (last != null && s.Unit == last.Unit && s.Seq == last.Seq + 1 && s.Turn == last.Turn && s.FromX == last.ToX
+				&& s.FromY == last.ToY && EqualityComparer<TKey>.Default.Equals(k, runKey)) {
 				run.Add(s);
 				continue;
 			}

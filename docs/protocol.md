@@ -244,8 +244,8 @@ it is one cheap pass over the map: no yields or city-site checks). Result:
 - `moves` are the steps of this turn and the last that the seat saw, oldest first, so the play page can show units
   walking where they went instead of jumping there. A step shows if the unit is the seat's, or if the seat had the
   tile it left or the one it entered in sight; that includes other players' turns (AI and barbarian units in
-  sight) and the seat's own moves, orders and standing orders alike. A unit's steps with nothing else in between
-  (no other step or battle) make one entry:
+  sight) and the seat's own moves, orders and standing orders alike. A unit's steps in one turn with nothing else
+  in between (no other step or battle) make one entry, which stays the same while it is listed:
   - `seq`: its first step's place in the order things happened, as a battle's `seq`; its later steps follow on;
   - `turn`, `owner`, `type`: as for a battle's sides;
   - `id`: the seat's id of the unit, while it lives, when it is the seat's; else null;
@@ -254,7 +254,8 @@ it is one cheap pass over the map: no yields or city-site checks). Result:
     a ship move with it and have no steps of their own.
 
   Patch 0012 has `MapUnit.Move` tell the bridge of every step; that changes nothing in the game. An engine restored
-  from an autosave goes on with the same count, without the steps from before.
+  from an autosave has no steps from before, and its count goes on 100000 past the save's: numbers given out after
+  the save, before the engine went down, may already have been played.
 
 ### `city_sites`
 Args: `unit` (a Settler id; default: the first settler, else the capital), `top` (default 5).

@@ -47,6 +47,9 @@ sealed partial class Session : ICombatObserver {
 
 	int battleCount;
 
+	/// <summary>How far a restored game's sequence jumps ahead of its save's.</summary>
+	const int RestoreGap = 100_000;
+
 	public void CombatStarted(MapUnit attacker, MapUnit defender, bool bombard) {
 		SettleBattles();
 		City city = defender.location.HasCity() ? defender.location.cityAtTile : null;
@@ -168,8 +171,9 @@ sealed partial class Session : ICombatObserver {
 		battles.Clear();
 		steps.Clear();
 		battleCount = state == null ? 0 : (int)state["count"];
-		// Saves from before patches/0012 have no sequence: the battles' ids stand in for it.
-		shownSeq = recordedSeq = eventSeq = state == null ? 0 : (int?)state["seq"] ?? battleCount;
+		// The save is from the start of the turn: numbers given out after it, before the engine went down, may have been
+		// seen, so the sequence goes on well past them. Saves from before patches/0012 have none: the battles' ids stand in.
+		shownSeq = recordedSeq = eventSeq = state == null ? 0 : ((int?)state["seq"] ?? battleCount) + RestoreGap;
 		if (state == null) return;
 		Player PlayerAt(JsonNode i) => (int)i >= 0 && (int)i < gd.players.Count ? gd.players[(int)i] : null;
 		Side SideOf(JsonNode s) => new() {

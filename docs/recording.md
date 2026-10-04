@@ -42,7 +42,7 @@ command returns the same snapshot on demand.
 - **`moves`, `battles`:** what happened since the last snapshot, in the order it happened (patches 0010 and 0012):
   every unit's runs of steps, whoever saw them, and every battle. A move is `known_map`'s entry for every seat at
   once: `unit` is the engine's id, `path` the tiles from where it stood, and `seen` the seats that saw it, a mask
-  over `seats` as a tile's `known`; a run is cut where who saw it changes. A battle is `known_map`'s without the
+  over `seats` as a tile's `known`; a run is cut where who saw it changes, and at a turn's end. A battle is `known_map`'s without the
   sides' ids, plus `seen`. With every snapshot written, each unit's runs lead from where the last snapshot had it
   to where this one has it (units carried aboard ships aside). The `world` command has the same as the last
   snapshot, and what happened since.

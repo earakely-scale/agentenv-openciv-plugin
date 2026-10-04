@@ -888,14 +888,44 @@ def test_known_map_has_each_step_the_seat_saw(launch):
     assert (walk["id"], walk["owner"], walk["type"], walk["turn"]) == ("u2", me, "Worker", 0)
     assert walk["path"][0] == [u["x"], u["y"]] and walk["path"][-1] == [res["unit"]["x"], res["unit"]["y"]]
     check_moves(km, me)
+    # An entry stays the same while it is listed, and no step is ever in two entries: a page plays each once.
+    entries, covered = {}, {}
+    seen_foreign = False
     for _ in range(40):
         b.call("autoplay", turns=1, policy="engine_ai")
         km = b.call("known_map")
         check_known_map(km, b.call("world"), b.call("state"))
-        if any(m["owner"] != me for m in km["moves"]) and any(m["owner"] == me for m in km["moves"]):
+        for m in km["moves"]:
+            assert entries.setdefault(m["seq"], m) == m, (m, entries[m["seq"]])
+            for k in range(m["seq"], m["seq"] + len(m["path"]) - 1):
+                assert covered.setdefault(k, m["seq"]) == m["seq"], f"step {k} in two entries"
+        seen_foreign |= any(m["owner"] != me for m in km["moves"])
+        if seen_foreign and km["turn"] >= 20:
             break
     else:
         pytest.fail(f"no other civ's unit seen moving by T{km['turn']}")
+
+
+def test_a_goto_over_turns_lists_each_step_once(launch):
+    """A seat's worker sent two tiles away takes a step on the order, the turn's last move (no AI civ, the other seat
+    has ended), and the next on its standing order, the new turn's first: each turn's steps are an entry of their own,
+    which stays the same while listed, so a page never walks a step twice."""
+    b = launch()
+    b.call("new_game", seed=SEED, turn_limit=100, opponents=1, seats=["Greece"])
+    u = unit(b.call("state", seat="Greece"), "u2")
+    far = next(t for t in b.call("map", seat="Greece", x=u["x"], y=u["y"], radius=2)["tiles"] if t["dist"] == 2)
+    b.call("unit_order", seat="Greece", unit="u2", order="goto", x=far["x"], y=far["y"])
+    entries, covered, turns = {}, {}, set()
+    for _ in range(4):
+        km = b.call("known_map", seat="Greece")
+        for m in km["moves"]:
+            assert entries.setdefault(m["seq"], m) == m, (m, entries[m["seq"]])
+            for k in range(m["seq"], m["seq"] + len(m["path"]) - 1):
+                assert covered.setdefault(k, m["seq"]) == m["seq"], f"step {k} in two entries"
+            turns |= {m["turn"]} if m["id"] == "u2" else set()
+        for civ in ("Rome", "Greece"):
+            b.call("end_turn", seat=civ, skip_idle=True)
+    assert turns == {0, 1}, turns   # a step on the order, the next on the standing order
 
 
 def test_snapshots_say_how_every_unit_moved(launch, tmp_path):
