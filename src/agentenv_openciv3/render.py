@@ -372,7 +372,8 @@ def culture_race(state: dict) -> str | None:
     lead = (f"you {kilo(r['you']['culture'])}" if top.get("you")
             else f"you {kilo(r['you']['culture'])}, top {_race_name(top)} {kilo(top['culture'])}")
     if second and second["culture"]:
-        lead += f" ({top['culture'] * 10 // second['culture'] / 10:g}x the next)"
+        tenths = top["culture"] * 10 // second["culture"]   # rounded down, so 2x never shows early
+        lead += f" ({'>99.9' if tenths > 999 else f'{tenths / 10:.1f}'}x the next)"
     owner = "yours" if city.get("you") else city.get("civ") or "an unmet civ"
     return (f"CULTURE {lead} · best city {city.get('name') or '?'} ({owner}) {kilo(city.get('culture', 0))}"
             f" · a civ wins at {kilo(r['culture_goal'])} and 2x the next, or a city at {kilo(r['city_culture_goal'])}")

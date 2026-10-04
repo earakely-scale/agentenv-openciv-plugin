@@ -38,6 +38,12 @@ def test_the_culture_line_when_the_seat_leads_or_an_unmet_civ_does():
                  {"civ": None, "you": False, "name": None, "culture": 4_321})
     assert render.culture_race(s).startswith("CULTURE you 12k, top an unmet civ 31k (2.5x the next) · best city ? "
                                              "(an unmet civ) 4.3k · ")
+    s["race"]["culture_runner_up"] = civ("Greece", 12_000)   # a tie, and a lead too large to print in full
+    assert "CULTURE you 12k, top an unmet civ 31k (2.5x the next)" in render.culture_race(s)
+    s["race"]["nearest_culture"], s["race"]["you"] = civ("Rome", 12_000, you=True), civ("Rome", 12_000, you=True)
+    assert render.culture_race(s).startswith("CULTURE you 12k (1.0x the next) · ")
+    s["race"]["nearest_culture"]["culture"], s["race"]["culture_runner_up"]["culture"] = 1_500_000, 1
+    assert render.culture_race(s).startswith("CULTURE you 12k (>99.9x the next) · ")
     s["race"]["culture_runner_up"] = None   # one civ left
     assert "x the next)" not in render.culture_race(s)
 
