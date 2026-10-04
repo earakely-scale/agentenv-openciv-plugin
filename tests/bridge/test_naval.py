@@ -388,16 +388,22 @@ def landmasses(save: dict) -> dict[str, list[int]]:
 def test_the_ai_settles_another_island(launch, tmp_path):
     """patches/0022: on Archipelago seed 1 every civ's cities stayed on the island of its first city (0 overseas by T300
     when nothing crossed water). The engine AI now ferries settlers to other islands, and leaves no unit on the water
-    without a ship."""
+    without a ship.
+
+    Played to T300, the horizon docs/full-game.md measures. Overseas settling starts only once a civ's home island is
+    nearly full, around T150 on this seed, so a count at T150 hung on just when that was: 5 overseas cities there with
+    patches 0020-0022 alone, 2 once the other features shifted the game (seeds 2 and 3 had none by T150 even with the
+    naval patches alone). By T300 it was 36 with the naval patches alone and 33 with every feature, in 3 civs each."""
     b = launch("--autosave", str(tmp_path / "a"))
     b.call("new_game", seed=SEED, size="Small", landform="Archipelago", turn_limit=300)
-    for _ in range(15):
+    for _ in range(30):
         b.call("autoplay", turns=10, policy="engine_ai", timeout=300)
         check_cargo(b.call("world"))
-    b.call("end_turn", skip_idle=True)
-    by_civ = landmasses(json.loads((tmp_path / "a" / "autosave.json").read_text()))
+    save = json.loads((tmp_path / "a" / "autosave.json").read_text())
+    assert save["game"]["turnNumber"] == 300
+    by_civ = landmasses(save)
     overseas = {civ: sum(x != lands[0] for x in lands) for civ, lands in by_civ.items()}
-    assert sum(overseas.values()) >= 3 and sum(n > 0 for n in overseas.values()) >= 2, overseas
+    assert sum(overseas.values()) >= 10 and sum(n > 0 for n in overseas.values()) >= 3, overseas
 
 
 def test_the_same_seed_ferries_the_same_way(launch):

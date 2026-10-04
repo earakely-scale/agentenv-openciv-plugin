@@ -175,6 +175,11 @@ rotated at a 100K context cap.
      Archipelago, 0 → 14-17 boats built per game, 0 → 6-36 cities on another landmass, the seat's known tiles
      390-700 → 2,882-3,027; on Continents, 0 → 16-20 boats, 0 → 1-23 overseas cities, 823-916 → 2,886-2,970 known
      tiles. Wall time went from 22-30 s to 28-42 s a game (1.05-1.43×); no turn hung and no unit was stranded.
+   - Re-measured with every feature of this round (patches 0016-0019, trading and culture) on the same games: on
+     Archipelago seeds 1-3, 7-33 overseas cities by T300 (6-36 with the naval patches alone), and 98 against 97 in
+     all over seeds 1-6; on Continents seeds 1-3, 0-22 (1-23). The other features do not hold the naval AI back:
+     they shift when each game's home islands fill up, so the first crossings come some turns earlier or later
+     (seed 1: 2 overseas cities at T150 against 5).
    - Still missing (L each): naval warfare (ships attacking ships, bombarding coasts, escorting ferries);
      amphibious invasion and war across water, so on Continents AIs on different landmasses still never fight
      (`WarPriority` skips cities on other continents); AI troop transport beyond one settler and its escort; Civ
