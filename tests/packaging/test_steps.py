@@ -485,7 +485,7 @@ def test_sol_vs_opus_is_won_by_conquest_among_ai_civilizations(local_stores):
     for s in steps:
         assert registry[s["type"]].from_dict(s).to_dict()["id"] == s["id"]
     match = registry["openciv3_match"].from_dict(next(s for s in steps if s["type"] == "openciv3_match"))
-    assert (match.turns, match.size, match.ai_opponents, match.min_turn_seconds) == (100, "Small", 3, 30)
+    assert (match.turns, match.size, match.ai_opponents, match.min_turn_seconds) == (750, "Tiny", 3, 30)
     assert match.civs == {"opus": "Rome", "sol": "America"}
     assert broadcast.settings(match.broadcast)["title"] == (
         "GPT-6 Sol Battles Opus 5.5 in Civilization 3: which model is the best?")

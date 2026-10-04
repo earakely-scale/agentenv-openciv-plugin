@@ -3,7 +3,7 @@
     "id": "deploy",
     "type": "deploy_env",
     "env_id": "openciv3",
-    "ttl_seconds": 18000
+    "ttl_seconds": 172800
   },
   {
     "id": "agent-opus",
@@ -16,7 +16,7 @@
     "env_vars": {
       "OPENCIV3_SESSION_TURNS": "50"
     },
-    "ttl_seconds": 18000,
+    "ttl_seconds": 172800,
     "depends_on": [
       "deploy"
     ]
@@ -32,7 +32,7 @@
     "env_vars": {
       "OPENCIV3_SESSION_TURNS": "50"
     },
-    "ttl_seconds": 18000,
+    "ttl_seconds": 172800,
     "depends_on": [
       "deploy"
     ]
@@ -41,8 +41,8 @@
     "id": "match",
     "type": "openciv3_match",
     "env_id": "openciv3",
-    "turns": 100,
-    "size": "Small",
+    "turns": 750,
+    "size": "Tiny",
     "civs": {
       "opus": "Rome",
       "sol": "America"
@@ -76,7 +76,7 @@
     "model": "anthropic/claude-opus-5-5",
     "prompt_id": "opus",
     "prompt": "You lead a civilization in a game of OpenCiv3, an open-source Civilization III remake, against one other AI model; civilizations run by the game's own AI share the map too. The game is broadcast live: two commentators call it for an audience. To win, conquer the other model's civilization: once yours is the last civilization a model plays, the game ends and you have won. If you both still stand at the turn limit, the higher score wins, but that is only a tiebreaker. The get_turn_brief tool shows your civilization, your rivals, the match's rules and what needs orders; you act only through the openciv3 tools. Nobody will answer questions, so never ask or wait for confirmation. Talk to the other model's leader with the message tool all game long, at least every few turns: propose deals, warn and threaten, answer what they say, negotiate. Everyone watching reads your messages, so stay in character as your civilization's leader. Each time you end a turn, give end_turn a note for the audience: one line on what you did and why. Keep playing until the end_turn tool reports GAME OVER, then reply with your final result.",
-    "timeout_seconds": 14400,
+    "timeout_seconds": 129600,
     "fail_task_on_error": false,
     "depends_on": [
       "match"
@@ -89,7 +89,7 @@
     "model": "openai/gpt-6-sol",
     "prompt_id": "sol",
     "prompt": "You lead a civilization in a game of OpenCiv3, an open-source Civilization III remake, against one other AI model; civilizations run by the game's own AI share the map too. The game is broadcast live: two commentators call it for an audience. To win, conquer the other model's civilization: once yours is the last civilization a model plays, the game ends and you have won. If you both still stand at the turn limit, the higher score wins, but that is only a tiebreaker. The get_turn_brief tool shows your civilization, your rivals, the match's rules and what needs orders; you act only through the openciv3 tools. Nobody will answer questions, so never ask or wait for confirmation. Talk to the other model's leader with the message tool all game long, at least every few turns: propose deals, warn and threaten, answer what they say, negotiate. Everyone watching reads your messages, so stay in character as your civilization's leader. Each time you end a turn, give end_turn a note for the audience: one line on what you did and why. Keep playing until the end_turn tool reports GAME OVER, then reply with your final result.",
-    "timeout_seconds": 14400,
+    "timeout_seconds": 129600,
     "fail_task_on_error": false,
     "depends_on": [
       "match"
@@ -111,7 +111,7 @@
     "id": "recording",
     "type": "save_env_recording",
     "env_id": "openciv3",
-    "timeout_seconds": 3600,
+    "timeout_seconds": 14400,
     "depends_on": [
       "opus",
       "sol"
