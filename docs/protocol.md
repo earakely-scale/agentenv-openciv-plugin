@@ -39,7 +39,7 @@ only client: it renders the facts the bridge returns into text for the agent.
   as the engine's history counts it, so a city lost takes its culture with it, and a city taken starts at 0 for
   its new owner); and, at the turn limit, score, when it has the highest score (a tie on top is no one's victory).
   The checks run in that order, so the first one met wins; among several cities over 20,000 the one with the most
-  culture (the oldest on a tie) decides. A one-seat game whose civilization is defeated in its own turn (its last
+  culture (the oldest on a tie) decides. A game whose last seat still playing is defeated in its own turn (its last
   units disbanded or lost) is checked at once, since no turn ends after that. The game is then over: every seat gets a `victory` event, `game_over` turns true, and
   `state`, `score` and the world snapshot carry `"victory": {"kind": "conquest"|"domination"|"culture"|"score", "civ",
   "label", "turn"}` (`label` is the seat's, null for an AI civ; null until someone wins). `autoplay` plays on
