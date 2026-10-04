@@ -485,8 +485,10 @@ def attention_lines(state: dict) -> list[str]:
 
 
 def upgrades_line(state: dict) -> str | None:
-    """Units in their cities that can upgrade now, by type, with the gold it takes, and the call for the commonest."""
-    ready = [u for u in state.get("units", []) if (u.get("upgrade") or {}).get("ok")]
+    """Units in their cities that can upgrade now, by type, with the gold it takes and how many the treasury pays for
+    (in unit order, as unit_orders runs them), and the call for the commonest type it pays for."""
+    units = state.get("units", [])
+    ready = [u for u in units if (u.get("upgrade") or {}).get("ok")]
     if not ready:
         return None
     kinds: dict[tuple[str, str], int] = {}
@@ -495,10 +497,28 @@ def upgrades_line(state: dict) -> str | None:
         kinds[key] = kinds.get(key, 0) + 1
     top = sorted(kinds.items(), key=lambda kv: (-kv[1], kv[0]))
     named = ", ".join(f"{n} {a}→{b}" for (a, b), n in top[:3]) + (f", +{len(top) - 3} more" if len(top) > 3 else "")
-    gold = sum(u["upgrade"]["gold"] for u in ready)
-    first = top[0][0][0]
-    return (f"{len(ready)} unit{'s' if len(ready) > 1 else ''} can upgrade for {gold} gold in all ({named}) → "
-            + call("unit_orders", orders=[{"unit": f"all:{first}", "order": "upgrade"}]))
+    gold, paid, payable = state.get("gold", 0), 0, []
+    for u in ready:
+        if paid + u["upgrade"]["gold"] <= gold:
+            paid += u["upgrade"]["gold"]
+            payable.append(u)
+    total = sum(u["upgrade"]["gold"] for u in ready)
+    text = f"{len(ready)} unit{'s' if len(ready) > 1 else ''} can upgrade for {total} gold in all ({named})"
+    if len(payable) < len(ready):
+        text += f"; your {gold} gold pays for {len(payable)} now"
+    if not payable:
+        return text
+    counts: dict[str, int] = {}
+    for u in payable:
+        counts[u["type"]] = counts.get(u["type"], 0) + 1
+    first = min(counts, key=lambda t: (-counts[t], t))
+    chosen = [u for u in payable if u["type"] == first]
+    # "all:Type" only when it names exactly these units; otherwise their ids (a few), so no order of the call fails.
+    if len(chosen) == sum(1 for u in units if u["type"] == first):
+        orders = [{"unit": f"all:{first}", "order": "upgrade"}]
+    else:
+        orders = [{"unit": u["id"], "order": "upgrade"} for u in chosen[:4]]
+    return f"{text} → " + call("unit_orders", orders=orders)
 
 
 def science_fix(state: dict) -> str | None:

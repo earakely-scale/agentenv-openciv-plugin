@@ -552,9 +552,15 @@ sealed partial class Session {
 		HashSet<Resource> have = c.GetAccessibleResources(gd);
 		var missing = u.requiredResources.Where(r => !have.Contains(r)).Select(r => r.Name).Order().ToList();
 		if (missing.Count > 0) return $"it needs {string.Join(" and ", missing)} connected to {c.name}";
-		if (u.GetProducibleUpgrade(c, have) is UnitPrototype better) return $"it is obsolete: {c.name} can build the {better.name} that replaces it";
+		if (u.UpgradeTargetIn(c, have) is UnitPrototype better) return $"it is obsolete now that {c.name} can build the {better.name} that replaces it";
 		return null;
 	}
+
+	string WhyNot(City c, IProducible p) => p switch {
+		Building building => WhyNot(c, building),
+		UnitPrototype unit => WhyNot(c, unit),
+		_ => null,
+	};
 
 	/// <summary>Sets what a city builds now, and with `then` what it builds after; `city` may name several (Batch.cs).</summary>
 	JsonObject SetProduction(Args a) {
@@ -596,11 +602,7 @@ sealed partial class Session {
 			Tech missing = known?.requiredTech is Tech t && !human.knownTechs.Contains(t.id) ? t : null;
 			string why = known == null ? $"'{wanted}' is not something a city can build"
 				: missing != null ? $"{known.name} requires {missing.Name}"
-				: $"{c.name} cannot build {known.name} now" + (known switch {
-					Building building => WhyNot(c, building),
-					UnitPrototype unit => WhyNot(c, unit),
-					_ => null,
-				} is string reason ? $": {reason}" : "");
+				: $"{c.name} cannot build {known.name} now" + (WhyNot(c, known) is string reason ? $": {reason}" : "");
 			IProducible close = known == null ? options.FirstOrDefault(o => Close(o.name, wanted)) : null;
 			throw new BridgeError("unknown_item", $"{why}. {c.name} can build: {string.Join(", ", options.Select(o => o.name))}.",
 				BridgeError.Names(options.Select(o => o.name)),
@@ -724,6 +726,10 @@ sealed partial class Session {
 	string Label(MapUnit u) => $"{ids.Of(u)} {u.unitType.name}";
 
 	static string At(Tile t) => $"({t.XCoordinate},{t.YCoordinate})";
+
+	/// <summary>A unit type's name with its article: "a Longbowman", "an Explorer", and a plural name alone ("Immortals").</summary>
+	static string WithArticle(string name) =>
+		name.EndsWith('s') && !name.EndsWith("ss") ? name : ("AEIOU".Contains(char.ToUpperInvariant(name.FirstOrDefault())) ? "an " : "a ") + name;
 
 	static string Terrain(Tile t) =>
 		t.overlayTerrainType != t.baseTerrainType ? $"{t.overlayTerrainType.DisplayName} on {t.baseTerrainType.DisplayName}" : t.baseTerrainType.DisplayName;

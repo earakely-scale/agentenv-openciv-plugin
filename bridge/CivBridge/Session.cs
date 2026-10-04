@@ -250,7 +250,7 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 				// The AI upgrades garrisons in its own turn (patches/0019), before the snapshot the turn's events start from.
 				foreach (var (u, was) in types)
 					if (Alive(u) && u.unitType != was.Type)
-						s.Incoming.Add(Event("unit_upgraded", $"{was.Label} was upgraded to a {u.unitType.name} in {u.location.cityAtTile?.name}.", u.location));
+						s.Incoming.Add(Event("unit_upgraded", $"{was.Label} was upgraded to {WithArticle(u.unitType.name)} in {u.location.cityAtTile?.name}.", u.location));
 				if (human.currentlyResearchedTech != research) researchSource = Source.Engine;
 			} else {
 				foreach (MapUnit u in human.units.ToList()) if (NeedsOrders(u)) u.SkipTurn();

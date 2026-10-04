@@ -219,7 +219,7 @@ sealed partial class Session {
 		orders.Remove(u);
 		u.isAutomated = false;
 		int cost = u.Upgrade();
-		return $"{label} is now a {u.unitType.name} ({cost} gold; {human.gold} left). It has no moves left this turn.";
+		return $"{label} is now {WithArticle(u.unitType.name)} ({cost} gold; {human.gold} left). It has no moves left this turn.";
 	}
 
 	/// <summary>Why the unit cannot upgrade now, or null: MapUnit.CanUpgrade's checks, in order, with what is missing.</summary>
@@ -232,7 +232,7 @@ sealed partial class Session {
 		if (target == null) return $"{c.name} cannot build {chain[0].name}, the next in its line: {WhyNot(c, chain[0]) ?? "not yet"}";
 		if (!u.movementPoints.canMove) return "it has no moves left this turn";
 		int cost = u.UpgradeCost(target);
-		return human.gold < cost ? $"a {target.name} costs {cost} gold and you have {human.gold}" : null;
+		return human.gold < cost ? $"the upgrade to {target.name} costs {cost} gold and you have {human.gold}" : null;
 	}
 
 	// Both check feasibility before Stop(u), so a refused order leaves the unit's orders as they were.

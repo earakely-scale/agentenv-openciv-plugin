@@ -94,15 +94,16 @@ rotated at a 100K context cap.
    - The standalone ruleset kept 27 of 124 units and, by a bug, none of their upgrades, so no unit ever went
      obsolete and 25 civs had lost a unit class to their missing unique units. It now keeps 76: the Industrial and
      Modern land and sea units (Rifleman to Modern Armor, Ironclad to AEGIS Cruiser, the Transport) and the 30
-     unique units, drawn with the art of the unit each replaces. A unit leaves a city's options once its upgrade can
-     be built there.
+     unique units, drawn with the art of the unit each replaces. A unit leaves a city's options once it could upgrade
+     there (the engine's own rule also counted "sibling" lines, so the Archer went at Feudalism with no upgrade).
    - Units upgrade in their own cities for gold (3 per shield of difference), the agent's with the `upgrade` order
-     and the AI's garrisons on their own; while a city's best defender could upgrade, the AI keeps a tenth of its
-     commerce from science to pay for it.
-   - Measured in 540-turn Standard games at Regent (seeds 1-2, engine AI in every seat): 44 and 114 AI units
-     upgraded by T540 (Spearmen to Pikemen and Riflemen, Archers to Longbowmen, Knights to Cavalry), Riflemen and
-     Musketmen in the field where there were none, mean techs 38.5 and 41.5 (41.9 and 36.1 before: within the
-     games' spread), and the same wall time.
+     and the AI's garrisons on their own (never into a weaker defender: no Chasqui Scout becomes an Explorer);
+     while a city's best defender could upgrade, the AI keeps a tenth of its commerce from science to pay for it.
+   - Measured in 540-turn Standard games at Regent (seeds 1-2, engine AI in every seat): 153 and 49 AI units
+     upgraded by T540 (Spearmen to Pikemen, Knights to Cavalry, Archers to Longbowmen, Swordsmen to Medieval
+     Infantry, Musketmen and Impis to Riflemen, Persia's Warriors to Immortals; none into a weaker unit), Riflemen,
+     Musketmen and Cavalry in the field where there were none, mean techs 41.1 and 40.6 (41.9 and 36.1 before:
+     within the games' spread), and a similar wall time (197 and 212 s, against 220 and 175).
    - Left out: air units, missiles, nukes, the Carrier, Nuclear Submarine, Flak and Mobile SAM (the engine has no
      air movement, air missions, interception or nuclear attack: L), armies and Great Leaders (no rule spawns or
      uses them: L), Leonardo's Workshop's free upgrade (wonders have no effects yet: M), paradrop, amphibious

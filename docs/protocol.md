@@ -114,9 +114,10 @@ The human player's full situation. Result:
 - `target` is `{"x", "y", "dist", "dir"}` for `goto`/`settle`, else null.
 - `orders` lists the orders `unit_order` would accept for this unit right now. A unit with moves next to an
   enemy also has `attack_targets` (see `unit_order`).
-- A unit in one of the seat's cities whose line has a better unit the city can build has `"upgrade": {"to":
+- A unit in one of the seat's cities whose line has a later unit the city can build has `"upgrade": {"to":
   "Longbowman", "gold": 60, "ok": true}`, also when it cannot upgrade now: then `ok` is false and `reason` says why
-  (no moves left, not enough gold). `ok` is true exactly when `orders` has `upgrade`, and `gold` is what the order
+  (no moves left, not enough gold). The later unit is not always stronger: the Chasqui Scout's line ends in the
+  Explorer (0/0), the Samurai's in the Cavalry (defence 3). `ok` is true exactly when `orders` has `upgrade`, and `gold` is what the order
   charges.
 - `era` is the civ's era (`Player.EraIndex()`): 0 Ancient Times, 1 Middle Ages, 2 Industrial Age, 3 Modern Era.
   The client picks its advisors' heads and the science advisor's background by it.
@@ -373,11 +374,13 @@ Args: `city`, `item`, `then` (optional list of up to 10 names). Result: `{"messa
 `unknown_city`, `unknown_item` (alternatives = option names), `no_cities`, `bad_args`. A unit the city cannot build
 says why: another civ's unique unit, the tech it needs, a city off the coast for a ship, the strategic resources not
 connected, or that it is obsolete, with the unit that replaces it (the engine's `UnitPrototype.CanProduce`, which
-leaves out a unit once one of its upgrades can be built there).
+leaves out a unit once a unit of its civ's upgrade chain can be built there: exactly when a unit of that type could
+`upgrade` there, patch 0019).
 
 - `then` is the city's queue (the city object's `queue`): each time the city completes something, or the engine
   changes what it builds, the bridge sets the first queued item it can build now and takes it off the queue; an item
-  it cannot build any more leaves the queue, and the `built` event says so. Only when the queue is empty does the
+  it cannot build any more leaves the queue, and the `built` event says why ("Archer left the queue: it is obsolete
+  now that Rome can build the Longbowman that replaces it", or a building's reason). Only when the queue is empty does the
   engine pick, and the `choose_production` blocker asks the agent to keep or change that pick. `then: []` clears the
   queue; leaving `then` out keeps it. Queues are saved with the game.
 - `city` may name several cities: ids or names separated by commas, `"all"`, or `"pending"` (the cities whose
@@ -568,8 +571,12 @@ submodule itself stays untouched):
    the shield difference (at least 1) times `Rules.UpgradeCostPerShield` gold (3; Conquests' value is not imported).
    It keeps its id, experience, hit points and fortification and uses up its moves. The AI
    (`PlayerAI.MaybeUpgradeUnits`) spends the gold above a reserve of a turn's upkeep (at least 50) on its combat units
-   in its cities, the largest defence gain first; while a city's best defender could upgrade, it keeps one tenth of
-   its commerce from science for it. The bridge's `upgrade` order and the units' `upgrade` field use it.
+   in its cities, the largest defence gain first, skipping an upgrade to a unit that does not fight (the Chasqui
+   Scout to the Explorer) or that defends worse while no other unit in the city defends as well (the Samurai to the
+   Cavalry); while a city's best defender could upgrade, it keeps one tenth of its commerce from science for it. A
+   unit is obsolete in a city exactly when it could upgrade there: `UnitPrototype.IsUnitObsolete` follows the civ's
+   own chain, without the "siblings" that made the Archer obsolete at Feudalism (through the Medieval Infantry)
+   before it could upgrade at Invention. The bridge's `upgrade` order and the units' `upgrade` field use it.
 
 Measured over full 540-turn Standard games with 7 AIs at Regent (seeds 1-3), patches 0005-0009 take:
 - mean AI techs at T540 from 32 to 43-45, and civs with an Industrial-era tech from 0 to 3-7;

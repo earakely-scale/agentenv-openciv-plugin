@@ -10,8 +10,8 @@ from collections.abc import Callable
 # launch is test_protocol's fixture, imported for these tests to take as an argument.
 from test_protocol import SEED, Bridge, found_capital, launch, unit  # noqa: F401
 
-INVENTION, WARRIOR_CODE, BRONZE_WORKING, IRON_WORKING, FEUDALISM = (
-    "tech-27", "tech-6", "tech-1", "tech-8", "tech-23")
+INVENTION, WARRIOR_CODE, BRONZE_WORKING, IRON_WORKING, FEUDALISM, ASTRONOMY = (
+    "tech-27", "tech-6", "tech-1", "tech-8", "tech-23", "tech-33")
 # What the standalone ruleset leaves out: units the engine cannot play (air, missiles, nukes, what serves air) and the
 # leaders and armies no rule produces.
 LEFT_OUT = {"Fighter", "Bomber", "Helicopter", "Jet Fighter", "Stealth Fighter", "Stealth Bomber", "F-15",
@@ -57,6 +57,36 @@ def test_obsolete_units_leave_the_production_list(launch, tmp_path):
     assert "Longbowman" in options and "Archer" not in options
     err = b.error("set_production", city="c1", item="Archer")
     assert err["code"] == "unknown_item" and "obsolete" in err["message"] and "Longbowman" in err["message"]
+
+
+def test_a_unit_goes_obsolete_only_once_it_can_upgrade(launch, tmp_path):
+    """patches/0019: obsolescence follows the civ's own upgrade chain. With Feudalism and Iron but not Invention, Rome
+    can build the Medieval Infantry, a "sibling" of the Archer's line, yet the Archer cannot upgrade to the Longbowman:
+    it stays buildable (the engine called it obsolete, and the agent could neither build nor upgrade it)."""
+    def edit(g, me, capital):
+        me["knownTechs"].extend([WARRIOR_CODE, BRONZE_WORKING, IRON_WORKING, FEUDALISM])
+        next(t for t in g["map"]["tiles"] if (t["x"], t["y"]) == capital)["resource"] = "Iron"
+        add_unit(g, me["id"], "Archer", capital, 9001)
+
+    b = edited_game(launch, tmp_path, edit)
+    options = [o["name"] for o in b.call("city", city="c1")["options"] if o["kind"] == "unit"]
+    assert {"Archer", "Medieval Infantry", "Pikeman"} <= set(options) and "Spearman" not in options
+    archer = next(u for u in b.call("state")["units"] if u["type"] == "Archer")
+    assert "upgrade" not in archer
+    assert "Rome now builds Archer" in b.call("set_production", city="c1", item="Archer")["message"]
+
+
+def test_a_queued_unit_that_went_obsolete_leaves_the_queue_with_the_reason(launch, tmp_path):
+    """patches/0019 with set_production's `then`: an Archer queued after Invention is dropped when the city gets to
+    it, and the note says what replaces it."""
+    b = edited_game(launch, tmp_path, lambda g, me, c: me["knownTechs"].extend([WARRIOR_CODE, INVENTION]))
+    b.call("set_production", city="c1", item="Warrior", then=["Archer", "Warrior"])
+    for _ in range(20):
+        built = [e["text"] for e in b.call("end_turn", skip_idle=True)["events"] if e["kind"] == "built"]
+        if built:
+            break
+    assert built and built[-1].endswith("; next from your queue: Warrior (Archer left the queue: it is obsolete now "
+                                        "that Rome can build the Longbowman that replaces it)."), built
 
 
 def test_later_and_unique_units_are_in_the_ruleset(launch, tmp_path):
@@ -137,7 +167,8 @@ def test_a_unit_upgrades_in_its_city_for_gold(launch, tmp_path):
     err = b.error("unit_order", unit=other["id"], order="upgrade")
     assert err["code"] == "invalid_order" and "costs 60 gold and you have 40" in err["message"]
     assert unit(b.call("state"), other["id"])["upgrade"] == {
-        "to": "Longbowman", "gold": 60, "ok": False, "reason": "a Longbowman costs 60 gold and you have 40"}
+        "to": "Longbowman", "gold": 60, "ok": False,
+        "reason": "the upgrade to Longbowman costs 60 gold and you have 40"}
     err = b.error("unit_order", unit=outside["id"], order="upgrade")
     assert "only in one of your cities" in err["message"]
     warrior = at(s, home, "Warrior")
@@ -202,3 +233,24 @@ def test_the_engine_ai_upgrades_its_garrisons(launch, tmp_path):
     assert all(p["gold"] >= 0 for p in world["players"])
     events = [e for e in b.call("state")["last_events"] if e["kind"] == "unit_upgraded"]
     assert len(events) == len(ids["me"]) and "was upgraded to a Longbowman in" in events[0]["text"]
+
+
+def test_the_engine_ai_does_not_upgrade_into_a_weaker_unit(launch, tmp_path):
+    """patches/0019: some lines end in a weaker unit. The Inca's Chasqui Scout (1/1) upgrades to the Explorer (0/0):
+    the agent may do it (and reads "an Explorer"), the engine AI does not, while it upgrades the Archer beside it."""
+    def edit(g, me, capital):
+        me["knownTechs"].extend([WARRIOR_CODE, INVENTION, ASTRONOMY])
+        me["gold"] = 1000
+        for n, proto in enumerate(["Chasqui Scout", "Chasqui Scout", "Archer"]):
+            add_unit(g, me["id"], proto, capital, 9001 + n)
+
+    b = edited_game(launch, tmp_path, edit, civ="Inca")
+    s = b.call("state")
+    chasqui = next(u for u in s["units"] if u["type"] == "Chasqui Scout")
+    assert chasqui["upgrade"] == {"to": "Explorer", "gold": 3, "ok": True}
+    res = b.call("unit_order", unit=chasqui["id"], order="upgrade")
+    assert res["message"].startswith(f"{chasqui['id']} Chasqui Scout is now an Explorer (3 gold; ")
+    b.call("autoplay", turns=1, policy="engine_ai")
+    types = {u["id"]: u["type"] for u in b.call("world")["units"]}
+    assert (types["Chasqui Scout-9001"], types["Chasqui Scout-9002"], types["Archer-9003"]) == (
+        "Explorer", "Chasqui Scout", "Longbowman")

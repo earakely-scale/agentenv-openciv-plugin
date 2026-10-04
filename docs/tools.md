@@ -10,7 +10,7 @@ the valid alternatives and the exact call to make instead.
 
 | Tool | Args | Returns |
 |---|---|---|
-| `get_turn_brief` | — | Turn and limit with the year, gold, research and ETA, score with the seat's rank among the civilizations, a pace line against the targets with its share of the world's land and population against the civ nearest domination, both baselines (null and built-in AI on the same seed), what needs orders (more than two cities in disorder fold into one line with the luxury rate that calms them all), how many units can upgrade now and for how much gold, with the `unit_orders` call, standing orders, one line per city, the last turn's events, and the agent's plan. Self-contained: "lost context? call get_turn_brief". |
+| `get_turn_brief` | — | Turn and limit with the year, gold, research and ETA, score with the seat's rank among the civilizations, a pace line against the targets with its share of the world's land and population against the civ nearest domination, both baselines (null and built-in AI on the same seed), what needs orders (more than two cities in disorder fold into one line with the luxury rate that calms them all), how many units can upgrade now, for how much gold and how many the treasury pays for, with the `unit_orders` call for those, standing orders, one line per city, the last turn's events, and the agent's plan. Self-contained: "lost context? call get_turn_brief". |
 | `list_units` | `filter`: `needs_orders` (default) or `all`; `type` (optional, e.g. `"Worker"`) | One line per unit: id, type, `(x,y)`, moves, status or standing order, valid orders, why `found_city` is or isn't possible here, and in a city the unit's upgrade and its gold (`upgrade → Longbowman 60g`, or why not now); with many idle units, the `unit_orders` call that orders them by type. |
 | `view_map` | `x`, `y`, `radius` (default 3, max 6), or `around` (`"u7"`, `"c1"`) | Staggered ASCII of the explored tiles, a legend, then a "notable" list (resources, rivers, foreign units, cities, good sites) with distance and direction. Unexplored tiles are blank. |
 | `find_city_sites` | `unit` (optional), `top` (default 5) | Ranked sites: `(x,y)`, score, distance and direction, travel turns, yields, river or coast. |
@@ -50,12 +50,16 @@ the valid alternatives and the exact call to make instead.
 - **Cost:** 3 gold per shield of difference (at least 3); the unit keeps its id, experience, hit points and
   fortification, and has no moves left that turn; another standing order (goto, explore) ends.
 - **Seeing it:** a unit line shows `upgrade → Pikeman 30g` where it can upgrade, `(not now)` when it lacks the gold
-  or the moves; the brief counts the units that can upgrade and gives the call, e.g.
-  `unit_orders(orders=[{"unit": "all:Spearman", "order": "upgrade"}])`, which upgrades them in turn until the gold
-  runs out.
-- **Obsolete units:** a unit whose replacement the city can build is no longer in its options; `set_production`
-  says which unit replaces it.
-- **The AI** upgrades its city garrisons too, with the gold above a turn's upkeep.
+  or the moves; the brief counts the units that can upgrade, how many your gold pays for when it does not pay for
+  all, and gives the call for those, e.g. `unit_orders(orders=[{"unit": "all:Spearman", "order": "upgrade"}])`
+  (unit ids instead when some units of that type cannot upgrade or are not paid for). `unit_orders` upgrades them in
+  turn until the gold runs out.
+- **Not always stronger:** a few lines end in a weaker unit (the Chasqui Scout becomes an Explorer, 0/0; the
+  Samurai a Cavalry, defence 3); the unit line shows the target, so check it before you upgrade a city's defender.
+- **Obsolete units:** a unit leaves a city's options exactly when it could upgrade there (Archers at Invention,
+  not before); `set_production` says which unit replaces it, and a queued unit that went obsolete leaves the queue
+  with the same reason.
+- **The AI** upgrades its city garrisons too, with the gold above a turn's upkeep, and not into a weaker unit.
 
 ## Several agents in one game
 
