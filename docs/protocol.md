@@ -568,13 +568,15 @@ submodule itself stays untouched):
    fewer than min(4, 1 + cities / 6); the ship gets +15, which the cheap Curragh wins. `ExplorerAI` skips
    unreachable targets (no route is an empty path, length 0, not null) and a ship explores only its own body of
    water, so a boat on a lake refuses `explore`.
-22. `0022-the-ai-ferries-settlers-overseas.patch`: the AI settles other landmasses. A settler weighs the best known
-   site overseas (reachable by sea from one of its civ's ports on its landmass, outside other civs' borders)
-   against the best one at home and takes it when it scores more than twice as much; it waits in that port, a free
-   ship is sent or the port builds one, and a new `FerryAI` carries it and its escort to a landing next to the site.
-   A ship found with cargo and no plan (after a load) finishes the crossing or puts its cargo ashore in port, and
-   passengers stay aboard, fortified, until landed. Wars across water, amphibious attack and naval combat are not
-   done (`docs/full-game.md`).
+22. `0022-the-ai-ferries-settlers-overseas.patch`: the AI settles other landmasses. A settler weighs the best known site
+   overseas (reachable by sea from one of its civ's ports on its landmass, outside other civs' borders) against the best
+   one at home and takes it when it scores more than twice as much; it waits in that port, a free ship is sent or the
+   port builds one, and a new `FerryAI` carries it and its escort to a landing next to the site. A ship found with cargo
+   and no plan (after a load) finishes the crossing or puts its cargo ashore in port (with no port it can reach, on the
+   nearest shore it can reach), and passengers stay aboard, fortified, until landed. A unit told to hold where it stood
+   that is carried off its post before it fortifies (an escort whose ship sails, or a seat unit moved by `goto` before
+   `autoplay`) plans again; it used to throw on its missing path and end its player's turn. Wars across water,
+   amphibious attack and naval combat are not done (`docs/full-game.md`).
 
 Measured over full 540-turn Standard games with 7 AIs at Regent (seeds 1-3), patches 0005-0009 take:
 - mean AI techs at T540 from 32 to 43-45, and civs with an Industrial-era tech from 0 to 3-7;

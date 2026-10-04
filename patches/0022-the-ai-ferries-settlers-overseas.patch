@@ -1,4 +1,4 @@
-The AI ferries settlers overseas: no AI unit ever crossed water. Settler sites were limited to the settler's own landmass (SettlerLocationAI, "TODO: handle settling other continents"), so on Archipelago maps good islands stayed empty and AI growth stalled, and nothing loaded units onto ships. Now a settler on a landmass weighs the best known site overseas (on another landmass, outside other civs' borders, with water one of our ports on its landmass touches within two tiles) against the best one at home, and takes it when it scores more than twice as much. It walks to that port and waits there; a free ship of ours on those waters is sent for it, or the port builds the cheapest ship that can carry units. A new FerryAI fetches it, boards it and its escort if that is with it, sails to a landing (a water tile within three tiles of the site, next to its landmass) and waits up to three turns while they step ashore; the settler then walks to its site without waiting for an escort. AI plans are not saved, so a ship found with cargo and no plan finishes the crossing of the overseas settler aboard or takes its cargo to the nearest of our ports and puts it ashore, and a passenger stays aboard, fortified, until its ship lands it, so nothing re-plans at sea or spins the turn. ChooseProducible counts up to two sites overseas once the home landmass has fewer sites left than the civ has cities, then wants a settler or two for them, and gives a ship that can carry units +40 in a port where a settler waits for one and none is free or being built.
+The AI ferries settlers overseas: no AI unit ever crossed water. Settler sites were limited to the settler's own landmass (SettlerLocationAI, "TODO: handle settling other continents"), so on Archipelago maps good islands stayed empty and AI growth stalled, and nothing loaded units onto ships. Now a settler on a landmass weighs the best known site overseas (on another landmass, outside other civs' borders, with water one of our ports on its landmass touches within two tiles) against the best one at home, and takes it when it scores more than twice as much. It walks to that port and waits there; a free ship of ours on those waters is sent for it, or the port builds the cheapest ship that can carry units. A new FerryAI fetches it, boards it and its escort if that is with it, sails to a landing (a water tile within three tiles of the site, next to its landmass) and waits up to three turns while they step ashore; the settler then walks to its site without waiting for an escort. AI plans are not saved, so a ship found with cargo and no plan finishes the crossing of the overseas settler aboard or takes its cargo to the nearest of our ports it can reach (or, with none, to the nearest shore it can reach) and puts it ashore, and a passenger stays aboard, fortified, until its ship lands it, so nothing re-plans at sea or spins the turn. ChooseProducible counts up to two sites overseas once the home landmass has fewer sites left than the civ has cities, then wants a settler or two for them, and gives a ship that can carry units +40 in a port where a settler waits for one and none is free or being built. A unit the AI told to hold where it stood (DefenderAI in place) kept that plan while it had no moves left, and when it was then carried off its post (an escort that boarded in port and sailed, or a unit of the seat moved by the player's orders before autoplay) it had no path back: TryToMoveAlongPath threw on the null path and ended its player's turn, every turn. It now plans again.
 
 --- a/C7Engine/AI/ChooseProducible.cs
 +++ b/C7Engine/AI/ChooseProducible.cs
@@ -82,6 +82,20 @@ The AI ferries settlers overseas: no AI unit ever crossed water. Settler sites w
  			// Special case: we're at war.
  			if (IsInAnyWar(player, EngineStorage.gameData.players)) {
  				// Priority 1: ensure we don't have any unguarded cities.
+--- a/C7Engine/AI/UnitAI/DefenderAI.cs
++++ b/C7Engine/AI/UnitAI/DefenderAI.cs
+@@ -51,6 +51,11 @@
+ 					log.Information("Fortifying " + unit + " at " + data.destination);
+ 				}
+ 				return C7GameData.UnitAI.Result.Done;
++			} else if (data.pathToDestination == null) {
++				// Told to hold where it stood, then carried off its post (aboard
++				// a ship, or by the player's own orders) before it fortified:
++				// with no path back, plan again.
++				return C7GameData.UnitAI.Result.Error;
+ 			} else {
+ 				log.Debug("Moving defender towards " + data.destination);
+ 				return this.TryToMoveAlongPath(unit, ref data.pathToDestination);
 --- a/C7Engine/AI/UnitAI/SettlerAI.cs
 +++ b/C7Engine/AI/UnitAI/SettlerAI.cs
 @@ -1,3 +1,4 @@
@@ -313,7 +327,7 @@ The AI ferries settlers overseas: no AI unit ever crossed water. Settler sites w
  }
 --- /dev/null
 +++ b/C7Engine/AI/UnitAI/FerryAI.cs
-@@ -0,0 +1,307 @@
+@@ -0,0 +1,332 @@
 +using System.Collections.Generic;
 +using System.Linq;
 +using C7Engine.Pathing;
@@ -463,7 +477,7 @@ The AI ferries settlers overseas: no AI unit ever crossed water. Settler sites w
 +		}
 +
 +		// A plan to put the cargo ashore: in the nearest of our ports the ship
-+		// can reach, or else on the nearest land.
++		// can reach, or else on the nearest shore it can reach.
 +		private static FerryAIData Ashore(MapUnit ship, Player player) {
 +			PathingAlgorithm algorithm = PathingAlgorithmChooser.GetAlgorithm(ship);
 +			HashSet<int> waters = ExplorerAI.WaterBodies(ship.location);
@@ -476,10 +490,35 @@ The AI ferries settlers overseas: no AI unit ever crossed water. Settler sites w
 +					return new FerryAIData { port = c.location, path = path };
 +				}
 +			}
-+			if (ship.location.neighbors.Values.Any(n => n != Tile.NONE && n.IsLand() && n.unitsOnTile.All(u => u.owner == player) && !n.HasCity())) {
-+				return new FerryAIData { landing = ship.location, sailing = true };
++			Tile shore = NearestShore(ship, player);
++			return shore == Tile.NONE ? null : new FerryAIData { landing = shore, sailing = true };
++		}
++
++		// The nearest water tile on the ship's waters, its own tile first, next
++		// to land the cargo can step onto (no city, no foreign unit), that the
++		// ship can reach. With no port left on its waters (all lost, or the
++		// civ has none) this is where the cargo goes ashore.
++		private static Tile NearestShore(MapUnit ship, Player player) {
++			PathingAlgorithm algorithm = PathingAlgorithmChooser.GetAlgorithm(ship);
++			HashSet<Tile> seen = new() { ship.location };
++			Queue<Tile> frontier = new(seen);
++			int tried = 0;
++			while (frontier.Count > 0 && tried < 4) {
++				Tile t = frontier.Dequeue();
++				if (t.unitsOnTile.All(u => u.owner == player)
++					&& t.neighbors.Values.Any(n => n != Tile.NONE && n.IsLand() && !n.HasCity() && n.unitsOnTile.All(u => u.owner == player))) {
++					if (t == ship.location || algorithm.PathFrom(ship.location, t, ship).PathLength() > 0) {
++						return t;
++					}
++					++tried;
++				}
++				foreach (Tile n in t.neighbors.Values) {
++					if (n != Tile.NONE && n.IsWater() && seen.Add(n)) {
++						frontier.Enqueue(n);
++					}
++				}
 +			}
-+			return null;
++			return Tile.NONE;
 +		}
 +
 +		/// <summary>
