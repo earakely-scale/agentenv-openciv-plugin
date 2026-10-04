@@ -249,6 +249,7 @@ sealed partial class Session {
 		var research = new Dictionary<Seat, ID>();
 		foreach (Seat s in seats) research[s] = s.Player.currentlyResearchedTech;
 		p.ExecuteDeal(gd, human, give, get);
+		trades.Add(new TradeMade(++eventSeq, gd.turn, human, p, Describe(give), Describe(get)));
 		var switched = new Dictionary<Seat, List<string>>();
 		EachSeat(s => {
 			if (human.currentlyResearchedTech != research[s]) ResearchMoved();
@@ -262,6 +263,19 @@ sealed partial class Session {
 			["gold"] = human.gold,
 			["research"] = Research(),
 		};
+	}
+
+	/// <summary>A trade a seat made (with an AI or another seat), for the world snapshot: `a` gave `AGave`, `b` gave `BGave`.</summary>
+	sealed record TradeMade(int Seq, int Turn, Player A, Player B, string AGave, string BGave);
+	readonly List<TradeMade> trades = [];
+
+	/// <summary>The trades made after `since`, in the snapshot's player indices; older ones are dropped once shown.</summary>
+	JsonArray SnapshotTrades(int since) {
+		var index = gd.players.Select((p, i) => (p, i)).ToDictionary(x => x.p, x => x.i);
+		trades.RemoveAll(t => t.Seq <= Math.Min(since, recordedSeq) && t.Turn < gd.turn - 1);
+		return Json.Array(trades.Where(t => t.Seq > since), t => new JsonObject {
+			["seq"] = t.Seq, ["turn"] = t.Turn, ["a"] = index[t.A], ["b"] = index[t.B], ["a_gave"] = t.AGave, ["b_gave"] = t.BGave,
+		});
 	}
 
 	/// <summary>

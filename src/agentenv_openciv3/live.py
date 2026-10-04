@@ -107,9 +107,10 @@ class LiveMatch:
     """The viewer's data of the game being played, added to as the bridge writes snapshots: each is read once,
     when it is whole, so a request never reads the whole game again."""
 
-    def __init__(self, record: Path, game: str, labels: dict[str, str] | None = None, humans: Iterable[str] = ()):
+    def __init__(self, record: Path, game: str, labels: dict[str, str] | None = None, humans: Iterable[str] = (),
+                 names: dict[str, str] | None = None):
         self.record = record
-        self.data = matchdata.MatchData(game=game, labels=labels, humans=humans)
+        self.data = matchdata.MatchData(game=game, labels=labels, humans=humans, names=names)
         self.lock = asyncio.Lock()
 
     def update(self) -> None:
@@ -155,10 +156,10 @@ class Live:
         self.match: LiveMatch | None = None
 
     def match_of(self, record: Path, game: str, labels: dict[str, str] | None = None,
-                 humans: Iterable[str] = ()) -> LiveMatch:
-        """The viewer's data of `game`; a new game starts it over."""
+                 humans: Iterable[str] = (), names: dict[str, str] | None = None) -> LiveMatch:
+        """The viewer's data of `game`; a new game starts it over. `names`: the broadcast's names for the seats."""
         if self.match is None or self.match.data.game != game or self.match.record != record:
-            self.match = LiveMatch(record, game, labels, humans)
+            self.match = LiveMatch(record, game, labels, humans, names)
         return self.match
 
     async def frame(self, record: Path, turn: int | None, view: str) -> bytes | None:

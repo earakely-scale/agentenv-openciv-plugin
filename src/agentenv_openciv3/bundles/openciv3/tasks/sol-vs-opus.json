@@ -51,6 +51,10 @@
     "min_turn_seconds": 30,
     "broadcast": {
       "title": "GPT-6 Sol Battles Opus 5.5 in Civilization 3: which model is the best?",
+      "names": {
+        "opus": "Opus 5.5",
+        "sol": "GPT-6 Sol"
+      },
       "casters": {
         "model": "anthropic/claude-sonnet-5-5",
         "tts_model": "openai/gpt-4o-mini-tts",

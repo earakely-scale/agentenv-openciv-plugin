@@ -27,6 +27,10 @@ CIVILIAN = ("Settler", "Worker", "Explorer", "Galley", "Caravel", "Curragh", "Ga
 BRIDGE_KINDS = {"unit_lost", "unit_promoted", "gold_stolen", "disorder", "disorder_started", "city_starved",
                 "contact", "defenseless", "victory", "engine_restarted", "attacked", "bombarded"}
 SCORE_KEYS = ("total", "cities", "pop", "tiles", "techs")
+# A player's stats per turn: the snapshot's own, then what the race needs (culture, era, shares of land and people;
+# snapshots from before them have none) and what is counted here (military units, great wonders).
+STAT_KEYS = ("gold", "government", "research", "at_war", "culture", "era", "land", "pop")
+ERAS = ("Ancient Times", "Middle Ages", "Industrial Age", "Modern Era")
 
 Actions = dict[int, dict[int, list[dict]]]     # turn -> player index -> [{"text", "ok"}]
 Calls = dict[int, dict[int, dict[str, int]]]   # turn -> player index -> {"ok", "failed"}
@@ -82,9 +86,11 @@ def seam(snap: dict) -> int:
 class MatchData:
     """The viewer's document for one game, built a turn at a time with `add`."""
 
-    def __init__(self, game: str = "game", labels: dict[str, str] | None = None, humans: Iterable[str] = ()):
+    def __init__(self, game: str = "game", labels: dict[str, str] | None = None, humans: Iterable[str] = (),
+                 names: dict[str, str] | None = None):
         self.game = game
         self.labels = labels or {}           # civ -> label, for recordings made before seats had labels
+        self.names = names or {}             # label -> the name the broadcast shows ("opus": "Opus 5.5")
         self.humans = {h.lower() for h in humans}   # civs people play (docs/play.md)
         self.meta: dict = {}
         self.players: list[dict] = []
@@ -100,6 +106,7 @@ class MatchData:
         self._improvements: dict[str, int] = {}
         self._prev: dict | None = None
         self._leader: int | None = None
+        self._wonders: set[str] | None = None    # the great wonders built so far; None before the first snapshot
 
     # ---- building ----
 
@@ -136,6 +143,7 @@ class MatchData:
                 looks.append([i, *look])
         turn = {
             "turn": snap["turn"],
+            **({"date": snap["date"]} if snap.get("date") else {}),
             "owners": owners,
             "known": known,
             "cities": [[c["x"], c["y"], c["name"], c["owner"], c["size"], int(bool(c.get("capital"))),
@@ -144,8 +152,7 @@ class MatchData:
             "units": [self._unit_row(u) for u in snap["units"]],
             "scores": {str(p["index"]): [p["score"][k] for k in SCORE_KEYS] + [int(bool(p.get("defeated")))]
                        for p in snap["players"] if not is_barbarian(p)},
-            "stats": {str(p["index"]): {k: p[k] for k in ("gold", "government", "research", "at_war") if k in p}
-                      for p in snap["players"] if not is_barbarian(p)},
+            "stats": {str(p["index"]): self._stats(p, snap) for p in snap["players"] if not is_barbarian(p)},
             "events": self._events(snap),
         }
         if looks:
@@ -183,11 +190,16 @@ class MatchData:
         slot = sum(not p["barbarian"] for p in self.players)
         for p in snap["players"]:
             if p["index"] in known:
-                known[p["index"]]["label"] = p.get("label") or known[p["index"]]["label"]
+                have = known[p["index"]]
+                have["label"] = p.get("label") or have["label"]
+                if self.names.get(have["label"]):
+                    have["name"] = self.names[have["label"]]
                 continue
             barb = is_barbarian(p)
             self.players.append({
                 "index": p["index"], "civ": p["civ"], "label": p.get("label") or self.labels.get(p["civ"]),
+                **({"name": self.names[label]} if (label := p.get("label") or self.labels.get(p["civ"])) in self.names
+                   else {}),
                 **({"human": True} if p["civ"].lower() in self.humans else {}),
                 "barbarian": barb, "seat": seat_of.get(p["index"]),
                 "color": BARBARIAN if barb else PALETTE[slot % len(PALETTE)],
@@ -250,6 +262,13 @@ class MatchData:
         return [b["seq"], int(b.get("kind") == "bombard"), {"attacker": "a", "defender": "d"}.get(b["winner"], "r"),
                 "".join(b.get("rounds") or ()), city, seats(b.get("seen", 0)), *side[0], *side[1]]
 
+    def _stats(self, p: dict, snap: dict) -> dict:
+        i = p["index"]
+        out = {k: p[k] for k in STAT_KEYS if k in p}
+        out["military"] = sum(1 for u in snap["units"] if u["owner"] == i and u["type"] not in CIVILIAN)
+        out["wonders"] = sum(len(c.get("wonders") or ()) for c in snap["cities"] if c["owner"] == i)
+        return out
+
     def _unit_type(self, name: str) -> int:
         if name not in self._unit_types:
             self._unit_types[name] = len(self.meta["unit_types"])
@@ -258,7 +277,7 @@ class MatchData:
 
     def name(self, index: int) -> str:
         p = next((p for p in self.players if p["index"] == index), None)
-        return (p["label"] or p["civ"]) if p else "?"
+        return (p.get("name") or p["label"] or p["civ"]) if p else "?"
 
     def _events(self, snap: dict) -> list[dict]:
         prev, t, out = self._prev, snap["turn"], []
@@ -305,9 +324,11 @@ class MatchData:
             self._leader = top
         elif live and self._leader is None:
             self._leader = max(live, key=lambda p: (p["score"]["total"], -p["index"]))["index"]
+        out += self._world_events(snap)
+        derived_contact = any("contacts" in p for p in snap["players"])
         civs = {p["civ"]: p["index"] for p in snap["players"]}
         for e in snap.get("events") or ():
-            if e.get("kind") not in BRIDGE_KINDS:
+            if e.get("kind") not in BRIDGE_KINDS or (e["kind"] == "contact" and derived_contact):
                 continue
             owner = civs.get(e.get("civ"), next((p["index"] for p in snap["players"] if p.get("is_human")), -1))
             ev = {"kind": e["kind"], "owner": owner, "text": f"{self.name(owner)}: {e.get('text') or e['kind']}",
@@ -316,6 +337,72 @@ class MatchData:
                 ev.update(x=e["x"], y=e["y"])
             out.append(ev)
         return out
+
+    def _world_events(self, snap: dict) -> list[dict]:
+        """What every civ did that the scores don't show: great wonders, new eras, first contacts, the seats' trades,
+        units upgraded and units landed from ships (docs/viewer.md, the stream's stories)."""
+        prev, name, out = self._prev, self.name, []
+        wonders = {(w, c["name"], c["owner"], c["x"], c["y"]) for c in snap["cities"] for w in c.get("wonders") or ()}
+        if self._wonders is not None:
+            for w, city, owner, x, y in sorted(wonders):
+                if w not in self._wonders:
+                    out.append(_ev("wonder_built", owner, f"{name(owner)} completed {w} in {city}", {"x": x, "y": y},
+                                   wonder=w, city=city))
+        self._wonders = (self._wonders or set()) | {w[0] for w in wonders}
+        for t in snap.get("trades") or ():
+            out.append(_ev("trade", t["a"], f"{name(t['a'])} traded {t['a_gave']} to {name(t['b'])} for {t['b_gave']}",
+                           frm=t["b"], gave=t["a_gave"], got=t["b_gave"]))
+        if prev is None:
+            return out
+        old = {p["index"]: p for p in prev["players"]}
+        live = {p["index"] for p in snap["players"] if not is_barbarian(p) and not p.get("defeated")}
+        for p in snap["players"]:
+            o = old.get(p["index"])
+            if o is None or p["index"] not in live:
+                continue
+            i = p["index"]
+            if (p.get("era") or 0) > (o.get("era") or 0) and "era" in o:
+                era = ERAS[min(p["era"], len(ERAS) - 1)]
+                out.append(_ev("era_entered", i, f"{name(i)} enters the {era}", era=era))
+            if "contacts" in p and "contacts" in o:
+                for j in sorted(set(p["contacts"]) - set(o["contacts"])):
+                    if i < j and j in live:
+                        out.append(_ev("contact", i, f"First contact: {name(i)} meets {name(j)}", frm=j))
+        # units by engine id: one whose type changed was upgraded; one off a ship onto land landed there
+        before = {u["id"]: u for u in prev["units"] if u.get("id")}
+        upgraded: dict[int, list[tuple[dict, str]]] = {}
+        landed: dict[int, list[dict]] = {}
+        for u in snap["units"]:
+            was = before.get(u.get("id"))
+            if was is None or was["owner"] != u["owner"]:
+                continue
+            if was["type"] != u["type"]:
+                upgraded.setdefault(u["owner"], []).append((u, was["type"]))
+            if was.get("aboard") and not u.get("aboard") and not self._water(u["x"], u["y"]) \
+                    and self._owner_at(snap, u["x"], u["y"]) != u["owner"]:   # ashore at home is no story
+                landed.setdefault(u["owner"], []).append(u)
+        for owner, ups in sorted(upgraded.items()):
+            pairs: dict[tuple[str, str], int] = {}
+            for u, was in ups:
+                pairs[(was, u["type"])] = pairs.get((was, u["type"]), 0) + 1
+            (frm, to), n = max(pairs.items(), key=lambda kv: kv[1])
+            what = f"{n} {frm} to {to}" + (f" and {len(ups) - n} more" if len(ups) > n else "")
+            out.append(_ev("units_upgraded", owner, f"{name(owner)} upgraded {what}", ups[0][0]))
+        for owner, units in sorted(landed.items()):
+            u, n = units[0], len(units)
+            land_of = self._owner_at(snap, u["x"], u["y"])
+            where = f" in {name(land_of)}'s land" if land_of >= 0 else " on unclaimed land"
+            out.append(_ev("landing", owner, f"{name(owner)} landed {n} unit{'s' if n > 1 else ''} from the sea{where}",
+                           u, frm=land_of if land_of >= 0 else None))
+        return out
+
+    def _owner_at(self, snap: dict, x: int, y: int) -> int:
+        i = self._index.get((x, y))
+        return self._owners[i] if i is not None else -1
+
+    def _water(self, x: int, y: int) -> bool:
+        i = self._index.get((x, y))
+        return i is not None and TERRAIN[self.tiles[i][2]] in WATER
 
     # ---- writing ----
 
@@ -347,8 +434,8 @@ class MatchData:
         return self.turns[-1]["turn"] if self.turns else -1
 
 
-def _ev(kind: str, owner: int, text: str, at: dict | None = None, *, frm: int | None = None) -> dict:
-    e: dict = {"kind": kind, "owner": owner, "text": text, "source": "derived"}
+def _ev(kind: str, owner: int, text: str, at: dict | None = None, *, frm: int | None = None, **fields) -> dict:
+    e: dict = {"kind": kind, "owner": owner, "text": text, "source": "derived", **fields}
     if frm is not None:
         e["from"] = frm
     if at is not None:

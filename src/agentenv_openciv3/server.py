@@ -1494,7 +1494,8 @@ class OpenCiv3Env(AgentEnvEnvironment):
         notes, plans, messages = self._talk(since)
         match = self.live.match_of(self.game_dir / "record", self.game_id,
                                    {s.civ: s.label for s in self.seats if s.label},
-                                   [s.civ for s in self.seats if s.human])
+                                   [s.civ for s in self.seats if s.human],
+                                   (self.scenario.get("broadcast") or {}).get("names"))
         body = await match.document(since, actions, calls, now, notes=notes, plans=plans, messages=messages)
         return Response(body, media_type="application/json", headers=headers)
 
