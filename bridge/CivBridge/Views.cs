@@ -74,21 +74,25 @@ sealed partial class Session {
 	}
 
 	/// <summary>
-	/// How far each way to win is (CheckVictory): the civilizations left, the score race and its leader, and the civ
-	/// closest to domination (two thirds of the land and of the population). A civ the seat has not met has no name.
+	/// How far each way to win is (CheckVictory): the civilizations left, the score race and its leader, the civ
+	/// closest to domination (two thirds of the land and of the population), the two civs with the most culture and
+	/// the city with the most. A civ the seat has not met has no name, nor have its cities.
 	/// </summary>
 	JsonObject Race() {
 		var civs = Civs().Where(p => !p.defeated).ToList();
 		if (civs.Count == 0) return null;
 		var scores = civs.ToDictionary(p => p, p => (int)ScoreOf(p)["total"]);
 		var shares = civs.ToDictionary(p => p, ShareOf);
+		var cultures = civs.ToDictionary(p => p, CultureOf);
 		JsonObject Civ(Player p) => new() {
-			["civ"] = p == human || human.playerRelationships.ContainsKey(p.id) ? Owner(p) : null,
+			["civ"] = Knows(p) ? Owner(p) : null,
 			["you"] = p == human, ["score"] = scores[p],
-			["land"] = Math.Round(shares[p].Land, 3), ["pop"] = Math.Round(shares[p].Pop, 3),
+			["land"] = Math.Round(shares[p].Land, 3), ["pop"] = Math.Round(shares[p].Pop, 3), ["culture"] = cultures[p],
 		};
 		Player leader = civs.OrderByDescending(p => scores[p]).First();
 		Player nearest = civs.OrderByDescending(p => Math.Min(shares[p].Land, shares[p].Pop)).First();
+		var cultured = civs.OrderByDescending(p => cultures[p]).Take(2).ToList();
+		City best = BestCultureCity(civs);
 		return new JsonObject {
 			["civs_left"] = civs.Count,
 			["rank"] = human.defeated ? null : 1 + civs.Count(p => scores[p] > scores[human]),
@@ -96,6 +100,14 @@ sealed partial class Session {
 			["leader"] = Civ(leader),
 			["nearest_domination"] = Civ(nearest),
 			["domination"] = Math.Round(Domination, 3),
+			["nearest_culture"] = Civ(cultured[0]),
+			["culture_runner_up"] = cultured.Count < 2 ? null : Civ(cultured[1]),
+			["best_city"] = best == null ? null : new JsonObject {
+				["civ"] = Knows(best.owner) ? Owner(best.owner) : null, ["you"] = best.owner == human,
+				["name"] = Knows(best.owner) ? best.name : null, ["culture"] = best.GetCultureFor(best.owner),
+			},
+			["culture_goal"] = CivCultureWin,
+			["city_culture_goal"] = CityCultureWin,
 		};
 	}
 
