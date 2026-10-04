@@ -222,6 +222,9 @@ def test_stream_sends_one_stream_to_twitch_and_x_at_once(tmp_path, monkeypatch):
             "in X's Live Studio once it starts)") in result.output
     assert CliRunner().invoke(openciv3, [*stream[:3], "--to", "x"]).exit_code == 0
     assert log.read_text().splitlines()[1:] == ["rtmps://or.pscp.tv:443/x/x_456_secret"]
+    _config(monkeypatch, OPENCIV3_X_SERVER="rtmps://ca.pscp.tv:443/x", MY_X_KEY="x_789_secret")
+    assert CliRunner().invoke(openciv3, [*stream[:3], "--to", "x", "--x-key-secret", "MY_X_KEY"]).exit_code == 0
+    assert log.read_text().splitlines()[1:] == ["rtmps://ca.pscp.tv:443/x/x_789_secret"]
 
     _config(monkeypatch, OPENCIV3_STREAM_KEY="live_123_secret", OPENCIV3_X_SERVER="rtmps://or.pscp.tv:443/x")
     result = CliRunner().invoke(openciv3, stream)

@@ -398,7 +398,8 @@ def test_await_game_is_registered_under_its_type_and_round_trips(local_stores):
 
 
 @pytest.mark.parametrize("task", ["smoke", "play", "full-game", "three-agents", "three-agents-quick", "frontier",
-                                  "frontier-quick", "showmatch", "showmatch-quick", "livestream", "human-vs-ai",
+                                  "frontier-quick", "showmatch", "showmatch-quick", "livestream", "sol-vs-opus",
+                                  "human-vs-ai",
                                   "human-vs-agents"])
 def test_every_bundle_task_records_after_the_game_alongside_grading(local_stores, task):
     steps = json.loads(files("agentenv_openciv3.bundles").joinpath(f"openciv3/tasks/{task}.json").read_text())
@@ -476,6 +477,24 @@ def test_the_broadcast_tasks_seat_three_labs_paced_and_cast_for_a_stream(local_s
         "opus": "anthropic/claude-opus-5-5", "sol": "openai/gpt-6-sol", "kimi": "bedrock/global.moonshotai.kimi-k3"}
     assert all(s["prompt"] == players[0]["prompt"] and s["depends_on"] == ["match"] for s in players)
     assert all(w in players[0]["prompt"] for w in ("broadcast live", "message tool", "end_turn a note", "GAME OVER"))
+
+
+def test_sol_vs_opus_is_won_by_conquest_among_ai_civilizations(local_stores):
+    steps = json.loads(files("agentenv_openciv3.bundles").joinpath("openciv3/tasks/sol-vs-opus.json").read_text())
+    registry = get_task_step_registry()
+    for s in steps:
+        assert registry[s["type"]].from_dict(s).to_dict()["id"] == s["id"]
+    match = registry["openciv3_match"].from_dict(next(s for s in steps if s["type"] == "openciv3_match"))
+    assert (match.turns, match.size, match.ai_opponents, match.min_turn_seconds) == (100, "Small", 3, 30)
+    assert match.civs == {"opus": "Rome", "sol": "America"}
+    assert broadcast.settings(match.broadcast)["title"] == (
+        "GPT-6 Sol Battles Opus 5.5 in Civilization 3: which model is the best?")
+    players = [s for s in steps if s["type"] == "prompt_agent"]
+    assert {s["agent_name"]: s["model"] for s in players} == {
+        "opus": "anthropic/claude-opus-5-5", "sol": "openai/gpt-6-sol"}
+    assert all(s["prompt"] == players[0]["prompt"] for s in players)
+    assert all(w in players[0]["prompt"] for w in ("conquer the other model's civilization", "only a tiebreaker",
+                                                   "game's own AI", "GAME OVER"))
 
 
 @pytest.mark.parametrize("full_name", ["three-agents", "frontier", "showmatch"])

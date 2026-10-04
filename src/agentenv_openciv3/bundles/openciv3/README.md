@@ -69,6 +69,10 @@ in parallel: the outcome verifier and `save_env_recording`.
   every turn) and sets the `broadcast`: the stream's title and two AI casters, Max and Ada, whose lines Sonnet 5.5
   writes and `gpt-4o-mini-tts` voices. `agent-env openciv3 stream` follows that setting; a task without `broadcast`
   streams with no casters. `showmatch-quick` is the showmatch in 10 turns.
+- `sol-vs-opus` is a duel for a broadcast: GPT-6 Sol (Codex, America) against Opus 5.5 (Claude Code, Rome) on a Small
+  map with 3 AI civilizations, for at most 100 turns at a 30 s pace. Their prompt says that conquering the other
+  model wins (the game ends when one model's civilization is the last a model plays) and that the higher score at
+  the turn limit only breaks a tie.
 - `human-vs-ai` and `human-vs-agents` seat you: you play Rome in the browser, on a Small map for 100 turns, against
   3 AI civilizations (`human-vs-ai`) or against Opus (Claude Code, Greece) and GPT-5.6 Sol (Codex, America)
   (`human-vs-agents`). The `openciv3_match` step's `humans` names each person and their civ, and the step logs one

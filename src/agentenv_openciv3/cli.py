@@ -333,7 +333,9 @@ def _broadcast(url: str) -> dict:
               show_default=True,
               help="Where the stream goes; repeat it to stream to both at once, e.g. --to twitch --to x. X takes the "
                    f"server URL and stream key of a Live Studio source, as the secrets {X_SERVER} and "
-                   f"{X_STREAM_KEY}; press Go Live in Live Studio once the stream has started.")
+                   "--x-key-secret; press Go Live in Live Studio once the stream has started.")
+@click.option("--x-key-secret", default=X_STREAM_KEY, show_default=True,
+              help="The secret that holds the stream key of X's Live Studio source.")
 @click.option("--server", default="rtmp://live.twitch.tv/app", show_default=True,
               help="Twitch's RTMP ingest server, or any other RTMP server to stream to instead; the stream key is "
                    "appended to it.")
@@ -359,8 +361,8 @@ def _broadcast(url: str) -> dict:
 @click.option("--source", type=click.Path(exists=True, file_okay=False, path_type=Path),
               help="Checkout whose streamer/ to run, built into an image on first use. Default: the one an editable "
                    "install runs from, or the cwd.")
-def stream(url: str | None, destinations: tuple[str, ...], server: str, key_secret: str, size: str, fps: int,
-           bitrate: str, linger: int,
+def stream(url: str | None, destinations: tuple[str, ...], x_key_secret: str, server: str, key_secret: str, size: str,
+           fps: int, bitrate: str, linger: int,
            client_view: bool, cast: bool | None, title: str | None, record_dir: Path | None, offline: bool,
            bandwidth_test: bool, source: Path | None):
     """Stream a game's live view to Twitch, X or any RTMP server, or to several at once, while the agents play it,
@@ -382,11 +384,11 @@ def stream(url: str | None, destinations: tuple[str, ...], server: str, key_secr
             targets.append(f"{server.rstrip('/')}/{key}" + ("?bandwidthtest=true" if bandwidth_test else ""))
             where.append(f"to {server.rstrip('/')}/<stream key>{test}")
         else:
-            x_server, key = (config.get_secret_store().get(secret) for secret in (X_SERVER, X_STREAM_KEY))
+            x_server, key = (config.get_secret_store().get(secret) for secret in (X_SERVER, x_key_secret))
             if not x_server or not key:
                 raise click.ClickException(
                     f"no X stream: create a source in X's Live Studio (Creator Studio, X Premium) and store its server "
-                    f"URL and stream key as the secrets {X_SERVER} and {X_STREAM_KEY}, as for the Twitch key")
+                    f"URL and stream key as the secrets {X_SERVER} and {x_key_secret}, as for the Twitch key")
             targets.append(f"{x_server.rstrip('/')}/{key}")
             where.append(f"to {x_server.rstrip('/')}/<stream key> (press Go Live in X's Live Studio once it starts)")
     env = {"STREAM_URL": "\n".join(targets)}
