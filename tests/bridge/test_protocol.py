@@ -269,16 +269,17 @@ def check_city_screen(info: dict) -> None:
     assert all((t[0], t[1]) in workable for t in worked[1:]) and (info["x"], info["y"]) not in workable
     assert all(len(t) == 2 for t in info["workable"]) and len(workable) == len(info["workable"]) >= len(worked) - 1
     # City.CurrentFoodYield and CurrentProductionYield sum these; a citizen eats two food, and corruption or disorder
-    # only take shields away.
+    # only take shields away (buildings add some, patches/0016).
     assert sum(t[2] for t in worked) - 2 * info["size"] == info["food_per_turn"]
-    assert sum(t[3] for t in worked) >= info["shields_per_turn"]
+    assert sum(t[3] for t in worked) + info["shields"]["from_buildings"] >= info["shields_per_turn"]
     check_city_figures(info)
-    # The rest of the city screen. Shields: its tiles' production, split into useful and corrupt (specialists add none).
-    assert info["shields"]["total"] == sum(t[3] for t in worked)
-    # Commerce: its tiles' commerce, plus what each specialist adds, plus Wealth's.
+    # The rest of the city screen. Shields: its tiles' production, split into useful and corrupt (specialists add none),
+    # plus what its buildings add (patches/0016).
+    assert info["shields"]["total"] - info["shields"]["from_buildings"] == sum(t[3] for t in worked)
+    # Commerce: its tiles' commerce, plus what each specialist adds, plus Wealth's, plus what its buildings add.
     specialists = info["specialists"]
-    assert info["commerce"]["total"] == sum(t[4] for t in worked) + info["commerce"]["wealth"] + sum(
-        s["count"] * (s["taxes"] + s["research"] + s["luxuries"]) for s in specialists)
+    assert info["commerce"]["total"] - info["commerce"]["from_buildings"] == sum(t[4] for t in worked) + info[
+        "commerce"]["wealth"] + sum(s["count"] * (s["taxes"] + s["research"] + s["luxuries"]) for s in specialists)
     # Culture: City.GetCulturePerTurn, GetCulture and the next border level's 10^n, as "Total: x/y".
     culture = info["culture"]
     assert set(culture) == {"per_turn", "total", "next_border"} and culture["per_turn"] >= 0 and culture["total"] >= 0
@@ -312,10 +313,16 @@ def check_city_screen(info: dict) -> None:
 def check_city_figures(c: dict) -> None:
     """The domestic advisor's per-city figures, in state's cities and the city command alike."""
     commerce, shields = c["commerce"], c["shields"]
-    assert set(commerce) == {"total", "taxes", "science", "luxury", "corrupt", "wealth"}
-    assert commerce["total"] == sum(v for k, v in commerce.items() if k != "total")
+    assert set(commerce) == {"total", "taxes", "science", "luxury", "corrupt", "wealth", "from_buildings"}
+    assert commerce["total"] == sum(v for k, v in commerce.items() if k not in ("total", "from_buildings"))
     assert all(v >= 0 for v in commerce.values())
-    assert set(shields) == {"total", "useful", "corrupt"} and shields["total"] == shields["useful"] + shields["corrupt"]
+    assert set(shields) == {"total", "useful", "corrupt", "from_buildings"}
+    assert shields["total"] == shields["useful"] + shields["corrupt"]
+    assert 0 <= shields["from_buildings"] <= shields["useful"]
+    # What the buildings add (patches/0016) is in the parts above, and only from the buildings' percentages.
+    assert set(c["bonus"]) == {"science", "tax", "luxury", "shields"} and all(v >= 0 for v in c["bonus"].values())
+    if not any(c["bonus"].values()):
+        assert commerce["from_buildings"] == shields["from_buildings"] == 0
     assert shields["useful"] == c["shields_per_turn"] and shields["corrupt"] >= 0
     if c["disorder"]:
         assert shields["useful"] == 0

@@ -62,7 +62,7 @@ rotated at a 100K context cap.
 | Government | revolutions | Despotism only: no command for the agent, no code for the AI |
 | War and peace | both | the AI declares war and never makes peace; the agent has neither |
 | City capture | yes | yes (patch 0011): the city loses a citizen, its palace and small wonders; one of size 1 is destroyed; the loser gets a new capital (patch 0013) |
-| Late eras | Industrial and Modern | nobody reaches them. Bank, University and Cathedral are never buildable, because of a prerequisite check (`Building.cs:145`) |
+| Late eras | Industrial and Modern | with patches 0005-0008 and 0016 the AIs build Universities, Banks, Stock Exchanges and Factories and end a Standard game with 58 to 65 techs on average; power plants, pollution and air units are missing |
 
 ## What is missing
 
@@ -78,8 +78,34 @@ rotated at a 100K context cap.
      changed government, the AI cut its own science to 0, and harder difficulties made AI research dearer.
    - Now, at Regent: mean AI techs at T540 went from 32 to 43-45, 3 to 7 civs reach the Industrial era, and
      most AIs end in Republic or Democracy.
-   - Still slow: buildings have no economic effect in this engine (a Library adds no science), which is a
-     rules change left for later (M).
+   - Buildings now have their economic effects (patch 0016): Library, University and Research Lab +50%
+     science, Copernicus' Observatory and Newton's University +100%, Marketplace, Bank and Stock Exchange +50%
+     tax and luxury, Factory and Manufacturing Plant +25% shields, and Wall Street pays 5% interest (at most 50
+     gold). Before, they cost upkeep and returned nothing, and the AI valued a Library only for its culture.
+   - Measured with engine_ai in every seat at Regent, before and after patch 0016:
+
+     | | Small, 5 AIs, T200 (seeds 1-4) | Standard, 7 AIs, T540 (seeds 1-3) |
+     |---|---|---|
+     | Mean techs of the AIs left | 22.4-24.0 → 23.4-25.6 | 36.7-42.4 → 57.8-65.0 (best 43-49 → 60-66) |
+     | The seat (engine_ai) | 22-24 → 23-25 techs | 32-38 → 41-50 techs |
+     | Libraries, Marketplaces | 22-67, 3-7 → 44-73, 5-12 | 114-124, 39-54 → 122-139, 87-107 |
+     | Universities, Banks, Stock Exchanges | none | 32-43, 1-6, 0 → 70-104, 58-78, 19-36 |
+     | Factories, Wall Street | none | 0, 0 → 3-10, 2-4 |
+     | Cities captured, civs destroyed | 0-2, 0 → 0-1, 0 | 39-85, 0-1 → 100-117, 2-3 |
+     | Wall time per game | 17-21 s → 18-25 s | 167-246 s → 197-227 s |
+
+     The richer AIs reach the Industrial era and fight more decisive wars: more cities change hands and 2 to 3
+     civs are destroyed per Standard game, where at most one was.
+   - Left out of patch 0016:
+     - power plants (Coal, Hydro, Nuclear, Solar, Hoover Dam): +25% with a Factory and one per city, which needs
+       a power-plant rule;
+     - pollution and everything tied to it (Mass Transit, Recycling Center, meltdowns): the engine has none;
+     - Coastal Fortress, SAM sites and naval or bombard defence, which need naval bombard and air units;
+     - Smith's Trading Company paying upkeep, the Sistine Chapel's empire-wide cathedral, a Temple doubled by a
+       tech, the Courthouse's content face, and the Police Station against war weariness (the engine has none);
+     - Great Library techs, Leonardo's upgrades and other wonder specials;
+     - the BIQ's integer `Production` field and its `DoublesResearchOutput` flag, which cannot be checked without
+       a BIQ (the ruleset here is already converted).
 3. **No city capture: fixed** by patch 0011.
    - A city taken changes hands as in Civ III: it loses a citizen, its palace, small wonders, stored food and
      shields; one of size 1 is destroyed. Great wonders and other buildings stay, and borders follow the new owner.

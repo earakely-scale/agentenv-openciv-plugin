@@ -241,7 +241,16 @@ def option_text(o: dict, c: dict) -> str:
     if o.get("kind") == "wealth":
         return o["name"]
     eta = f"{o['turns']}t" if o.get("turns") is not None else f"no progress: {stalled(c)}"
-    return f"{o['name']} {o['cost']} ({eta})"
+    text = f"{o['name']} {o['cost']} ({eta})"
+    # A building's first two effects, economic ones first: "Library 80 (6t): +50% science (+2 here); +3 culture".
+    return text + ": " + "; ".join(o["effects"][:2]) if o.get("effects") else text
+
+
+def bonus_text(c: dict) -> str | None:
+    """What the city's buildings add, in percent: "bonus +50% science +25% shields"."""
+    b = c.get("bonus") or {}
+    parts = [f"+{b[k]}% {k}" for k in ("science", "tax", "luxury", "shields") if b.get(k)]
+    return "bonus " + " ".join(parts) if parts else None
 
 
 def city_detail(c: dict) -> str:
@@ -258,7 +267,7 @@ def city_detail(c: dict) -> str:
     if c.get("shields_lost_last_turn"):
         lines.append(f"  {c['shields_lost_last_turn']} shields lost last turn (production full)")
     if c.get("buildings"):
-        lines.append("  buildings: " + ", ".join(c["buildings"]))
+        lines.append("  buildings: " + ", ".join(c["buildings"]) + (f" · {bonus}" if (bonus := bonus_text(c)) else ""))
     opts = [option_text(o, c) for o in c.get("options", [])]
     if opts:
         lines.append("  can build: " + " · ".join(opts))

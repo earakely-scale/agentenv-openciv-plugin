@@ -211,8 +211,13 @@ sealed partial class Session {
 				["total"] = commerce.taxes + commerce.beakers + commerce.happiness + commerce.corrupted + commerce.wealth,
 				["taxes"] = commerce.taxes, ["science"] = commerce.beakers, ["luxury"] = commerce.happiness,
 				["corrupt"] = commerce.corrupted, ["wealth"] = commerce.wealth,
+				["from_buildings"] = commerce.fromBuildings,
 			},
-			["shields"] = new JsonObject { ["total"] = shields.useful + shields.corrupt, ["useful"] = shields.useful, ["corrupt"] = shields.corrupt },
+			["shields"] = new JsonObject {
+				["total"] = shields.useful + shields.corrupt, ["useful"] = shields.useful, ["corrupt"] = shields.corrupt,
+				["from_buildings"] = shields.fromBuildings,
+			},
+			["bonus"] = BuildingBonus(c),
 			["maintenance"] = c.MaintenanceCosts(),
 		};
 	}
@@ -490,11 +495,15 @@ sealed partial class Session {
 	JsonObject CityInfo(Args a) {
 		City c = CityArg(a);
 		JsonObject o = CityJson(c);
-		o["options"] = Json.Array(c.ListProductionOptions(gd), p => new JsonObject {
-			["name"] = p.name,
-			["kind"] = p switch { UnitPrototype => "unit", Building => "building", _ => "wealth" },
-			["cost"] = p is Inflow ? 0 : human.ShieldCost(p),
-			["turns"] = p is Inflow ? null : Json.Turns(c.TurnsToProduce(p)),
+		o["options"] = Json.Array(c.ListProductionOptions(gd), p => {
+			var option = new JsonObject {
+				["name"] = p.name,
+				["kind"] = p switch { UnitPrototype => "unit", Building => "building", _ => "wealth" },
+				["cost"] = p is Inflow ? 0 : human.ShieldCost(p),
+				["turns"] = p is Inflow ? null : Json.Turns(c.TurnsToProduce(p)),
+			};
+			if (p is Building b) option["effects"] = Json.Strings(BuildingEffects(b, c));
+			return option;
 		});
 		o["tiles_worked"] = Json.Array(c.residents.Where(r => Tile.IsTileValid(r.tileWorked)), r => {
 			Tile t = r.tileWorked;

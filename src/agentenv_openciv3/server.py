@@ -892,8 +892,9 @@ class OpenCiv3Env(AgentEnvEnvironment):
     async def city_info(self, city: Annotated[str | None, Field(
             description='City id, e.g. "c1"; omit for all your cities.')] = None):
         """City details: size, food and growth ETA, mood (happy, content, unhappy, defenders), production and ETA,
-        buildings, and everything it can build now with shield cost and turns. With more than 4 cities and none named:
-        one line per city, those waiting on you first."""
+        buildings and the % they add, and everything it can build now with shield cost, turns and, for a building,
+        what it does (e.g. "+50% science (+2 here)"). With more than 4 cities and none named: one line per city,
+        those waiting on you first."""
         async def body():
             cities = (await self._state()).get("cities", [])
             ids = [city] if city else [c["id"] for c in cities]

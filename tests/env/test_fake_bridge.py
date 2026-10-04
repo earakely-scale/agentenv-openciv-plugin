@@ -69,13 +69,16 @@ async def test_documented_result_keys(bridge):
     assert set(city) == set(order["city"]) | {"options", "tiles_worked", "worked", "workable", "culture", "strategic",
                                               "luxuries", "specialists", "citizens"}
     assert set(city["culture"]) == {"per_turn", "total", "next_border"} and len(city["citizens"]) == city["size"]
-    assert set(city["commerce"]) == {"total", "taxes", "science", "luxury", "corrupt", "wealth"}
-    assert set(city["shields"]) == {"total", "useful", "corrupt"}
+    assert set(city["commerce"]) == {"total", "taxes", "science", "luxury", "corrupt", "wealth", "from_buildings"}
+    assert set(city["shields"]) == {"total", "useful", "corrupt", "from_buildings"}
+    assert set(city["bonus"]) == {"science", "tax", "luxury", "shields"}
     finance = (await bridge.call("state"))["finance"]
     assert finance["income"]["total"] - finance["expenses"]["total"] == (await bridge.call("state"))["gold_per_turn"]
     assert city["worked"][0][:2] == [city["x"], city["y"]] and len(city["worked"]) == city["size"] + 1
     assert all(len(t) == 5 for t in city["worked"]) and all(len(t) == 2 for t in city["workable"])
     assert set(city["options"][0]) == {"name", "kind", "cost", "turns"}
+    buildings = [o for o in city["options"] if o["kind"] == "building"]
+    assert buildings and all(set(o) == {"name", "kind", "cost", "turns", "effects"} for o in buildings)
     assert set(await bridge.call("set_production", city="c1", item="Warrior")) == {"message", "city"}
     techs = await bridge.call("techs")
     assert set(techs) == {"current", "turns_left", "known", "available"}

@@ -62,6 +62,10 @@ ITEMS = {  # name: (kind, cost, required tech)
     "Wealth": ("wealth", 0, None),
 }
 POP_COST = {"Settler": 2, "Worker": 1}
+EFFECTS = {  # city_info's effects of a building option (the fake's buildings add no percentages)
+    "Barracks": ["veteran land units", "upkeep 1"], "Granary": ["keeps half its food on growth", "upkeep 1"],
+    "Temple": ["1 unhappy made content", "+2 culture", "upkeep 1"], "Walls": ["+50% defence up to size 6", "upkeep 1"],
+}
 ORDERS = {
     "Settler": ["settle", "found_city", "goto", "hold", "disband"],
     "Worker": ["auto_work", "goto", "build_road", "build_mine", "irrigate", "hold", "disband"],
@@ -277,7 +281,7 @@ class Game:
             science, luxury = self.rates["science"] * (1 + c["size"]) // 6, self.rates["luxury"] * c["size"] // 4
             corrupt = 0 if "Palace" in c["buildings"] else 1
             out[c["id"]] = {"total": tax + science + luxury + corrupt, "taxes": tax, "science": science,
-                            "luxury": luxury, "corrupt": corrupt, "wealth": 0}
+                            "luxury": luxury, "corrupt": corrupt, "wealth": 0, "from_buildings": 0}
         return out
 
     def finance(self) -> dict:
@@ -324,7 +328,9 @@ class Game:
                 "defenders": self.defenders(c), "riot_risk": self.riot_risk(c), "capped": self.capped(c),
                 "shields_lost_last_turn": c["lost"], "buildings": c["buildings"],
                 "food_eaten": 2 * c["size"], "commerce": self.commerce()[c["id"]],
-                "shields": {"total": spt or 1 + c["size"], "useful": spt, "corrupt": 0 if spt else 1 + c["size"]},
+                "shields": {"total": spt or 1 + c["size"], "useful": spt, "corrupt": 0 if spt else 1 + c["size"],
+                            "from_buildings": 0},
+                "bonus": {"science": 0, "tax": 0, "luxury": 0, "shields": 0},
                 "maintenance": self.maintenance(c)}
 
     def city(self, key):
@@ -337,6 +343,7 @@ class Game:
     def options(self, c) -> list:
         spt = self.spt(c)
         return [{"name": n, "kind": k, "cost": cost, "turns": ceil_div(cost, spt) if cost and spt else None}
+                | ({"effects": EFFECTS[n]} if k == "building" else {})
                 for n, (k, cost, tech) in ITEMS.items() if tech is None or tech in self.known]
 
     # ---- research ----

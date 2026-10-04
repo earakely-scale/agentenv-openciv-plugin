@@ -93,8 +93,10 @@ The human player's full situation. Result:
     "food_stored": 4, "food_needed": 20, "food_per_turn": 2, "turns_to_grow": 8,
     "shields_per_turn": 3, "producing": "Settler", "production_stored": 12, "production_cost": 30,
     "turns_to_complete": 6, "disorder": false, "buildings": ["Palace"], "queue": ["Warrior", "Granary"],
-    "food_eaten": 6, "commerce": {"total": 5, "taxes": 2, "science": 3, "luxury": 0, "corrupt": 0, "wealth": 0},
-    "shields": {"total": 3, "useful": 3, "corrupt": 0}, "maintenance": 0
+    "food_eaten": 6, "commerce": {"total": 5, "taxes": 2, "science": 3, "luxury": 0, "corrupt": 0, "wealth": 0,
+                                  "from_buildings": 0},
+    "shields": {"total": 3, "useful": 3, "corrupt": 0, "from_buildings": 0},
+    "bonus": {"science": 0, "tax": 0, "luxury": 0, "shields": 0}, "maintenance": 0
   }],
   "units": [{
     "id": "u3", "type": "Settler", "x": 14, "y": 10, "moves_left": 1.0, "moves_max": 1,
@@ -146,10 +148,16 @@ The human player's full situation. Result:
   (`City.FoodConsumedPerTurn()`, two per citizen; `food_per_turn` is what is left); `commerce`, from
   `City.CurrentCommerceYield()`, its `taxes`, `science` (beakers), `luxury`, `corrupt` and `wealth` (what
   building Wealth adds), with `total` their sum: the city's tiles' commerce, corrupt part included, plus what its
-  specialists add (taxes counts the tax collectors'). The cities' `total`s add up to `finance.income.cities +
+  specialists add (taxes counts the tax collectors'), plus `from_buildings`, what its buildings' percentages added
+  to taxes, science and luxury (already in them). The cities' `total`s add up to `finance.income.cities +
   taxmen`, their science, luxury and corrupt to the expenses' science, entertainment and corruption. `shields`
   is `City.CurrentProductionYield()`: `useful` (= `shields_per_turn`), `corrupt` (waste; everything in disorder
-  or anarchy) and `total`, the city screen's "PRODUCTION: n per turn". `maintenance` is
+  or anarchy), `from_buildings` (what its buildings added to `useful`, already in it) and `total` (`useful +
+  corrupt`), the city screen's "PRODUCTION: n per turn". `bonus` is the sum of the percentages the city's buildings
+  (wonder-granted ones included) add, by patch 0016's `City.Boost`: `science` (Library, University and Research Lab
+  50 each, Copernicus' Observatory and Newton's University 100), `tax` and `luxury` (Marketplace, Bank and Stock
+  Exchange 50 each) and `shields` (Factory and Manufacturing Plant 25 each). They apply after corruption and the
+  rates, to the specialists' output too, rounded down; Wealth is not raised. `maintenance` is
   `City.MaintenanceCosts()`, its buildings' upkeep in gold (the client's column reads 0, a TODO there); they add
   up to `finance.expenses.maintenance`.
 
@@ -328,10 +336,21 @@ Args: `city` (id). Result: the city object from `state` plus `"options": [{"name
 "unit"|"building"|"wealth", "cost", "turns"}]` (what it can produce now), `"tiles_worked"`, and for the city
 screen's map (the client's `C7/Map/TileAssignmentLayer.cs`):
 
+- A building option also has `"effects"`, what it does in short phrases from its engine fields, economic ones first:
+  `["+50% science (+2 here)", "+3 culture", "upkeep 1"]`. A percentage says what it would add in this city now, at
+  the current rates, tiles and corruption: the engine's yields with the building put in the city for the call
+  (`"+50% tax and luxury (+3 gold, +1 luxury here)"`, `"+25% shields (+3 here)"`). The others: `"interest on the
+  treasury (5%, at most 50 gold a turn)"`, `"less corruption (4 commerce, 3 shields lost here)"` (what the city loses
+  now), `"a second centre against corruption"`, `"N unhappy made content"`, `"more happiness from luxury
+  resources"`, `"grows past 6"`, `"grows past 12"`, `"keeps half its food on growth"`, `"+50% defence"` (with `"up
+  to size 6"` for walls), `"+1 food on water tiles"` (shield, commerce), `"veteran land units"`, `"veteran sea
+  units"`, `"a Granary in every city on the continent"` (or `"in every city"`), `"+3 culture"`, `"upkeep 1"`.
+
 - `"worked": [[x, y, food, shields, commerce], ...]`: the city centre first, then each tile a citizen works, with
   the yields the client draws on it, the engine's `Tile.FoodYield/ProductionYield/CommerceYield(city)`. They
   sum to the city's totals before corruption: food minus two per citizen is `food_per_turn`, and shields are
-  `shields_per_turn` plus what corruption (or disorder, or anarchy) takes.
+  `shields_per_turn` plus what corruption (or disorder, or anarchy) takes, less what its buildings add
+  (`shields.from_buildings`).
 - `"workable": [[x, y], ...]`: the tiles in the city's radius it could work, `City.GetWorkableTiles` (inside the
   civ's borders, no city on them), around which the client draws its border; this includes tiles another of the
   civ's cities works, and not the centre.
@@ -541,6 +560,20 @@ submodule itself stays untouched):
    and a traded tech further down the queue stayed in it; at the head, `PlayerAI.MaybePickTechToResearch` picked it
    again forever and the turn hung (a seat with a `set_research` queue, played by `autoplay`'s `engine_ai`). The
    completed tech now leaves the queue wherever it is, and a known tech at the head is skipped.
+16. `0016-buildings-multiply-science-gold-and-shields.patch`: buildings have their Civ III economic effects; a
+   Library, Marketplace, University, Bank or Factory cost upkeep and returned nothing. `SaveBuilding` and `Building`
+   get `sciencePercent`, `taxPercent`, `luxuryPercent` and `productionPercent`, and `City.Boost` raises the beakers,
+   taxes and luxury left after corruption and the rates (the specialists' included, Wealth's not) in
+   `CurrentCommerceYieldRaw`, and the useful shields left after waste in `CurrentProductionYield`, by the sum of the
+   city's buildings' percentages, rounded down; `CommerceBreakdown.fromBuildings` and `CorruptableValue.fromBuildings`
+   record what was added (the city's `from_buildings`). The ruleset gives Library, University and Research Lab +50%
+   science, Copernicus' Observatory and Newton's University +100%, Marketplace, Bank and Stock Exchange +50% tax and
+   luxury, Factory and Manufacturing Plant +25% shields, and Wall Street the `treasuryEarnsInterest` flag the engine
+   already paid on (5% of the treasury, at most 50 gold a turn). `ImportCiv3` maps the BIQ's three +50% flags. The AI
+   (`ChooseProducible.ScoreBuilding`) values such a building by what it would add in the city. Everything that reads
+   the city's yields (finances, research, the AI's budget and government choice, moods, the client's city screen)
+   follows; nothing draws from `GameData.rng`. A save keeps its own building definitions, so a save made before the
+   patch has no multipliers.
 
 Measured over full 540-turn Standard games with 7 AIs at Regent (seeds 1-3), patches 0005-0009 take:
 - mean AI techs at T540 from 32 to 43-45, and civs with an Industrial-era tech from 0 to 3-7;
@@ -549,6 +582,14 @@ Measured over full 540-turn Standard games with 7 AIs at Regent (seeds 1-3), pat
 - AI governments at T540 from all Despotism to mostly Republic and Democracy.
 
 Wall time per game is unchanged at 74-78 s, and a seed replays byte-identically.
+
+Patch 0016 then takes, over the same games (seeds 1-3, with the patches through 0015 as the baseline):
+- mean techs of the AIs left at T540 from 37-42 to 58-65, the best from 43-49 to 60-66;
+- Universities from 32-43 to 70-104, Banks from 1-6 to 58-78, Stock Exchanges from 0 to 19-36, Factories from 0
+  to 3-10;
+- cities captured from 39-85 to 100-117 per game, and civs destroyed from 0-1 to 2-3.
+
+Wall time per game stays within the machine's noise (167-246 s before, 197-227 s after, on a shared machine).
 
 ## Round 2 additions (from the post-playtest audit)
 
