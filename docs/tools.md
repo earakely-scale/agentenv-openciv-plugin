@@ -10,11 +10,11 @@ the valid alternatives and the exact call to make instead.
 
 | Tool | Args | Returns |
 |---|---|---|
-| `get_turn_brief` | — | Turn and limit with the year, gold, research and ETA, score with the seat's rank among the civilizations, a pace line against the targets with its share of the world's land and population against the civ nearest domination, both baselines (null and built-in AI on the same seed), what needs orders (more than two cities in disorder fold into one line with the luxury rate that calms them all), standing orders, one line per city, the last turn's events, and the agent's plan. Self-contained: "lost context? call get_turn_brief". |
-| `list_units` | `filter`: `needs_orders` (default) or `all`; `type` (optional, e.g. `"Worker"`) | One line per unit: id, type, `(x,y)`, moves, status or standing order, valid orders, and why `found_city` is or isn't possible here; with many idle units, the `unit_orders` call that orders them by type. |
+| `get_turn_brief` | — | Turn and limit with the year, gold, research and ETA, score with the seat's rank among the civilizations, a pace line against the targets with its share of the world's land and population against the civ nearest domination, both baselines (null and built-in AI on the same seed), what needs orders (more than two cities in disorder fold into one line with the luxury rate that calms them all), how many units can upgrade now, for how much gold and how many the treasury pays for, with the `unit_orders` call for those, standing orders, one line per city, the last turn's events, and the agent's plan. Self-contained: "lost context? call get_turn_brief". |
+| `list_units` | `filter`: `needs_orders` (default) or `all`; `type` (optional, e.g. `"Worker"`) | One line per unit: id, type, `(x,y)`, moves, status or standing order, valid orders, why `found_city` is or isn't possible here, and in a city the unit's upgrade and its gold (`upgrade → Longbowman 60g`, or why not now); with many idle units, the `unit_orders` call that orders them by type. |
 | `view_map` | `x`, `y`, `radius` (default 3, max 6), or `around` (`"u7"`, `"c1"`) | Staggered ASCII of the explored tiles, a legend, then a "notable" list (resources, rivers, foreign units, cities, good sites) with distance and direction. Unexplored tiles are blank. |
 | `find_city_sites` | `unit` (optional), `top` (default 5) | Ranked sites: `(x,y)`, score, distance and direction, travel turns, yields, river or coast. |
-| `unit_order` | `unit`, `order`, `x`, `y` | Result line plus footer. `settle` walks to the site and founds the city on arrival. `attack` (an adjacent enemy unit or city of a civ at war) and `bombard` (in range) fight with the engine's own combat; a unit next to an enemy lists its targets with an estimated chance to win, and a city that falls is captured (one of size 1 is destroyed). |
+| `unit_order` | `unit`, `order`, `x`, `y` | Result line plus footer. `settle` walks to the site and founds the city on arrival. `attack` (an adjacent enemy unit or city of a civ at war) and `bombard` (in range) fight with the engine's own combat; a unit next to an enemy lists its targets with an estimated chance to win, and a city that falls is captured (one of size 1 is destroyed). `upgrade` turns a unit in one of your cities into the best unit of its line the city can build, for gold (see [Upgrades](#upgrades)). |
 | `unit_orders` | `orders`: 1 to 100 of `{unit, order, x, y}`; `unit` is an id or a group, `"idle"`, `"idle:Worker"` or `"all:Warrior"` | One line saying how many orders were done and failed, then one line per unit (the first 30), plus footer. One that fails doesn't stop the rest. |
 | `city_info` | `city` (optional; all cities when omitted) | Size, food, growth ETA, production and ETA, queue, buildings with the percentages they add (`bonus +50% science +25% shields`), and what it can build with cost and turns; a building also shows its first two effects, what it would add in that city now first, as if in order for a city that riots (`Library 80 (6t): +50% science (+2 here); +3 culture`). With more than 4 cities and none named: one line per city, those waiting on a production choice first. |
 | `set_production` | `city`: an id, several (`"c1,c3"`), `"all"` or `"pending"`; `item`; `then` (optional, up to 10: the queue; `[]` clears it) | Result line, a line per city (and per city that could not), plus footer. With a queue, each completion starts the next queued item the city can build; the engine picks only when it is empty. |
@@ -60,6 +60,25 @@ the valid alternatives and the exact call to make instead.
   when the other agent accepts it (or proposes the same trade back).
 - **Research:** a tech you get is known at once. If it was the one being researched, the research moves on (your
   queue, or the engine's pick to confirm); otherwise the research keeps its progress.
+## Upgrades
+
+- **Where and what:** a unit standing in one of your cities upgrades to the furthest unit along its line that the
+  city can build now: the tech known, the strategic resources connected (the Spearman line goes Pikeman, Musketman,
+  Rifleman, Infantry, Mech Infantry; a civ with a unique unit gets it in its line). A unit outside a city, or whose
+  next unit needs a tech or a resource the city lacks, is refused with what is missing.
+- **Cost:** 3 gold per shield of difference (at least 3); the unit keeps its id, experience, hit points and
+  fortification, and has no moves left that turn; another standing order (goto, explore) ends.
+- **Seeing it:** a unit line shows `upgrade → Pikeman 30g` where it can upgrade, `(not now)` when it lacks the gold
+  or the moves; the brief counts the units that can upgrade, how many your gold pays for when it does not pay for
+  all, and gives the call for those, e.g. `unit_orders(orders=[{"unit": "all:Spearman", "order": "upgrade"}])`
+  (unit ids instead when some units of that type cannot upgrade or are not paid for). `unit_orders` upgrades them in
+  turn until the gold runs out.
+- **Not always stronger:** a few lines end in a weaker unit (the Chasqui Scout becomes an Explorer, 0/0; the
+  Samurai a Cavalry, defence 3); the unit line shows the target, so check it before you upgrade a city's defender.
+- **Obsolete units:** a unit leaves a city's options exactly when it could upgrade there (Archers at Invention,
+  not before); `set_production` says which unit replaces it, and a queued unit that went obsolete leaves the queue
+  with the same reason.
+- **The AI** upgrades its city garrisons too, with the gold above a turn's upkeep, and not into a weaker unit.
 
 ## Several agents in one game
 

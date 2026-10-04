@@ -85,7 +85,8 @@ class UnitOrderSpec(BaseModel):
     """One order of unit_orders."""
     unit: str = Field(description='A unit id ("u7"), or a group: "idle" (every unit waiting for orders), "idle:Worker" '
                                   '(those of a type) or "all:Warrior" (every unit of a type).')
-    order: str = Field(description="As unit_order takes it: fortify, auto_work, explore, goto, settle, hold, ...")
+    order: str = Field(description="As unit_order takes it: fortify, auto_work, explore, goto, settle, hold, upgrade, "
+                                   "...")
     x: int | None = Field(default=None, description="Target x, for goto, settle, attack and bombard.")
     y: int | None = Field(default=None, description="Target y.")
 Coord = Annotated[int | None, Field(description="Map coordinate; x+y is always even.")]
@@ -890,7 +891,8 @@ class OpenCiv3Env(AgentEnvEnvironment):
                 "explore, auto_work. Now: found_city (on this tile), fortify (a military unit fortified in a city "
                 "also keeps an unhappy citizen content), wake, hold (skip this turn), disband, build_road, build_mine, "
                 "irrigate, clear_forest, attack (an adjacent enemy unit or city, x,y; only civs you are at war "
-                "with) and bombard (x,y in range, for units that can)."))],
+                "with), bombard (x,y in range, for units that can) and upgrade (in one of your cities, for gold, to "
+                "the best unit of its line the city can build; uses its moves)."))],
             x: Coord = None, y: Coord = None):
         """Order one of your units. Standing orders keep working on later turns without further calls, so prefer
         them: settle for settlers, explore for one scout, auto_work for workers; keep a military unit in every city.

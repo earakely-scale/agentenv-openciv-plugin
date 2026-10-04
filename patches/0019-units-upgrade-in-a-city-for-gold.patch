@@ -1,0 +1,202 @@
+Units upgrade in their own cities for gold, as in Civilization III. The engine had the upgrade chains and obsolescence but no way to upgrade a unit, so an obsolete garrison stayed obsolete for the rest of the game, and the AI's gold sat idle once its cities built Wealth. MapUnit.Upgrade (MapUnit_Upgrade.cs) turns a unit standing in one of its owner's cities into the furthest unit along its civ's upgrade chain that the city can build now (UnitPrototype.UpgradeTargetIn: the tech, a coastal city for ships, the strategic resources connected), for the shield difference (at least 1) times Rules.UpgradeCostPerShield gold, 3 by default since Conquests' upgrade cost is not imported. The unit keeps its id, name if renamed, experience, hit points (up to the new maximum), fortification and position, and uses up its moves for the turn; it is refused without the gold. The AI (PlayerAI.MaybeUpgradeUnits, after it picks a government) spends the gold above a reserve of a turn's upkeep (at least 50) on upgrading its combat units in its cities, the largest gain in defence first, then attack, in unit order, so games replay the same; units that do not fight are left alone, and so are upgrades that weaken a city: to a unit that does not fight (the Chasqui Scout to the Explorer), or to one that defends worse while no other unit in the city defends as well (the Samurai to the Cavalry); a weak economy upgrades nothing. Because the budget keeps the treasury near even, the stock alone paid for few upgrades (12 and 32 units upgraded by T540 in two Standard games), so while a city's best defender could upgrade to a stronger one, AdjustSliders keeps one tenth of the commerce from science for it (44 and 114; 153 and 49 once obsolescence follows the chain, below). A unit is now obsolete in a city exactly when it could upgrade there: UnitPrototype.IsUnitObsolete follows the civ's own upgrade chain (UpgradeTargetIn) and no longer counts the "siblings" GetProducibleUpgrade adds, which made the Archer obsolete at Feudalism through the Medieval Infantry while it could not upgrade before Invention, and the Dutch Spearman obsolete through the Swiss Mercenary while it upgrades to the Musketman. City.GetAccessibleResources and UnitPrototype.GetUpgradeChain are made public for the bridge, which explains a refused upgrade.
+
+--- a/C7Engine/C7GameData/City.cs
++++ b/C7Engine/C7GameData/City.cs
+@@ -176,7 +176,7 @@
+ 			return producibles.Where(p => p.CanProduce(this, accessibleResources));
+ 		}
+ 
+-		private HashSet<Resource> GetAccessibleResources(GameData gameData) {
++		public HashSet<Resource> GetAccessibleResources(GameData gameData) {
+ 			return gameData.GetTradeNetwork().GetResourcesAvailableToCity(owner, this).Keys.ToHashSet();
+ 		}
+ 
+--- a/C7Engine/C7GameData/Rules.cs
++++ b/C7Engine/C7GameData/Rules.cs
+@@ -24,5 +24,6 @@
+ 		public float ShieldRateForDisbanding; // per cent
+ 		public bool AllowLesserUnitProduction; // for example, allow building a Spearman/Pikeman when we can build a Musketman (simultaneously)
+ 		public int RadarTileVisibility; // how many tiles, a unit with the Radar ability, can see ahead
++		public int UpgradeCostPerShield = 3; // gold per shield of difference when a unit upgrades (Conquests' BIQ field is not imported)
+ 	}
+ }
+--- a/C7Engine/C7GameData/UnitPrototype.cs
++++ b/C7Engine/C7GameData/UnitPrototype.cs
+@@ -208,7 +208,7 @@
+ 		/// for a particular civilization, starting from this unit.
+ 		///
+ 		/// Note: must be unique and stable: in-game every unit has at most one direct upgrade target.
+-		private List<UnitPrototype> GetUpgradeChain(Civilization civ) {
++		public List<UnitPrototype> GetUpgradeChain(Civilization civ) {
+ 			var chain = new List<UnitPrototype>();
+ 			var current = this.GetUnitUpgrade(civ);
+ 			while (current != null && current != this && !chain.Contains(current)) {
+@@ -218,6 +218,14 @@
+ 			return chain;
+ 		}
+ 
++		/// What a unit of this type upgrades to in a city: the furthest unit along its civ's upgrade chain that
++		/// the city can produce now (Spearman to Musketman once Gunpowder and Saltpeter are there, skipping the
++		/// Pikeman), or null.
++		public UnitPrototype UpgradeTargetIn(City city, HashSet<Resource> accessibleResources) {
++			return GetUpgradeChain(city.owner.civilization)
++				.LastOrDefault(u => !u.unproducible && u.MeetsProductionRequirements(city, accessibleResources));
++		}
++
+ 		/// Whether a given city can produce this unit, given available resources.
+ 		public bool CanProduce(City city, HashSet<Resource> accessibleResources) {
+ 			var civ = city.owner.civilization;
+@@ -248,8 +256,10 @@
+ 			return true;
+ 		}
+ 
+-		/// A unit is obsolete if a unit in its upgrade chain can be produced (in this city
+-		/// with the given resources).
++		/// A unit is obsolete if a unit in its civ's upgrade chain can be produced (in this city
++		/// with the given resources): exactly when a unit of this type could upgrade there. The
++		/// "siblings" of GetProducibleUpgrade are not counted, so the Medieval Infantry does not
++		/// make the Archer obsolete before the Longbowman it upgrades to.
+ 		///
+ 		/// "AllowLesserUnitProduction" removes unit obsolescence.
+ 		private bool IsUnitObsolete(City city, HashSet<Resource> accessibleResources) {
+@@ -259,7 +269,7 @@
+ 
+ 			if (EngineStorage.gameData.rules.AllowLesserUnitProduction) return false;
+ 
+-			if (this.GetProducibleUpgrade(city, accessibleResources) == null) return false;
++			if (this.UpgradeTargetIn(city, accessibleResources) == null) return false;
+ 
+ 			return true;
+ 		}
+--- a/C7Engine/AI/PlayerAI.cs
++++ b/C7Engine/AI/PlayerAI.cs
+@@ -37,6 +37,7 @@
+ 			MaybeDoPriorityReevaluation(player);
+ 			MaybePickTechToResearch(player, techs);
+ 			MaybeChangeGovernment(player, gameData);
++			MaybeUpgradeUnits(player);
+ 
+ 			await AttemptPeace(player, gameData);
+ 
+@@ -105,6 +106,55 @@
+ 			player.DoCorruptionCalculations(gameData);
+ 		}
+ 
++		// Like a Civ III AI, spend the gold above a reserve of a turn's upkeep on
++		// upgrading the units in its cities, the biggest gain in defence first.
++		// Units that do not fight (settlers, workers, catapults) are left alone,
++		// and so are upgrades that would weaken a city (UpgradeKeepsDefence).
++		public static void MaybeUpgradeUnits(Player player) {
++			if (ChooseProducible.HasWeakEconomy(player)) {
++				return;
++			}
++			PlayerCommerceBreakdown flows = player.AggregateFlows();
++			int reserve = Math.Max(50, flows.maintenance + flows.unitSupport);
++			var candidates = player.units
++				.Select((unit, index) => (unit, index, target: unit.IsCombatUnit() ? unit.UpgradeTarget() : null))
++				.Where(c => c.target != null)
++				.OrderByDescending(c => c.target.defense - c.unit.unitType.defense)
++				.ThenByDescending(c => c.target.attack - c.unit.unitType.attack)
++				.ThenBy(c => c.index)
++				.ToList();
++			foreach (var (unit, _, target) in candidates) {
++				if (unit.CanUpgrade() && UpgradeKeepsDefence(unit, target) && player.gold - unit.UpgradeCost(target) >= reserve) {
++					UnitPrototype from = unit.unitType;
++					int cost = unit.Upgrade();
++					log.Information($"{player} upgraded a {from.name} to a {unit.unitType.name} in {unit.location.cityAtTile?.name} for {cost} gold");
++				}
++			}
++		}
++
++		// Some lines end in a weaker unit: the Chasqui Scout (1/1) upgrades to the
++		// Explorer (0/0), the Samurai (4/4) to the Cavalry (6/3). The target must
++		// fight, and must defend as well unless another unit in the city does.
++		private static bool UpgradeKeepsDefence(MapUnit unit, UnitPrototype target) {
++			if (target.attack == 0 && target.defense == 0) {
++				return false;
++			}
++			int defense = unit.unitType.defense;
++			return target.defense >= defense
++				|| unit.location.unitsOnTile.Any(u => u != unit && u.owner == unit.owner && u.CanDefendOnLand() && u.unitType.defense >= defense);
++		}
++
++		private static bool GarrisonWaitsForUpgrade(Player player) {
++			foreach (City city in player.cities) {
++				MapUnit best = city.location.unitsOnTile.Where(u => u.owner == player && u.CanDefendOnLand())
++					.OrderByDescending(u => u.unitType.defense).FirstOrDefault();
++				if (best?.UpgradeTarget() is UnitPrototype target && target.defense > best.unitType.defense) {
++					return true;
++				}
++			}
++			return false;
++		}
++
+ 		private static (Government government, int value) BestGovernment(Player player, GameData gameData) {
+ 			Government best = null;
+ 			int bestValue = int.MinValue;
+@@ -517,6 +567,14 @@
+ 				player.scienceRate--;
+ 				player.taxRate++;
+ 			}
++
++			// The treasury is a stock the budget keeps near even, so while a
++			// city's best defender waits for an upgrade a tenth of the commerce
++			// goes to gold instead of science, to pay for it (MaybeUpgradeUnits).
++			if (player.scienceRate > 0 && GarrisonWaitsForUpgrade(player)) {
++				player.scienceRate--;
++				player.taxRate++;
++			}
+ 
+ 			log.Information($"{player} slider values: Science: {player.scienceRate}, Luxury: {player.luxuryRate}, Tax: {player.taxRate}");
+ 		}
+--- /dev/null
++++ b/C7Engine/C7GameData/MapUnit_Upgrade.cs
+@@ -0,0 +1,48 @@
++using System;
++using C7Engine;
++
++namespace C7GameData;
++
++// Upgrading a unit in place, as in Civilization III: in one of its owner's cities, to the best unit along its
++// upgrade chain that city can build, for gold. It keeps its id, experience, hit points and position, and uses up
++// its moves for the turn.
++public partial class MapUnit {
++	/// <summary>The owner's city on this unit's tile, where it may upgrade, or null.</summary>
++	public City UpgradeCity() {
++		return location?.cityAtTile is City city && city.owner == owner ? city : null;
++	}
++
++	/// <summary>What this unit would upgrade to where it stands, or null.</summary>
++	public UnitPrototype UpgradeTarget() {
++		City city = UpgradeCity();
++		return city == null ? null : unitType.UpgradeTargetIn(city, city.GetAccessibleResources(EngineStorage.gameData));
++	}
++
++	/// <summary>The gold an upgrade to `target` costs: the shield difference (at least 1) times the rule's rate.</summary>
++	public int UpgradeCost(UnitPrototype target) {
++		return Math.Max(1, target.shieldCost - unitType.shieldCost) * EngineStorage.gameData.rules.UpgradeCostPerShield;
++	}
++
++	public bool CanUpgrade() {
++		UnitPrototype target = UpgradeTarget();
++		return target != null && movementPoints.canMove && owner.gold >= UpgradeCost(target);
++	}
++
++	/// <summary>Upgrades the unit if it can; returns the gold it cost, or 0 when it could not.</summary>
++	public int Upgrade() {
++		if (!CanUpgrade()) {
++			return 0;
++		}
++		UnitPrototype target = UpgradeTarget();
++		int cost = UpgradeCost(target);
++		owner.gold -= cost;
++		if (name == unitType.name) {
++			name = target.name;
++		}
++		unitType = target;
++		hitPointsRemaining = Math.Min(hitPointsRemaining, maxHitPoints);
++		movementPoints.onConsumeAll();
++		path = null;
++		return cost;
++	}
++}

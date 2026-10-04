@@ -392,7 +392,7 @@ call to make instead. Full contract: [docs/tools.md](docs/tools.md).
 | `list_units` | One line per unit: position, moves, status, valid orders, whether it can found a city here |
 | `view_map` | ASCII map of explored tiles around a point, a unit or a city, plus notable things with distance and direction |
 | `find_city_sites` | Ranked city sites with travel time and yields, and every legal site nearby |
-| `unit_order` | `settle`, `found_city`, `goto`, `explore`, `auto_work`, `fortify`, worker jobs, `attack` (with the estimated chance to win) and `bombard` |
+| `unit_order` | `settle`, `found_city`, `goto`, `explore`, `auto_work`, `fortify`, worker jobs, `attack` (with the estimated chance to win), `bombard` and `upgrade` (in a city, for gold) |
 | `unit_orders` | Orders for many units in one call, by id or by group (`"idle:Worker"`, `"all:Warrior"`) |
 | `city_info` | Growth, production, mood and what each city can build |
 | `set_production` | Choose what a city builds, or many cities (`"all"`, `"pending"`), and a queue to follow after it |
@@ -621,8 +621,9 @@ This repository is licensed under the Apache License 2.0 ([LICENSE](LICENSE), [N
   cost follows the difficulty, battles tell an observer each round as they are fought, a city taken changes hands,
   units tell an observer each step they take, the palace moves when the capital falls, a unit disbanded in a city
   adds its shields, a tech got in a trade leaves the research queue without hanging the turn and keeps the
-  progress on what else was being researched, and buildings multiply a city's science, gold and shields (and Wall
-  Street pays interest).
+  progress on what else was being researched, buildings multiply a city's science, gold and shields (and Wall Street
+  pays interest), the standalone ruleset keeps the 76 land and sea units the engine can play with their upgrades, and
+  units upgrade in a city for gold.
 - The image also contains Blast (Apache-2.0), Serilog (Apache-2.0), MoonSharp (BSD-3-Clause), ini-parser (MIT), the
   .NET runtime (MIT) and a static FFmpeg build (GPL-3.0-or-later); it carries their licences in
   `/opt/civbridge/licenses/`. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
