@@ -1,12 +1,13 @@
 """Decide which seat won a game several agents played, one seat each, from the env's data/get summary; people may
 play seats too (data/get marks them `human`), and are ranked like the agents.
 
-The victor is the seat that won by conquest or domination, else, at the turn limit, the seat with the highest score
-(whatever an AI civilization scored); a tie on top is no victor and half the grade. When an AI civilization wins by
-conquest or domination, no seat is the victor. The match counts only if it was played to its end, the engine kept
-running and every agent played its own turns (the env ends a silent seat's turn so the others can go on; past a tenth
-of an agent's turns the match does not count; a human seat's ended turns are reported, not gated). Each seat's rank
-among the seats is reported, not graded: the victor first, then undefeated seats before defeated ones, then by score.
+The victor is the seat that won by conquest, domination or culture, else, at the turn limit, the seat with the
+highest score (whatever an AI civilization scored); a tie on top is no victor and half the grade. When an AI
+civilization wins by conquest, domination or culture, no seat is the victor. The match counts only if it was played
+to its end, the engine kept running and every agent played its own turns (the env ends a silent seat's turn so the
+others can go on; past a tenth of an agent's turns the match does not count; a human seat's ended turns are
+reported, not gated). Each seat's rank among the seats is reported, not graded: the victor first, then undefeated
+seats before defeated ones, then by score.
 """
 
 from agentenv_protocol import client

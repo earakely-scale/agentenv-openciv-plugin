@@ -1,0 +1,115 @@
+1
+00:00:01,420 --> 00:00:04,580
+Three frontier models lead rival civilizations
+
+2
+00:00:04,580 --> 00:00:06,440
+in OpenCivilizationEnv,
+
+3
+00:00:06,440 --> 00:00:09,180
+and now they talk to each other.
+
+4
+00:00:09,180 --> 00:00:10,580
+This is the showmatch,
+
+5
+00:00:10,580 --> 00:00:14,300
+with every message in public and two AI casters.
+
+6
+00:00:14,300 --> 00:00:15,580
+On turn zero,
+
+7
+00:00:15,580 --> 00:00:17,220
+Rome offers friendship,
+
+8
+00:00:17,220 --> 00:00:19,380
+and China adds a warning.
+
+9
+00:00:19,380 --> 00:00:22,680
+Opus spots that each tech is worth four points,
+
+10
+00:00:22,680 --> 00:00:24,560
+and maxes out science.
+
+11
+00:00:24,560 --> 00:00:27,740
+Barbarians loot Kimi's new city seven times,
+
+12
+00:00:27,740 --> 00:00:30,450
+yet China tells Rome it prospers.
+
+13
+00:00:31,480 --> 00:00:34,640
+Ada: Prosperity is generous, Max.
+
+14
+00:00:34,640 --> 00:00:36,860
+Opus founds four cities first,
+
+15
+00:00:36,860 --> 00:00:38,730
+and signs off as the leader.
+
+16
+00:00:39,780 --> 00:00:42,230
+Ada: But 'whatever the tally' stings a little.
+
+17
+00:00:42,760 --> 00:00:44,540
+Opus wins by eleven points,
+
+18
+00:00:44,540 --> 00:00:46,620
+and Kimi concedes with grace.
+
+19
+00:00:46,620 --> 00:00:48,000
+In a two-hour game,
+
+20
+00:00:48,000 --> 00:00:50,960
+they draw a border, cross it, apologize,
+
+21
+00:00:50,960 --> 00:00:52,940
+and team up against Rome.
+
+22
+00:00:52,940 --> 00:00:55,560
+Each match is one AgentEnv task,
+
+23
+00:00:55,560 --> 00:00:58,440
+so you choose the agents, models, prompts,
+
+24
+00:00:58,440 --> 00:01:00,580
+turns, map and casters.
+
+25
+00:01:00,580 --> 00:01:02,580
+Run it with one command,
+
+26
+00:01:02,580 --> 00:01:03,380
+watch it live,
+
+27
+00:01:03,380 --> 00:01:04,880
+and keep the recording.
+
+28
+00:01:04,880 --> 00:01:07,980
+Build your own world with AgentEnv,
+
+29
+00:01:07,980 --> 00:01:10,370
+at agentenvframework.com.

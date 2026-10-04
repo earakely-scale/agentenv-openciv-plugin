@@ -808,8 +808,9 @@ class OpenCiv3Env(AgentEnvEnvironment):
         the same seed, your share of the world's land and population, what needs orders (with the call that resolves
         it), what needs attention (disorder and riot risk, cities without a defender, full production, unspent gold),
         standing orders, cities, last turn's events, and your plan. A civilization wins, and the game ends, by
-        conquest (the last one left), domination (2/3 of the land and 2/3 of the population) or, at the turn limit,
-        the top score. Lost context? Call get_turn_brief."""
+        conquest (the last one left), domination (2/3 of the land and 2/3 of the population), culture (a city with
+        20,000 culture points, or 100,000 in all and twice the next civ's) or, at the turn limit, the top score.
+        Lost context? Call get_turn_brief."""
         return await self._run("get_turn_brief", {}, self._brief)
 
     @tool()
@@ -1233,7 +1234,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
             except BridgeError:
                 world = {}
         standings = [{"civ": p["civ"], "you": p["is_human"], "defeated": p["defeated"], "score": p["score"]["total"],
-                      **({"seat": p.get("seat")} if self.multi else {})}
+                      "culture": p.get("culture", 0), **({"seat": p.get("seat")} if self.multi else {})}
                      for p in sorted(world.get("players", []), key=lambda p: -p["score"]["total"])]
         s = states[self.seats[0].civ]
         summary = {

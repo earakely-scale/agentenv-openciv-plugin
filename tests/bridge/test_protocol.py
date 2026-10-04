@@ -492,7 +492,7 @@ def test_the_top_score_wins_at_the_turn_limit(launch):
     race = s["race"]
     assert race["civs_left"] == len([p for p in b.call("score")["players"] if not p["defeated"]])
     assert race["you"]["you"] and race["you"]["civ"] == "Rome" and race["domination"] == 0.667
-    assert {"civ", "you", "score", "land", "pop"} == set(race["leader"]) == set(race["nearest_domination"])
+    assert {"civ", "you", "score", "land", "pop", "culture"} == set(race["leader"]) == set(race["nearest_domination"])
     found_capital(b)
     while not (res := b.call("end_turn", skip_idle=True))["game_over"]:
         pass

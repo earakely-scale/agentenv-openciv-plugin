@@ -3,7 +3,7 @@
 The bar is OpenCiv3's own AI playing the agent's seat on the same seed (the engine_ai baseline), and the agent's
 standing among the civilizations it played: its rank, and its share of the world's land and population against
 Civ III's domination victory, which needs two thirds of each. The game ends early when a civilization wins by
-conquest or domination; another civilization's victory counts as a defeat.
+conquest, domination or culture; another civilization's victory counts as a defeat.
 """
 
 import asyncio
@@ -41,7 +41,7 @@ def grade(s: dict) -> list[dict]:
         {"criterion": "played to its end: the turn limit, or a victory",
          "result": s["turn"] >= s["turn_limit"] or victory is not None,
          "turn": s["turn"], "turn_limit": s["turn_limit"], "victory": victory},
-        {"criterion": "not defeated, and no other civilization won by conquest or domination",
+        {"criterion": "not defeated, and no other civilization won by conquest, domination or culture",
          "result": not s["defeated"] and not beaten},
         {"criterion": f"score as a fraction of the {REFERENCE} baseline's at the same turn", "weight": 2,
          "result": reference is not None and total >= reference,

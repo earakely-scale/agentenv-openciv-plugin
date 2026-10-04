@@ -32,6 +32,8 @@ MESSAGE_CHARS = 1200
 # An item is delivered only when the city is bigger than its population cost (Settler 2, Worker 1 in the ruleset).
 MIN_SIZE = {"Settler": 3, "Worker": 2}
 IDLE_GOLD = 100
+# The brief shows the culture race once a civ has 10,000 culture or a city 2,000 (a tenth of the victories' goals).
+CULTURE_SHOWN = (10_000, 2_000)
 # Governments that rush production with population, not gold (Civ III rules).
 FORCED_LABOUR = {"Despotism", "Communism", "Anarchy"}
 
@@ -378,6 +380,30 @@ def domination_race(state: dict) -> str | None:
     return f"land/pop {_shares(r['you'])}" + ("" if near.get("you") else f", top {_race_name(near)} {_shares(near)}")
 
 
+def kilo(n: int) -> str:
+    """Rounded down, so a goal never shows as reached early: 999, 5.8k, 99.9k, 215k."""
+    return str(n) if n < 1000 else f"{n // 100 / 10:g}k" if n < 100_000 else f"{n // 1000}k"
+
+
+def culture_race(state: dict) -> str | None:
+    """The culture race once it matters (CULTURE_SHOWN): Civ III's cultural victory goes to a civ with a city of
+    20,000 culture, or with 100,000 and at least twice the next civ's."""
+    r = state.get("race")
+    if not r or not r.get("you") or not r.get("nearest_culture"):
+        return None
+    top, second, city = r["nearest_culture"], r.get("culture_runner_up"), r.get("best_city") or {}
+    if top["culture"] < CULTURE_SHOWN[0] and city.get("culture", 0) < CULTURE_SHOWN[1]:
+        return None
+    lead = (f"you {kilo(r['you']['culture'])}" if top.get("you")
+            else f"you {kilo(r['you']['culture'])}, top {_race_name(top)} {kilo(top['culture'])}")
+    if second and second["culture"]:
+        tenths = top["culture"] * 10 // second["culture"]   # rounded down, so 2x never shows early
+        lead += f" ({'>99.9' if tenths > 999 else f'{tenths / 10:.1f}'}x the next)"
+    owner = "yours" if city.get("you") else city.get("civ") or "an unmet civ"
+    return (f"CULTURE {lead} · best city {city.get('name') or '?'} ({owner}) {kilo(city.get('culture', 0))}"
+            f" · a civ wins at {kilo(r['culture_goal'])} and 2x the next, or a city at {kilo(r['city_culture_goal'])}")
+
+
 def pace_line(state: dict, start_techs: int) -> str:
     s, turn = state["score"], state["turn"]
     return (f"PACE cities {s['cities']} {_milestone(CITY_TARGETS, turn, s['cities'])} · "
@@ -605,6 +631,8 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
     lines.append(f"SCORE {score_text(s['score'])}" + (f" · {rank}" if rank else "")
                  + f" · explored {num(s.get('explored_pct', 0))}%")
     lines.append(pace_line(s, start_techs) + (f" · {d}" if (d := domination_race(s)) else ""))
+    if line := culture_race(s):
+        lines.append(line)
     if baselines:
         lines.append(vs_line(s["turn"], baselines))
 
@@ -839,8 +867,8 @@ def match_line(s: dict) -> str | None:
     return (f"MATCH vs agents {', '.join(agents)}" + (f" and the AI's {', '.join(ai)}" if ai else "")
             + " · every agent plays each turn at once; end_turn waits for the others"
             + f" · it ends at T{s['turn_limit']}, or once one agent's civilization is the last an agent plays"
-            + " (conquest) or any civ holds 2/3 of the world's land and population (domination); else the top"
-            + " score wins"
+            + " (conquest), any civ holds 2/3 of the world's land and population (domination), or has a city of"
+            + " 20,000 culture or 100,000 culture and twice the next civ's (culture); else the top score wins"
             + " · message() talks to the other agents")
 
 

@@ -33,10 +33,15 @@ only client: it renders the facts the bridge returns into text for the agent.
 - **Victory.** After every turn the bridge checks Civ III's victories, for every civilization, an agent's or the
   AI's (the engine has none of its own): conquest, when it is the last civilization left (with several seats, also
   when its seat is the last one an agent still plays); domination, when it holds two thirds of the world's land
-  tiles and two thirds of its population; and, at the turn limit, score, when it has the highest score (a tie on
-  top is no one's victory). A one-seat game whose civilization is defeated in its own turn (its last units
-  disbanded or lost) is checked at once, since no turn ends after that. The game is then over: every seat gets a `victory` event, `game_over` turns true, and
-  `state`, `score` and the world snapshot carry `"victory": {"kind": "conquest"|"domination"|"score", "civ",
+  tiles and two thirds of its population; culture, when one of its cities has 20,000 culture points, or it has
+  100,000 and at least twice as many as any other civilization (Civ III's default thresholds, the BIQ's
+  OneCityCultureWin and AllCitiesCultureWin, which the ruleset leaves out; a civ's culture is its cities' culture,
+  as the engine's history counts it, so a city lost takes its culture with it, and a city taken starts at 0 for
+  its new owner); and, at the turn limit, score, when it has the highest score (a tie on top is no one's victory).
+  The checks run in that order, so the first one met wins; among several cities over 20,000 the one with the most
+  culture (the oldest on a tie) decides. A one-seat game whose civilization is defeated in its own turn (its last
+  units disbanded or lost) is checked at once, since no turn ends after that. The game is then over: every seat gets a `victory` event, `game_over` turns true, and
+  `state`, `score` and the world snapshot carry `"victory": {"kind": "conquest"|"domination"|"culture"|"score", "civ",
   "label", "turn"}` (`label` is the seat's, null for an AI civ; null until someone wins). `autoplay` plays on
   after a victory, as after a defeat, so baselines cover every turn they were asked for.
 - **Score** = `10·cities + 3·pop + 1·tiles + 4·techs`, where `tiles` counts owned tiles that count
@@ -72,10 +77,13 @@ The human player's full situation. Result:
 ```json
 {
   "turn": 12, "turn_limit": 60, "game_over": false, "defeated": false, "victory": null, "date": "3400 BC",
-  "race": {"civs_left": 5, "rank": 2, "domination": 0.667,
-           "you": {"civ": "Rome", "you": true, "score": 61, "land": 0.04, "pop": 0.05},
-           "leader": {"civ": "Greece", "you": false, "score": 66, "land": 0.05, "pop": 0.06},
-           "nearest_domination": {"civ": null, "you": false, "score": 58, "land": 0.06, "pop": 0.05}},
+  "race": {"civs_left": 5, "rank": 2, "domination": 0.667, "culture_goal": 100000, "city_culture_goal": 20000,
+           "you": {"civ": "Rome", "you": true, "score": 61, "land": 0.04, "pop": 0.05, "culture": 24},
+           "leader": {"civ": "Greece", "you": false, "score": 66, "land": 0.05, "pop": 0.06, "culture": 40},
+           "nearest_domination": {"civ": null, "you": false, "score": 58, "land": 0.06, "pop": 0.05, "culture": 31},
+           "nearest_culture": {"civ": "Greece", "you": false, "score": 66, "land": 0.05, "pop": 0.06, "culture": 40},
+           "culture_runner_up": {"civ": null, "you": false, "score": 58, "land": 0.06, "pop": 0.05, "culture": 31},
+           "best_city": {"civ": "Greece", "you": false, "name": "Athens", "culture": 22}},
   "civ": "Rome", "era": 0, "government": "Despotism", "anarchy_until": null, "tile_penalty": true,
   "governments": [{"name": "Monarchy", "corruption": "problematic", "hurry": "gold", "tile_penalty": false,
                    "trade_bonus": false, "unit_cost": 1, "free_units_per_city": 3}],
@@ -140,8 +148,12 @@ The human player's full situation. Result:
 - `date` is the turn's year as the client's turn box shows it (`TimeOptions.GetRawNumber`): `"4000 BC"`,
   `"AD 1250"`; null for a ruleset that counts months or weeks.
 - `race` is how each victory stands: `civs_left` (undefeated civilizations), the seat's `rank` by score (1 + the
-  civs with a higher score), and `you`, the score `leader` and the civ `nearest_domination` (the highest of its land
-  and population shares' minimum), each with its score and shares; a civ the seat has not met has `civ` null.
+  civs with a higher score), and `you`, the score `leader`, the civ `nearest_domination` (the highest of its land
+  and population shares' minimum), the civ with the most culture (`nearest_culture`) and the next one
+  (`culture_runner_up`, null with one civ left), each with its score, shares and `culture` (its cities' culture
+  points); a civ the seat has not met has `civ` null. `best_city` is the city with the most culture for its owner
+  (`{"civ", "you", "name", "culture"}`, `civ` and `name` null for an unmet civ's), and `culture_goal` and
+  `city_culture_goal` are the cultural victory's thresholds (100,000 with twice the next civ's, and 20,000).
   `rank` and `you` are null once the seat is defeated; `race` is null when every civ is.
 - `last_events` are the events produced by the most recent `end_turn` (empty before the first).
 - `finance` is the domestic advisor's income and expenses, `Player.AggregateFlows()` as the client's
@@ -472,8 +484,9 @@ false). Result: `{"turn", "game_over", "defeated", "score": {...}, "trades_decli
 
 ### `score`
 Result: `{"turn", "human": {score}, "players": [{"civ", "is_human", "seat", "defeated", "score": {...}, "share":
-{"land", "pop"}}], "human_share": {"land", "pop"}}`: each player's fractions of the world's land tiles and of its
-population (Civ III's domination victory needs two thirds of each). `seat` is the seat's label (or civ) for a civ an
+{"land", "pop"}, "culture"}], "human_share": {"land", "pop"}}`: each player's fractions of the world's land tiles and
+of its population (Civ III's domination victory needs two thirds of each), and its culture points, its cities' (the
+cultural victory needs 100,000 and twice the next civ's). `seat` is the seat's label (or civ) for a civ an
 agent plays, else null; `is_human` marks the seat the command plays. `victory` as in `state`.
 
 ### `revolution`
@@ -586,7 +599,7 @@ events, decisions and plan state are its own. An unknown seat fails with `unknow
 - **Victory** (see Conventions): conquest also when one seat's civilization is the last an agent still plays
   (the other seats are defeated), whatever AI civs are left. The game is then over for every seat. A victory on
   score at the turn limit may be an AI civ's; the victor verifier then still ranks the seats by score, while an AI
-  civ's conquest or domination leaves the match without a victor.
+  civ's conquest, domination or cultural victory leaves the match without a victor.
 - `autoplay` fails with `multi_seat`. The autosave (format 2) keeps every seat, the victory, the battles
   `known_map` lists and the standing peace and trade offers (`trade_offers`; a save without them loads with none);
   `load` restores them.

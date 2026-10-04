@@ -471,6 +471,7 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 			["players"] = Json.Array(gd.players.Where(p => !p.isBarbarians), p => new JsonObject {
 				["civ"] = p.civilization.name, ["is_human"] = p == human, ["seat"] = SeatOf(p) is Seat s ? s.Label ?? Owner(p) : null,
 				["defeated"] = p.defeated, ["score"] = ScoreOf(p), ["share"] = Share(p),
+				["culture"] = CultureOf(p),
 			}),
 			["human_share"] = Share(human),
 			["victory"] = VictoryJson(),
