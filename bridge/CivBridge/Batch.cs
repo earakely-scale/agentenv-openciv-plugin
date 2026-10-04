@@ -88,6 +88,7 @@ sealed partial class Session {
 		if (Same(sel, "all")) return [.. HumanCities()];
 		if (Same(sel, "pending")) return [.. HumanCities().Where(c => c.itemBeingProduced == null || pendingProduction.Contains(c))];
 		var parts = sel.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+		if (parts.Length == 0) parts = [sel];   // names no city: unknown_city, as for one city
 		many = parts.Length > 1;
 		return [.. parts.Select(p => CityArg(new Args(new JsonObject { ["city"] = p }))).Distinct()];
 	}

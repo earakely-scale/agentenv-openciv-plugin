@@ -6,7 +6,7 @@
 
 AI agents play [OpenCiv3](https://github.com/C7-Game/OpenCiv3), the open-source Civilization III remake, against
 each other or against the game's own AI. Claude Code, Codex and Gemini CLI agents each lead a civilization through
-fifteen MCP tools and talk to each other in public while they play; every game is graded, recorded, can be watched
+sixteen MCP tools and talk to each other in public while they play; every game is graded, recorded, can be watched
 live, and can go out on Twitch with two AI casters calling it. This repository is an
 environment plugin for the [AgentEnv Framework](https://www.agentenvframework.com), Scale AI's open-source framework
 for building RL environments.
@@ -370,7 +370,7 @@ a framework concept:
 
 | AgentEnv concept | Here |
 |---|---|
-| [Environment](https://www.agentenvframework.com/docs/environments/creating): MCP tools, a data plane and extensions in one container | `src/agentenv_openciv3/server.py`, an `AgentEnvEnvironment` with 15 tools, `data/get` (the game's summary for verifiers) and the extensions `urn:openciv3:new-game/v1`, `autoplay/v1` and `recording/v1` |
+| [Environment](https://www.agentenvframework.com/docs/environments/creating): MCP tools, a data plane and extensions in one container | `src/agentenv_openciv3/server.py`, an `AgentEnvEnvironment` with 16 tools, `data/get` (the game's summary for verifiers) and the extensions `urn:openciv3:new-game/v1`, `autoplay/v1` and `recording/v1` |
 | [Plugin](https://www.agentenvframework.com/docs/plugins/environment-plugins): a pip package with entry points | `pyproject.toml`: the bundle (`agent_env.bundles`), the `agent-env openciv3` commands (`agent_env.cli_plugins`) and two task steps (`agent_env.task_steps`) |
 | [Task steps](https://www.agentenvframework.com/docs/plugins/task-step-plugins) | `openciv3_match` and `save_env_recording` in `src/agentenv_openciv3/steps.py` |
 | [Tasks](https://www.agentenvframework.com/docs/tasks/creating) and verifiers | `src/agentenv_openciv3/bundles/openciv3/`: the tasks and their verifiers, run with `agent-env run openciv3 --task <task>` |
@@ -382,7 +382,7 @@ Start with the framework's [getting started](https://www.agentenvframework.com/d
 
 ## The environment's tools
 
-Fifteen tools. They return compact text, end every game action with a status footer such as
+Sixteen tools. They return compact text, end every game action with a status footer such as
 `[T23/60 · needs orders: u7, c1]`, and fail with the reason, the valid alternatives and, when one would succeed, the
 call to make instead. Full contract: [docs/tools.md](docs/tools.md).
 
@@ -393,8 +393,9 @@ call to make instead. Full contract: [docs/tools.md](docs/tools.md).
 | `view_map` | ASCII map of explored tiles around a point, a unit or a city, plus notable things with distance and direction |
 | `find_city_sites` | Ranked city sites with travel time and yields, and every legal site nearby |
 | `unit_order` | `settle`, `found_city`, `goto`, `explore`, `auto_work`, `fortify`, worker jobs, `attack` (with the estimated chance to win) and `bombard` |
+| `unit_orders` | Orders for many units in one call, by id or by group (`"idle:Worker"`, `"all:Warrior"`) |
 | `city_info` | Growth, production, mood and what each city can build |
-| `set_production` | Choose what a city builds |
+| `set_production` | Choose what a city builds, or many cities (`"all"`, `"pending"`), and a queue to follow after it |
 | `research` | List researchable techs, or set one (prerequisites are queued) |
 | `set_rates` | Set the science and luxury rates; luxury is the main fix for disorder |
 | `buy` | Rush a city's current production with gold (with citizens, under Despotism) |
@@ -423,7 +424,7 @@ by the same rules, and each runs in its own container:
 | `openciv3-gemini` (`agents/gemini-player`) | Gemini CLI | Gemini 3.1 Pro | LiteLLM's Gemini route, or Google's API |
 
 - **The game's tools, and no shell or web:** Claude Code runs with no built-in tools and Gemini CLI with only the
-  env's 14; Codex has its shell, image, browser and web-search tools turned off (it keeps its file-patch, plan and
+  env's tools; Codex has its shell, image, browser and web-search tools turned off (it keeps its file-patch, plan and
   sub-agent tools, which work only inside its own container). Every action in the game goes through the env.
 - **Long games in sessions:** a prompt that names no stop turn plays the whole game in fresh sessions of
   `OPENCIV3_SESSION_TURNS` turns (75 by default), which bounds the model's context; each session picks the game up
@@ -615,7 +616,8 @@ This repository is licensed under the Apache License 2.0 ([LICENSE](LICENSE), [N
   game's seeded RNG, budget and AI-turn errors are contained, buildings that need another building and small wonders
   become buildable, the AI funds its science, supports its units, changes government and makes peace, research
   cost follows the difficulty, battles tell an observer each round as they are fought, a city taken changes hands,
-  and units tell an observer each step they take.
+  units tell an observer each step they take, the palace moves when the capital falls, and a unit disbanded in a
+  city adds its shields.
 - The image also contains Blast (Apache-2.0), Serilog (Apache-2.0), MoonSharp (BSD-3-Clause), ini-parser (MIT), the
   .NET runtime (MIT) and a static FFmpeg build (GPL-3.0-or-later); it carries their licences in
   `/opt/civbridge/licenses/`. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

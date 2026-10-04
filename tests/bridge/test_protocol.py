@@ -973,6 +973,7 @@ def test_orders_for_many_units_and_cities_at_once(launch):
     res = b.call("set_production", city=f"{cities[0]},{cities[1]}", item="Warrior")
     assert [r["city"] for r in res["results"]] == cities[:2] and res["ok"] == 2
     assert b.error("set_production", city="c1,c999", item="Warrior")["code"] == "unknown_city"
+    assert b.error("set_production", city=" , ", item="Warrior")["code"] == "unknown_city"
     pending = b.call("set_production", city="pending", item="Warrior") if any(
         x["kind"] in ("choose_production", "no_production") for x in b.call("state")["blockers"]) else None
     assert pending is None or pending["ok"] >= 1
