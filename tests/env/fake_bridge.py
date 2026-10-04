@@ -385,10 +385,17 @@ class Game:
     def game_over(self) -> bool:
         return self.turn >= self.turn_limit
 
+    def race(self) -> dict:
+        you = {"civ": self.civ, "you": True, "score": self.score()["total"], "land": 0.04, "pop": 0.05}
+        greece = {"civ": "Greece", "you": False, "score": you["score"] + 5, "land": 0.05, "pop": 0.06}
+        return {"civs_left": 4, "rank": 2, "domination": 0.667, "you": you, "leader": greece,
+                "nearest_domination": greece}
+
     def state(self) -> dict:
         r = self.research
         return {
             "turn": self.turn, "turn_limit": self.turn_limit, "game_over": self.game_over(), "defeated": False,
+            "victory": None, "date": f"{4000 - 50 * self.turn} BC", "race": self.race(),
             "civ": self.civ, "era": 0, "government": self.government, "anarchy_until": self.anarchy_until,
             "tile_penalty": self.government == "Despotism",
             "governments": [g for g in self.governments_view()["available"]

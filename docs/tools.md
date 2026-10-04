@@ -10,7 +10,7 @@ the valid alternatives and the exact call to make instead.
 
 | Tool | Args | Returns |
 |---|---|---|
-| `get_turn_brief` | — | Turn and limit, gold, research and ETA, score, a pace line against the targets and both baselines (null and built-in AI on the same seed), what needs orders, standing orders, one line per city, the last turn's events, and the agent's plan. Self-contained: "lost context? call get_turn_brief". |
+| `get_turn_brief` | — | Turn and limit with the year, gold, research and ETA, score with the seat's rank among the civilizations, a pace line against the targets with its share of the world's land and population against the civ nearest domination, both baselines (null and built-in AI on the same seed), what needs orders (more than two cities in disorder fold into one line with the luxury rate that calms them all), standing orders, one line per city, the last turn's events, and the agent's plan. Self-contained: "lost context? call get_turn_brief". |
 | `list_units` | `filter`: `needs_orders` (default) or `all`; `type` (optional, e.g. `"Worker"`) | One line per unit: id, type, `(x,y)`, moves, status or standing order, valid orders, and why `found_city` is or isn't possible here; with many idle units, the `unit_orders` call that orders them by type. |
 | `view_map` | `x`, `y`, `radius` (default 3, max 6), or `around` (`"u7"`, `"c1"`) | Staggered ASCII of the explored tiles, a legend, then a "notable" list (resources, rivers, foreign units, cities, good sites) with distance and direction. Unexplored tiles are blank. |
 | `find_city_sites` | `unit` (optional), `top` (default 5) | Ranked sites: `(x,y)`, score, distance and direction, travel turns, yields, river or coast. |
@@ -50,8 +50,9 @@ A game started with `seats` (new-game extension) is played by several agents, on
   `OPENCIV3_SEAT` when set); with no header, the first civ. A game with one seat ignores the header. Each seat has
   its own ids, plan, notices and action log.
 - **The rules:** the brief's `MATCH` line names the other agents and the AI civilizations and says how the match
-  ends: at the turn limit, or sooner by conquest (one agent's civilization is the last an agent still plays) or
-  domination (one holds two thirds of the world's land and population). A victory ends the game for everyone, and
+  ends: at the turn limit (the top score wins), or sooner by conquest (one agent's civilization is the last an
+  agent still plays, or any civ is the last left) or domination (any civ holds two thirds of the world's land and
+  population). A victory ends the game for everyone, and
   GAME OVER names the winner; `data/get` reports it as `victory`.
 - **The turn:** all seats play it at the same time. `end_turn` holds until every seat has ended the turn, then
   returns this seat's turn report and the next brief; meanwhile the env serves the other seats. After 10 minutes it
@@ -152,8 +153,9 @@ first in a browser.
 - When the same call fails 3 times in a turn, the error adds: "same error 3x — try one of: …".
 - After 25 calls in one turn, every response adds: "consider end_turn(skip_idle=true)".
 - When a standing order can't make progress, it becomes an event and the unit goes back to idle.
-- At the turn limit, `end_turn` returns `GAME OVER` with final metrics, and further game actions fail
-  with "the game is over".
+- At the turn limit, or when a civilization wins earlier by conquest or domination, `end_turn` returns `GAME OVER`
+  naming the winner (the top score's at the limit, none on a tie) with final metrics, and further game actions
+  fail with "the game is over".
 
 ## Action log
 

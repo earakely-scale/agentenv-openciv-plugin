@@ -30,6 +30,14 @@ only client: it renders the facts the bridge returns into text for the agent.
   (one of `N NE E SE S SW W NW`, or `here`).
 - **Turn limit.** `new_game` takes `turn_limit`. When `turn >= turn_limit` the game is over:
   `game_over` becomes true and `end_turn`/`unit_order` fail with `game_over`.
+- **Victory.** After every turn the bridge checks Civ III's victories, for every civilization, an agent's or the
+  AI's (the engine has none of its own): conquest, when it is the last civilization left (with several seats, also
+  when its seat is the last one an agent still plays); domination, when it holds two thirds of the world's land
+  tiles and two thirds of its population; and, at the turn limit, score, when it has the highest score (a tie on
+  top is no one's victory). The game is then over: every seat gets a `victory` event, `game_over` turns true, and
+  `state`, `score` and the world snapshot carry `"victory": {"kind": "conquest"|"domination"|"score", "civ",
+  "label", "turn"}` (`label` is the seat's, null for an AI civ; null until someone wins). `autoplay` plays on
+  after a victory, as after a defeat, so baselines cover every turn they were asked for.
 - **Score** = `10·cities + 3·pop + 1·tiles + 4·techs`, where `tiles` counts owned tiles that count
   for score and `techs` counts known techs (including starting techs). Every score object carries the
   components: `{"total", "cities", "pop", "tiles", "techs"}`.
@@ -62,7 +70,11 @@ The human player's full situation. Result:
 
 ```json
 {
-  "turn": 12, "turn_limit": 60, "game_over": false, "defeated": false,
+  "turn": 12, "turn_limit": 60, "game_over": false, "defeated": false, "victory": null, "date": "3400 BC",
+  "race": {"civs_left": 5, "rank": 2, "domination": 0.667,
+           "you": {"civ": "Rome", "you": true, "score": 61, "land": 0.04, "pop": 0.05},
+           "leader": {"civ": "Greece", "you": false, "score": 66, "land": 0.05, "pop": 0.06},
+           "nearest_domination": {"civ": null, "you": false, "score": 58, "land": 0.06, "pop": 0.05}},
   "civ": "Rome", "era": 0, "government": "Despotism", "anarchy_until": null, "tile_penalty": true,
   "governments": [{"name": "Monarchy", "corruption": "problematic", "hurry": "gold", "tile_penalty": false,
                    "trade_bonus": false, "unit_cost": 1, "free_units_per_city": 3}],
@@ -109,7 +121,16 @@ The human player's full situation. Result:
   while it refuses to talk).
 - `needs_orders` is true when the unit can move, is not under a standing order, and is not fortified.
 - `blockers` lists what stops `end_turn`: `no_research` (has a city, nothing being researched),
-  `no_production` (a city producing nothing), `idle_unit` (one per unit with `needs_orders`).
+  `no_production` (a city producing nothing), `idle_unit` (one per unit with `needs_orders`). A `disorder` blocker
+  (a city in civil disorder, or that riots when the turn ends) also has `now` (in disorder already), `unhappy` and
+  `happy` (its citizens, by the engine's riot rule) and `luxury`, the lowest luxury rate (tenths) that calms it, or
+  null when raising luxury cannot.
+- `date` is the turn's year as the client's turn box shows it (`TimeOptions.GetRawNumber`): `"4000 BC"`,
+  `"AD 1250"`; null for a ruleset that counts months or weeks.
+- `race` is how each victory stands: `civs_left` (undefeated civilizations), the seat's `rank` by score (1 + the
+  civs with a higher score), and `you`, the score `leader` and the civ `nearest_domination` (the highest of its land
+  and population shares' minimum), each with its score and shares; a civ the seat has not met has `civ` null.
+  `rank` and `you` are null once the seat is defeated; `race` is null when every civ is.
 - `last_events` are the events produced by the most recent `end_turn` (empty before the first).
 - `finance` is the domestic advisor's income and expenses, `Player.AggregateFlows()` as the client's
   `DomesticAdvisor.ShowAdvisor` shows them. Income: `cities` "From cities" (`CityInflows()`: the cities'
@@ -399,7 +420,7 @@ false). Result: `{"turn", "game_over", "defeated", "score": {...}, "trajectory":
 Result: `{"turn", "human": {score}, "players": [{"civ", "is_human", "seat", "defeated", "score": {...}, "share":
 {"land", "pop"}}], "human_share": {"land", "pop"}}`: each player's fractions of the world's land tiles and of its
 population (Civ III's domination victory needs two thirds of each). `seat` is the seat's label (or civ) for a civ an
-agent plays, else null; `is_human` marks the seat the command plays.
+agent plays, else null; `is_human` marks the seat the command plays. `victory` as in `state`.
 
 ### `revolution`
 Args: `government` (a name from `state.governments`). Starts anarchy (the engine's own transition: 2 to 6 turns,
@@ -450,12 +471,10 @@ events, decisions and plan state are its own. An unknown seat fails with `unknow
 - **Peace between seats** has no price: `propose_peace` from one seat stands until the end of the next turn and
   reaches the other as a `peace_offered` event; a `propose_peace` from the other meanwhile signs it, each side paying
   the gold it offered. Talks are never refused between seats.
-- **Victory.** After every turn the bridge checks for a winner: conquest, when one seat's civilization is the
-  last an agent still plays (the others are defeated), or domination, when one seat holds two thirds of the
-  world's land tiles and two thirds of its population (Civ III's rule). The game is then over for every seat:
-  each gets a `victory` event, `game_over` turns true, and `state`, `score` and the world snapshot carry
-  `"victory": {"kind": "conquest"|"domination", "civ", "label", "turn"}` (null until then). At the turn limit no
-  one has won this way, and the verifier ranks the seats by score.
+- **Victory** (see Conventions): conquest also when one seat's civilization is the last an agent still plays
+  (the other seats are defeated), whatever AI civs are left. The game is then over for every seat. A victory on
+  score at the turn limit may be an AI civ's; the victor verifier then still ranks the seats by score, while an AI
+  civ's conquest or domination leaves the match without a victor.
 - `autoplay` fails with `multi_seat`. The autosave (format 2) keeps every seat, the victory and the battles
   `known_map` lists; `load` restores them.
 

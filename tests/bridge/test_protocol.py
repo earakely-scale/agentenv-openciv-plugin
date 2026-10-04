@@ -495,7 +495,8 @@ def test_the_top_score_wins_at_the_turn_limit(launch):
     b.call("autoplay", turns=49, policy="engine_ai")
     res = b.call("end_turn", skip_idle=True)
     victory = score_victory(b, 50)
-    assert victory and victory["civ"] != "Rome" and res["game_over"]   # an AI's victory ends the game too and b.call("state")["victory"] == b.call("score")["victory"] == victory
+    assert victory and victory["civ"] != "Rome" and res["game_over"]   # an AI's victory ends the game too
+    assert b.call("state")["victory"] == b.call("score")["victory"] == victory
     top = next(p for p in b.call("score")["players"] if p["civ"] == victory["civ"])
     assert res["events"][-1]["kind"] == "victory" and res["events"][-1]["text"].startswith(
         f"{victory['civ']} won on score at the turn limit: {top['score']['total']} to ")

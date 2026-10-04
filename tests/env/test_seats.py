@@ -69,7 +69,7 @@ async def settle(tools: dict) -> None:
 async def test_each_request_plays_its_seat(seats):
     env, tools = seats
     for civ in SEATS:
-        assert (await tools[civ]("get_turn_brief")).startswith(f"T0/10 · {civ} · Despotism")
+        assert (await tools[civ]("get_turn_brief")).startswith(f"T0/10 (4000 BC) · {civ} · Despotism")
     assert "u1 Settler founded Athens (c1)" in await tools["Greece"]("unit_order", unit="u1", order="found_city")
     assert "found here: yes" in await tools["Rome"]("list_units", filter="all")
     assert "'Babylon' is not a seat in this game; the seats are Rome, Greece, Egypt." in await SeatTools(
@@ -80,7 +80,7 @@ async def test_each_request_plays_its_seat(seats):
 
 async def test_an_agent_names_its_seat_by_its_label(seats):
     env, _ = seats
-    assert (await SeatTools(env, "b")("get_turn_brief")).startswith("T0/10 · Greece")
+    assert (await SeatTools(env, "b")("get_turn_brief")).startswith("T0/10 (4000 BC) · Greece")
     brief = await SeatTools(env, "Egypt")("get_turn_brief")
     assert ("MATCH vs agents Rome, Greece · every agent plays each turn at once; end_turn waits for the others · it "
             "ends at T10, or once one agent's civilization is the last an agent plays (conquest)") in brief
@@ -96,7 +96,7 @@ async def test_the_last_agent_standing_wins_and_the_game_ends(env_vars, monkeypa
         await greece("unit_order", unit="u2", order="disband")
         await greece("unit_order", unit="u1", order="disband")
         text = await rome("end_turn", skip_idle=True)
-        assert "Rome (A) won by conquest: it is the last civilization an agent still plays." in text
+        assert "Rome (A) won by conquest: it is the last civilization left." in text
         assert "GAME OVER — you won by conquest on T1." in text
         [part] = await env.data_get()
         assert part.data["victory"] == {"kind": "conquest", "civ": "Rome", "label": "A", "turn": 1}
@@ -113,11 +113,11 @@ async def test_end_turn_waits_for_every_seat(seats):
     await asyncio.sleep(0.3)
     assert not rome.done() and not greece.done()
     # The waiting seats leave the env free: Egypt still plays its turn.
-    assert (await tools["Egypt"]("get_turn_brief")).startswith("T0/10 · Egypt")
+    assert (await tools["Egypt"]("get_turn_brief")).startswith("T0/10 (4000 BC) · Egypt")
     egypt = await tools["Egypt"]("end_turn", skip_idle=True)
     for text in (await rome, await greece, egypt):
         assert text.startswith("TURN T0 → T1 (1 turn)")
-    assert (await tools["Greece"]("get_turn_brief")).startswith("T1/10 · Greece")
+    assert (await tools["Greece"]("get_turn_brief")).startswith("T1/10 (3950 BC) · Greece")
 
     [part] = await env.data_get()
     data = part.data
@@ -164,7 +164,7 @@ async def test_the_turn_ends_when_the_seat_still_playing_it_is_defeated(env_vars
         await env.new_game(seed=1, opponents=1, seats=["Greece"], labels={"Rome": "greece", "Greece": "rome"},
                            turn_limit=10)
         rome, greece = SeatTools(env, "greece"), SeatTools(env, "rome")
-        assert (await rome("get_turn_brief")).startswith("T0/10 · Rome")
+        assert (await rome("get_turn_brief")).startswith("T0/10 (4000 BC) · Rome")
         waiting = asyncio.create_task(rome("end_turn", skip_idle=True))
         await asyncio.sleep(0.3)
         await greece("unit_order", unit="u2", order="disband")
@@ -191,8 +191,8 @@ async def test_a_long_wait_returns_and_the_turn_is_not_lost(seats, monkeypatch):
     assert (await tools["Egypt"]("end_turn", skip_idle=True)).startswith("TURN T0 → T1")
     # Rome's next end_turn reports the turn it waited for instead of ending T1 unplayed.
     assert (await tools["Rome"]("end_turn")).startswith("TURN T0 → T1")
-    assert (await tools["Rome"]("get_turn_brief")).startswith("T1/10 · Rome")
+    assert (await tools["Rome"]("get_turn_brief")).startswith("T1/10 (3950 BC) · Rome")
 
 
 async def test_a_game_with_one_seat_ignores_the_seat_header(env):
-    assert (await SeatTools(env, "default-agent")("get_turn_brief")).startswith("T1/8 · Rome · Despotism")
+    assert (await SeatTools(env, "default-agent")("get_turn_brief")).startswith("T1/8 (3950 BC) · Rome · Despotism")
