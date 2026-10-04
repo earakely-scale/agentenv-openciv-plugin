@@ -312,8 +312,9 @@ sequenceDiagram
 
 A seat that makes no call for five minutes has its turn ended for it; the verifier fails a match in which the env
 ended more than a tenth of any agent's turns. A game ends at its turn limit, or sooner when every other agent's
-civilization has been destroyed (conquest) or one agent holds two thirds of the world's land and population
-(domination).
+civilization has been destroyed (conquest), one agent holds two thirds of the world's land and population
+(domination), or any civilization has a city with 20,000 culture points or 100,000 in all and twice the next one's
+(culture).
 
 **Where each piece runs** (every player agent and the env run in their own containers):
 
@@ -414,9 +415,10 @@ luxury rates and buy production; move, automate, fortify, attack and bombard; ch
 make peace; a city that falls in war is captured (one of size 1 is destroyed). They cannot trade techs or gold, and
 the score (10 × cities + 3 × citizens + 1 × tiles + 4 × techs) rewards growth. Any civilization, an agent's or the
 AI's, wins as in Civ III by conquest (the last one left), domination (two thirds of the world's land and of its
-population) or the top score at the turn limit, and the game ends there. The engine still makes some choices
-itself (what a city builds after finishing something, the next tech); those picks are reported and block the turn
-until the agent changes or accepts them. [docs/full-game.md](docs/full-game.md) lists what a full game still lacks.
+population), culture (a city with 20,000 culture points, or 100,000 in all and twice the next civilization's) or
+the top score at the turn limit, and the game ends there. The engine still makes some choices itself (what a city
+builds after finishing something, the next tech); those picks are reported and block the turn until the agent
+changes or accepts them. [docs/full-game.md](docs/full-game.md) lists what a full game still lacks.
 
 ## The player agents
 
@@ -449,10 +451,10 @@ claude "Play OpenCiv3 with the openciv3 tools until GAME OVER." --allowedTools "
 
 ## Grading
 
-**A match** (`three-agents`, `frontier`) is graded by the victor verifier. A conquest or domination ends the game and
-wins it; otherwise the top score at the turn limit wins. The grade is 1 for a valid match with one victor and 0.5 for
-a tie, and 0 when the match didn't reach its end, the engine failed, or the env ended more than 10% of any agent's
-turns. Each agent's rank, score, cities, techs and share of the world are reported alongside.
+**A match** (`three-agents`, `frontier`) is graded by the victor verifier. A conquest, domination or cultural victory
+ends the game and wins it; otherwise the top score at the turn limit wins. The grade is 1 for a valid match with one
+victor and 0.5 for a tie, and 0 when the match didn't reach its end, the engine failed, or the env ended more than 10%
+of any agent's turns. Each agent's rank, score, cities, techs and share of the world are reported alongside.
 
 **A single agent** (`play`) is graded against baselines the env plays in the background on the same seed: `null`
 (never founds a city), `settler_bot` (a no-LLM script that follows the env's own suggestions through the same tools,

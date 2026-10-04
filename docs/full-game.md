@@ -58,7 +58,7 @@ rotated at a 100K context cap.
 | Difficulty | Regent or harder | all 8 levels. Harder levels make the AI research slower, the opposite of Civ III (`GameData.cs:380`) |
 | Barbarians | Roaming | all 5 levels. Only Warriors, Horsemen and Galleys; a barbarian in a city steals gold instead of razing it |
 | Length | 540 turns | up to 1000; the env defaults to 60 |
-| Victory | conquest, domination, space, UN, culture, score | none |
+| Victory | conquest, domination, space, UN, culture, score | conquest, domination, culture and score, decided by the bridge; no space race or UN, which no civ gets near (below) |
 | Government | revolutions | Despotism only: no command for the agent, no code for the AI |
 | War and peace | both | the AI declares war and never makes peace; the agent has neither |
 | City capture | yes | yes (patch 0011): the city loses a citizen, its palace and small wonders; one of size 1 is destroyed; the loser gets a new capital (patch 0013) |
@@ -70,9 +70,36 @@ rotated at a 100K context cap.
 
 1. **No ending: fixed in the bridge.**
    - The engine's turn loop is `while (true)`, score is a TODO, and the ruleset's turn limit is never read.
-   - The bridge now decides Civ III's conquest, domination and score-at-the-limit victories for every civilization,
-     the AI's included, and the game ends at the first.
-   - Still missing: the space race and the UN, which need the engine (L).
+   - The bridge now decides Civ III's conquest, domination, cultural and score-at-the-limit victories for every
+     civilization, the AI's included, and the game ends at the first.
+   - **Culture** needs no engine change: the engine already keeps each city's culture for its owner, and its
+     history sums it per civ. A city with 20,000 culture points wins, and so does a civ with 100,000 and at least
+     twice the next civ's. These are Civ III's defaults (the BIQ's OneCityCultureWin and AllCitiesCultureWin, which
+     QueryCiv3 reads but the ruleset leaves out, so they are constants in the bridge; the twice-the-next rule comes
+     from Civ III's documentation). The civ total is the sum over the cities it holds now, as the
+     engine's history counts it, so a lost city takes its culture away, and a captured one starts at 0 for its
+     new owner. Civ III's own total may be cumulative; this one is not.
+   - Late culture runs high: the engine records every building as built in year 1 (`City.cs:738`), so every
+     building's culture doubles at AD 1001 (about T216) and quadruples at AD 2001 (about T491), where Civ III
+     doubles each building 1000 years after it was built. The thresholds are met earlier than in Civ III. Fixing
+     the build year would change every game's borders and baselines, and is left for its own patch.
+   - Measured in engine-AI games (Standard, 7 AIs, Regent, Roaming, the bridge before and after): with a 540-turn
+     limit nothing changes. Seeds 1 and 2 end on score at T540 as before (Rome, the engine-AI-played seat). Their
+     top civ passes 100,000 culture around T460-475 but never holds twice the next civ's (top-to-second at T540:
+     215,753 to 167,994, 1.28x, and 191,107 to 161,557, 1.18x), and the best city reaches 15,461 (Thebes) and
+     12,033 (Sidon). In a 1000-turn game (seed 1), Egypt now wins by culture on T595, when Thebes passes 20,000;
+     before, the game ran to T1000 and ended on score, with the top civ at 1.69x the next. An agent that
+     out-expands the AIs, or stacks wonders in one city, can win by culture within 540 turns; an AI's cultural
+     victory ends the game as a defeat for the agent.
+   - **Left out: the space race and the UN.** No civ gets near them in any game the env allows. The ruleset has
+     Apollo Program (Space Flight), The United Nations (Fission) and the ten spaceship parts, but they sit in the
+     Modern era. In 540-turn games the best civ ends with 46 to 49 of 83 techs, early in the Industrial era; in a
+     1000-turn game (the bridge's longest) the two best AIs reach the Modern era around T900 and end with 68 and 69
+     techs, the only Modern ones Rocketry, Computers and Ecology: no Fission, no Space Flight. The parts would
+     also need a ruleset patch (they are plain city buildings, buildable in every city, with no Apollo
+     prerequisite) and a launch; the UN needs elections, candidates and AI votes, which the engine has none of
+     (L to XL). The design is ready for when AI research gets there: the parts as small wonders gated on the
+     civ's Apollo Program, and a `space` victory when a civ owns all ten.
 2. **Tech and economy stall: fixed** by patches 0005-0008.
    - The causes: 15 buildings were blocked by a prerequisite check, small wonders were blocked, the AI never
      changed government, the AI cut its own science to 0, and harder difficulties made AI research dearer.
@@ -103,7 +130,7 @@ rotated at a 100K context cap.
 | Diplomacy | **done for war and peace:** the `diplomacy` tool, with peace at the AI's price and AI offers reported as events. Trading techs and gold is not done (M) |
 | Acting at scale | **done:** `unit_orders` orders many units at once (by id, or every idle unit of a type), `set_production` sets many cities at once (`"all"`, `"pending"`, a list) and takes a queue (`then`) the bridge follows after each completion, `list_units` filters by type, and with many cities the brief folds the engine's picks into one line and `city_info` gives one line per city |
 | Seeing rivals | a rivals view and seen foreign cities (S) |
-| The date and victory status | **done:** the brief dates each turn, ranks the seat by score and gives its share of the land and population against the civ nearest domination; `data/get` carries the victory |
+| The date and victory status | **done:** the brief dates each turn, ranks the seat by score and gives its share of the land and population against the civ nearest domination, and, once culture matters (a civ with 10,000 or a city with 2,000), a `CULTURE` line against the cultural victory; `data/get` carries the victory |
 
 **Harness** (what breaks at 540 turns):
 
