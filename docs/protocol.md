@@ -609,6 +609,12 @@ Measured over full 540-turn Standard games with 7 AIs at Regent (seeds 1-3), pat
 
 Wall time per game is unchanged at 74-78 s, and a seed replays byte-identically.
 
+Patch 0017 re-measured on the same games (`autoplay` `engine_ai`, which declines the AIs' offers to the seat as
+before): seed 3 plays out identically; on seeds 1 and 2 a traded tech that kept the receiver's progress sends the
+game another way from then on, so the mean AI techs at T540 go from 42.4 to 36.9 and from 36.7 to 43.0 (39.7 to
+40.0 over the three seeds). In 200-turn games (Small with 6 civs on seed 1, Standard with 8 on seed 2) the mean
+AI techs at T200 are 24.0 and 23.3 before, 24.0 and 23.4 after. Wall time is unchanged.
+
 ## Round 2 additions (from the post-playtest audit)
 
 Implemented. These extend the sections above; folding them in is still to do.
