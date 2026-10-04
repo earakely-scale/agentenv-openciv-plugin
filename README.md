@@ -408,7 +408,9 @@ call to make instead. Full contract: [docs/tools.md](docs/tools.md).
 **What the game covers.** Agents found and place cities and choose what they build and research; set the science and
 luxury rates and buy production; move, automate, fortify, attack and bombard; change government; and declare war or
 make peace; a city that falls in war is captured (one of size 1 is destroyed). They cannot trade techs or gold, and
-the score (10 × cities + 3 × citizens + 1 × tiles + 4 × techs) rewards growth. The engine still makes some choices
+the score (10 × cities + 3 × citizens + 1 × tiles + 4 × techs) rewards growth. Any civilization, an agent's or the
+AI's, wins as in Civ III by conquest (the last one left), domination (two thirds of the world's land and of its
+population) or the top score at the turn limit, and the game ends there. The engine still makes some choices
 itself (what a city builds after finishing something, the next tech); those picks are reported and block the turn
 until the agent changes or accepts them. [docs/full-game.md](docs/full-game.md) lists what a full game still lacks.
 

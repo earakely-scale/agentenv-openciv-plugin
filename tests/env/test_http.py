@@ -76,7 +76,7 @@ async def test_mcp_tools(server):
         listed = await session.list_tools()
         assert {t.name for t in listed.tools} == TOOLS
         brief = await session.call_tool("get_turn_brief", {})
-        assert not brief.isError and brief.content[0].text.startswith("T1/8 · Rome")
+        assert not brief.isError and brief.content[0].text.startswith("T1/8 (3950 BC) · Rome")
         assert brief.structuredContent is None
         ok = await session.call_tool("unit_order", {"unit": "u1", "order": "found_city"})
         assert not ok.isError and ok.content[0].text.startswith("Founded Rome")
@@ -141,7 +141,7 @@ async def test_the_seat_header_over_http(env_vars):
                 ClientSession(read, write) as session:
             await session.initialize()
             brief = await session.call_tool("get_turn_brief", {})
-            assert not brief.isError and brief.content[0].text.startswith("T0/8 · Egypt")
+            assert not brief.isError and brief.content[0].text.startswith("T0/8 (4000 BC) · Egypt")
     finally:
         proc.terminate()
         proc.wait(10)

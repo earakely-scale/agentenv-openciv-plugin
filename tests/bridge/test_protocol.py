@@ -464,6 +464,118 @@ def test_a_tech_got_out_of_order_leaves_the_research_queue(launch, tmp_path):
     assert queue[1] not in research["queue"] and research["current"] not in r.call("techs")["known"]
 
 
+def score_victory(b: Bridge, turn: int) -> dict | None:
+    """The victory the score race gives at `turn`: the top score's, or no one's on a tie."""
+    totals = sorted((p["score"]["total"], p["civ"]) for p in b.call("score")["players"] if not p["defeated"])
+    if totals[-1][0] == totals[-2][0]:
+        return None
+    return {"kind": "score", "civ": totals[-1][1], "label": None, "turn": turn}
+
+
+def test_the_top_score_wins_at_the_turn_limit(launch):
+    """Civ III's score victory: at the turn limit the highest score (of every civilization, the AI's included)
+    wins, and a tie on top is no one's; the state dates each turn, and its race says where the seat stands."""
+    b = launch()
+    b.call("new_game", seed=SEED, turn_limit=3)
+    s = b.call("state")
+    assert s["date"] == "4000 BC" and s["victory"] is None
+    race = s["race"]
+    assert race["civs_left"] == len([p for p in b.call("score")["players"] if not p["defeated"]])
+    assert race["you"]["you"] and race["you"]["civ"] == "Rome" and race["domination"] == 0.667
+    assert {"civ", "you", "score", "land", "pop"} == set(race["leader"]) == set(race["nearest_domination"])
+    found_capital(b)
+    while not (res := b.call("end_turn", skip_idle=True))["game_over"]:
+        pass
+    assert b.call("state")["date"] == "3850 BC"
+    assert score_victory(b, 3) is None and b.call("state")["victory"] is None   # everyone founded a capital: a tie
+    assert "victory" not in [e["kind"] for e in res["events"]]
+
+    b = launch()
+    b.call("new_game", seed=SEED, turn_limit=50)
+    b.call("autoplay", turns=49, policy="engine_ai")
+    res = b.call("end_turn", skip_idle=True)
+    victory = score_victory(b, 50)
+    assert victory and victory["civ"] != "Rome" and res["game_over"]   # an AI's victory ends the game too
+    assert b.call("state")["victory"] == b.call("score")["victory"] == victory
+    top = next(p for p in b.call("score")["players"] if p["civ"] == victory["civ"])
+    assert res["events"][-1]["kind"] == "victory" and res["events"][-1]["text"].startswith(
+        f"{victory['civ']} won on score at the turn limit: {top['score']['total']} to ")
+    assert f"{victory['civ']} won on score on turn 50" in b.error("end_turn", skip_idle=True)["message"]
+
+
+def test_the_last_civilization_left_wins_by_conquest(launch, tmp_path):
+    """Civ III's conquest victory in a one-seat game: every other civilization is gone (the save edited so)."""
+    b = launch("--autosave", str(tmp_path / "a"))
+    b.call("new_game", seed=SEED, turn_limit=50)
+    found_capital(b)
+    b.call("end_turn", skip_idle=True)
+    path = tmp_path / "a" / "autosave.json"
+    save = json.loads(path.read_text())
+    g = save["game"]
+    me = next(p for p in g["players"] if p["human"])["id"]
+    others = {p["id"] for p in g["players"] if not p["human"] and "Barbarian" not in p["civilization"]}
+    g["cities"] = [c for c in g["cities"] if c["owner"] not in others]
+    g["units"] = [u for u in g["units"] if u["owner"] not in others]
+    for p in g["players"]:
+        p["defeated"] = p["defeated"] or p["id"] in others
+    path.write_text(json.dumps(save))
+    r = launch()
+    r.call("load", path=str(path))
+    assert r.call("state")["race"]["civs_left"] == 1 and r.call("state")["victory"] is None
+    res = r.call("end_turn", skip_idle=True)
+    assert me and res["game_over"] and r.call("state")["victory"] == {
+        "kind": "conquest", "civ": "Rome", "label": None, "turn": 2}
+    won = "Rome won by conquest: it is the last civilization left."
+    assert res["events"][-1] == {"turn": 1, "kind": "victory", "text": won}
+
+
+def test_two_thirds_of_the_land_and_people_win_by_domination(launch, tmp_path):
+    """Civ III's domination victory: the save edited so that Rome holds all but one of its rival's cities."""
+    b = launch("--autosave", str(tmp_path / "a"))
+    b.call("new_game", seed=SEED, size="Tiny", opponents=1, turn_limit=400)
+    b.call("autoplay", turns=250, policy="engine_ai")
+    b.call("end_turn", skip_idle=True)
+    path = tmp_path / "a" / "autosave.json"
+    save = json.loads(path.read_text())
+    g = save["game"]
+    me = next(p for p in g["players"] if p["human"])["id"]
+    rival = next(p for p in g["players"] if not p["human"] and "Barbarian" not in p["civilization"])["id"]
+    given = [c for c in g["cities"] if c["owner"] == rival][1:]
+    assert given
+    spots = set()
+    for c in given:
+        c["owner"], c["capital"] = me, False
+        c["perPlayerCulture"][me] = c["perPlayerCulture"].pop(rival, 0)
+        c["buildings"] = [x for x in c.get("buildings", []) if x["building"] != "Palace"]
+        spots.add((c["location"]["x"], c["location"]["y"]))
+    g["units"] = [u for u in g["units"] if not (u["owner"] == rival and (
+        u["currentLocation"]["x"], u["currentLocation"]["y"]) in spots)]
+    path.write_text(json.dumps(save))
+    r = launch()
+    r.call("load", path=str(path))
+    you = r.call("state")["race"]["you"]
+    assert you["land"] >= 2 / 3 and you["pop"] >= 2 / 3, you
+    res = r.call("end_turn", skip_idle=True)
+    turn = r.call("state")["turn"]
+    assert res["game_over"] and r.call("state")["victory"] == {
+        "kind": "domination", "civ": "Rome", "label": None, "turn": turn}
+    assert res["events"][-1]["kind"] == "victory" and res["events"][-1]["text"].startswith("Rome won by domination: ")
+
+
+def test_a_riot_says_which_luxury_rate_ends_it(launch):
+    """A disorder blocker carries the moods and the lowest luxury rate that calms the city (the brief folds several
+    riots into one line with the rate that calms them all)."""
+    b = launch()
+    b.call("new_game", seed=SEED, turn_limit=200)
+    b.call("autoplay", turns=80, policy="engine_ai")
+    b.call("set_rates", science=6, luxury=0)
+    [riot] = [x for x in b.call("state")["blockers"] if x["kind"] == "disorder"]
+    assert riot["unhappy"] > riot["happy"] and riot["now"] is False and riot["luxury"] > 0
+    assert f"raise luxury to {riot['luxury'] * 10}%" in riot["message"]
+    b.call("set_rates", science=6, luxury=riot["luxury"])
+    assert not [x for x in b.call("state")["blockers"] if x["kind"] == "disorder"]
+
+
 def test_game_over_at_turn_limit(launch):
     b = launch()
     b.call("new_game", seed=SEED, turn_limit=2)
@@ -481,7 +593,19 @@ def test_disbanding_everything_is_defeat(game):
     assert res["unit"] is None and "defeated" in res["message"]
     s = game.call("state")
     assert s["defeated"] and s["game_over"] and s["units"] == []
+    assert s["victory"] is None   # three civs are left: no one has won
     assert game.error("end_turn", skip_idle=True)["code"] == "game_over"
+
+
+def test_the_last_civ_left_wins_when_the_seat_disbands_itself(launch):
+    """A one-seat game ends in the seat's own turn when it is defeated; the last civ left has won by conquest."""
+    b = launch()
+    b.call("new_game", seed=SEED, size="Tiny", opponents=1)
+    b.call("unit_order", unit="u2", order="disband")
+    res = b.call("unit_order", unit="u1", order="disband")
+    rival = next(p["civ"] for p in b.call("score")["players"] if not p["is_human"])
+    assert res["message"].endswith(f"the game is over. {rival} won by conquest: it is the last civilization left.")
+    assert b.call("state")["victory"] == {"kind": "conquest", "civ": rival, "label": None, "turn": 0}
 
 
 def test_a_unit_disbanded_in_its_city_adds_its_shields(game):
@@ -1740,7 +1864,7 @@ def test_the_last_seat_standing_wins_by_conquest(launch, tmp_path):
     assert b.call("state", seat="Greece")["defeated"]
     res = b.call("end_turn", seat="Rome", skip_idle=True)["seats"]["Rome"]
     victory = {"kind": "conquest", "civ": "Rome", "label": "A", "turn": 1}
-    won = "Rome (A) won by conquest: it is the last civilization an agent still plays."
+    won = "Rome (A) won by conquest: it is the last civilization left."
     assert res["game_over"] and res["events"][-1] == {"turn": 0, "kind": "victory", "text": won}
     assert b.call("state")["victory"] == victory and b.call("score")["victory"] == victory
     assert "Rome (A) won by conquest on turn 1" in b.error("end_turn", seat="Rome", skip_idle=True)["message"]

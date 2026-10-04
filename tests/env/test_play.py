@@ -296,8 +296,9 @@ async def test_agents_cannot_play_a_human_seat(env):
     await env.new_game(**MATCH)
     assert "Greece is played by a person." in await mcp_error(env, "get_turn_brief", "Greece")
     assert "Greece is played by a person." in await mcp_error(env, "unit_order", "you", unit="u1", order="hold")
-    assert (await mcp(env, "get_turn_brief", "Rome")).startswith("T1/8 · Rome")
-    assert (await mcp(env, "get_turn_brief")).startswith("T1/8 · Rome")    # no header: the first seat, an agent's
+    assert (await mcp(env, "get_turn_brief", "Rome")).startswith("T1/8 (3950 BC) · Rome")
+    # no header: the first seat, an agent's
+    assert (await mcp(env, "get_turn_brief")).startswith("T1/8 (3950 BC) · Rome")
     assert env.seats[1].actions.calls == {}
 
     await env.new_game(seats=["Greece"], humans=["Rome"])
@@ -324,4 +325,4 @@ async def test_a_game_with_one_human_seat(env, action_log):
     assert env._live_now()["seats"][0]["human"] is True
     # A one-seat game without humans plays as ever.
     await env.new_game(humans=None)
-    assert (await mcp(env, "get_turn_brief", "anyone")).startswith("T1/8 · Rome")
+    assert (await mcp(env, "get_turn_brief", "anyone")).startswith("T1/8 (3950 BC) · Rome")

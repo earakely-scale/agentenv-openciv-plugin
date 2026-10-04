@@ -180,37 +180,70 @@ sealed partial class Session {
 		other.Incoming.Add(e);
 	}
 
-	sealed record Victory(string Kind, Seat Seat, int Turn);
+	sealed record Victory(string Kind, Player Player, int Turn);
 
-	/// <summary>How a game with seats is won before its turn limit; at the limit the verifier ranks the seats by score.</summary>
+	/// <summary>Who won, once someone has: the game is then over for every seat.</summary>
 	Victory victory;
 
 	/// <summary>
-	/// Conquest: one seat's civilization is the only one an agent still plays. Domination (Civ III's rule): one seat
-	/// holds two thirds of the world's land and two thirds of its population.
+	/// Civ III's victories, for any civilization, an agent's or the AI's, checked after every turn. Conquest: it is
+	/// the last civilization left (with seats, also when its seat is the last one an agent still plays). Domination:
+	/// it holds two thirds of the world's land and two thirds of its population. Score: at the turn limit, the highest
+	/// score wins, and a tie on top is no one's victory.
 	/// </summary>
 	Victory CheckVictory() {
-		var live = seats.Where(s => !s.Player.defeated).ToList();
-		if (live.Count == 1) return new Victory("conquest", live[0], gd.turn);
-		foreach (Seat s in live) {
-			var (land, pop) = ShareOf(s.Player);
-			if (land >= Domination && pop >= Domination) return new Victory("domination", s, gd.turn);
+		if (MultiSeat && seats.Where(s => !s.Player.defeated).ToList() is [Seat last]) return new Victory("conquest", last.Player, gd.turn);
+		var civs = Civs().Where(p => !p.defeated).ToList();
+		if (civs is [Player only]) return new Victory("conquest", only, gd.turn);
+		foreach (Player p in civs) {
+			var (land, pop) = ShareOf(p);
+			if (land >= Domination && pop >= Domination) return new Victory("domination", p, gd.turn);
 		}
-		return null;
+		if (gd.turn < turnLimit) return null;
+		var top = civs.OrderByDescending(p => (int)ScoreOf(p)["total"]).Take(2).ToList();
+		if (top.Count == 0) return null;
+		return top.Count == 1 || (int)ScoreOf(top[0])["total"] > (int)ScoreOf(top[1])["total"] ? new Victory("score", top[0], gd.turn) : null;
 	}
 
 	const double Domination = 2.0 / 3;
 
+	/// <summary>
+	/// A one-seat game ends at once when its civ is defeated in its own turn (its last unit disbanded or lost), so no
+	/// turn ends to check for a winner: check now (the last civilization left, say). With seats the others play on,
+	/// and the end of the turn checks.
+	/// </summary>
+	string VictoryNow() {
+		if (MultiSeat || victory != null || !human.defeated || CheckVictory() is not Victory won) return "";
+		victory = won;
+		return " " + VictoryText(won);
+	}
+
+	/// <summary>The civilizations in the game, the barbarians aside.</summary>
+	IEnumerable<Player> Civs() => gd.players.Where(p => !p.isBarbarians);
+
 	string SeatName(Seat s) => s.Label == null ? Owner(s.Player) : $"{Owner(s.Player)} ({s.Label})";
 
+	string CivName(Player p) => SeatOf(p) is Seat s ? SeatName(s) : Owner(p);
+
 	string VictoryText(Victory v) {
-		if (v.Kind == "conquest") return $"{SeatName(v.Seat)} won by conquest: it is the last civilization an agent still plays.";
-		var (land, pop) = ShareOf(v.Seat.Player);
-		return $"{SeatName(v.Seat)} won by domination: {land:P0} of the world's land and {pop:P0} of its population.";
+		string who = CivName(v.Player);
+		switch (v.Kind) {
+			case "conquest":
+				return Civs().Count(p => !p.defeated) == 1
+					? $"{who} won by conquest: it is the last civilization left."
+					: $"{who} won by conquest: it is the last civilization an agent still plays.";
+			case "domination":
+				var (land, pop) = ShareOf(v.Player);
+				return $"{who} won by domination: {land:P0} of the world's land and {pop:P0} of its population.";
+			default:
+				var runnerUp = Civs().Where(p => p != v.Player).OrderByDescending(p => (int)ScoreOf(p)["total"]).FirstOrDefault();
+				return $"{who} won on score at the turn limit: {ScoreOf(v.Player)["total"]}"
+					+ (runnerUp == null ? "." : $" to {CivName(runnerUp)}'s {ScoreOf(runnerUp)["total"]}.");
+		}
 	}
 
 	JsonObject VictoryJson() => victory == null ? null : new JsonObject {
-		["kind"] = victory.Kind, ["civ"] = Owner(victory.Seat.Player), ["label"] = victory.Seat.Label, ["turn"] = victory.Turn,
+		["kind"] = victory.Kind, ["civ"] = Owner(victory.Player), ["label"] = SeatOf(victory.Player)?.Label, ["turn"] = victory.Turn,
 	};
 
 	JsonArray SeatsJson() => Json.Array(seats, s => new JsonObject { ["civ"] = Owner(s.Player), ["label"] = s.Label });

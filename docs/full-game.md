@@ -19,7 +19,8 @@ summarises a research pass of 2026-10-01:
 - **With that, Sonnet played a full 540-turn Standard game,** and won it on every measure the engine has
   (below).
 - **The engine gives the game no shape after the ancient era.**
-  - There is no victory condition, and a game ends only at the turn limit or when the agent is defeated.
+  - There is no victory condition, and a game ends only at the turn limit or when the agent is defeated (the
+    bridge now decides victories).
   - The AI never changes government, and every civ ends in Despotism with 25 to 35 of 83 techs.
   - Entering an enemy city destroyed it instead of capturing it (fixed by patch 0011).
   - AI wars never end in peace.
@@ -67,10 +68,11 @@ rotated at a 100K context cap.
 
 **Engine** (OpenCiv3 itself), in order of impact:
 
-1. **No ending.**
-   - The turn loop is `while (true)`, score is a TODO, and the ruleset's turn limit is never read.
-   - Conquest, domination and score-at-the-limit checks can live in the bridge (M).
-   - Space race and UN need the engine (L).
+1. **No ending: fixed in the bridge.**
+   - The engine's turn loop is `while (true)`, score is a TODO, and the ruleset's turn limit is never read.
+   - The bridge now decides Civ III's conquest, domination and score-at-the-limit victories for every civilization,
+     the AI's included, and the game ends at the first.
+   - Still missing: the space race and the UN, which need the engine (L).
 2. **Tech and economy stall: fixed** by patches 0005-0008.
    - The causes: 15 buildings were blocked by a prerequisite check, small wonders were blocked, the AI never
      changed government, the AI cut its own science to 0, and harder difficulties made AI research dearer.
@@ -101,7 +103,7 @@ rotated at a 100K context cap.
 | Diplomacy | **done for war and peace:** the `diplomacy` tool, with peace at the AI's price and AI offers reported as events. Trading techs and gold is not done (M) |
 | Acting at scale | **done:** `unit_orders` orders many units at once (by id, or every idle unit of a type), `set_production` sets many cities at once (`"all"`, `"pending"`, a list) and takes a queue (`then`) the bridge follows after each completion, `list_units` filters by type, and with many cities the brief folds the engine's picks into one line and `city_info` gives one line per city |
 | Seeing rivals | a rivals view and seen foreign cities (S) |
-| The date and victory status | in the brief and `data/get` (S) |
+| The date and victory status | **done:** the brief dates each turn, ranks the seat by score and gives its share of the land and population against the civ nearest domination; `data/get` carries the victory |
 
 **Harness** (what breaks at 540 turns):
 

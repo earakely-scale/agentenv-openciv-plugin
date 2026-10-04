@@ -52,7 +52,7 @@ async def test_revolution_changes_government_after_anarchy(env, tools):
     await tools("end_turn", skip_idle=True)
     await tools("end_turn", skip_idle=True)
     brief = await tools("get_turn_brief")
-    assert brief.startswith("T3/8 · Rome · Monarchy") and "GOVERNMENT" not in brief
+    assert brief.startswith("T3/8 (3850 BC) · Rome · Monarchy") and "GOVERNMENT" not in brief
 
 
 async def test_diplomacy_war_and_the_price_of_peace(env, tools):
@@ -92,7 +92,7 @@ async def test_attack_targets_are_listed_and_taken(env, tools):
 async def test_turn_brief(tools):
     text = await tools("get_turn_brief")
     lines = text.splitlines()
-    assert lines[0].startswith("T1/8 · Rome · Despotism · gold 10")
+    assert lines[0].startswith("T1/8 (3950 BC) · Rome · Despotism · gold 10")
     assert "RESEARCH none" in text
     assert "PACE cities 0 BEHIND (1 by T1)" in text
     assert "NEEDS ORDERS (4)" in text
@@ -307,7 +307,7 @@ async def test_end_turn_report_and_next_brief(tools, action_log):
     text = await tools("end_turn")
     assert text.startswith("TURN T1 → T2 (1 turn)")
     report, brief = text.split("\n---\n")
-    assert "T2/8 · Rome" in brief and "EVENTS" not in brief
+    assert "T2/8 (3900 BC) · Rome" in brief and "EVENTS" not in brief
     assert brief.splitlines()[-1] == "[T2/8 · nothing needs orders]"
     text = await tools("end_turn", until_attention=True, max_turns=5)
     report, brief = text.split("\n---\n")

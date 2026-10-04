@@ -294,7 +294,7 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 			turnEvents = events;
 			s.Ready = false;
 		});
-		if (MultiSeat && victory == null && CheckVictory() is Victory won) {
+		if (victory == null && CheckVictory() is Victory won) {
 			victory = won;
 			EachSeat(s => s.TurnEvents.Add(Event("victory", VictoryText(won))));
 		}
@@ -318,7 +318,7 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 
 	void EnsurePlaying() {
 		if (!GameOver) return;
-		string why = victory != null ? $"{SeatName(victory.Seat)} won by {victory.Kind} on turn {victory.Turn}"
+		string why = victory != null ? $"{CivName(victory.Player)} won {(victory.Kind == "score" ? "on score" : $"by {victory.Kind}")} on turn {victory.Turn}"
 			: human.defeated ? "Your civilization has no cities or settlers left, so it is defeated"
 			: $"The game reached its turn limit ({turnLimit})";
 		throw new BridgeError("game_over", $"{why}; the game is over and no more orders are accepted.");

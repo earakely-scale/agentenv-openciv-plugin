@@ -2,7 +2,8 @@
 
 The bar is OpenCiv3's own AI playing the agent's seat on the same seed (the engine_ai baseline), and the agent's
 standing among the civilizations it played: its rank, and its share of the world's land and population against
-Civ III's domination victory, which needs two thirds of each. The engine has no victory conditions of its own.
+Civ III's domination victory, which needs two thirds of each. The game ends early when a civilization wins by
+conquest or domination; another civilization's victory counts as a defeat.
 """
 
 import asyncio
@@ -34,10 +35,14 @@ def grade(s: dict) -> list[dict]:
     share = s.get("share") or {}
     land, pop = share.get("land", 0.0), share.get("pop", 0.0)
     agent_calls = s["actions"]["ok"] + s["actions"]["invalid"]
+    victory = s.get("victory")
+    beaten = victory is not None and victory["civ"] != s["civ"] and victory["kind"] != "score"
     return [
-        {"criterion": "reached the turn limit", "result": s["turn"] >= s["turn_limit"],
-         "turn": s["turn"], "turn_limit": s["turn_limit"]},
-        {"criterion": "not defeated", "result": not s["defeated"]},
+        {"criterion": "played to its end: the turn limit, or a victory",
+         "result": s["turn"] >= s["turn_limit"] or victory is not None,
+         "turn": s["turn"], "turn_limit": s["turn_limit"], "victory": victory},
+        {"criterion": "not defeated, and no other civilization won by conquest or domination",
+         "result": not s["defeated"] and not beaten},
         {"criterion": f"score as a fraction of the {REFERENCE} baseline's at the same turn", "weight": 2,
          "result": reference is not None and total >= reference,
          "score": min(1.0, total / max(reference, 1)) if reference is not None else 0.0,

@@ -19,6 +19,8 @@ sealed partial class Session {
 			["game_over"] = GameOver,
 			["defeated"] = h.defeated,
 			["victory"] = VictoryJson(),
+			["date"] = DateText(gd.turn),
+			["race"] = Race(),
 			["civ"] = h.civilization.name,
 			["era"] = Math.Clamp(h.EraIndex(), 0, EraNames.Length - 1),
 			["government"] = h.government.name,
@@ -52,6 +54,48 @@ sealed partial class Session {
 			}),
 			["blockers"] = Blockers(),
 			["last_events"] = Json.Array(lastEvents, e => e.DeepClone()),
+		};
+	}
+
+	/// <summary>
+	/// A turn's year as the client's turn box shows it (C7/UIElements/GameStatus/LowerRightInfoBox.cs, from
+	/// TimeOptions.GetRawNumber): "4000 BC", "AD 1250"; null for a ruleset that counts months or weeks.
+	/// GetRawNumber also sets TimeOptions' current year, a display field the save leaves out.
+	/// </summary>
+	string DateText(int turn) {
+		TimeOptions t = gd.timeOptions;
+		if (t == null || t.baseUnit != TimeUnit.Years) return null;
+		try {
+			int year = t.GetRawNumber(turn);
+			return year < 0 ? $"{-year} {t.negativeLabel}" : $"{t.positiveLabel} {year}";
+		} catch (Exception) {
+			return null;
+		}
+	}
+
+	/// <summary>
+	/// How far each way to win is (CheckVictory): the civilizations left, the score race and its leader, and the civ
+	/// closest to domination (two thirds of the land and of the population). A civ the seat has not met has no name.
+	/// </summary>
+	JsonObject Race() {
+		var civs = Civs().Where(p => !p.defeated).ToList();
+		if (civs.Count == 0) return null;
+		var scores = civs.ToDictionary(p => p, p => (int)ScoreOf(p)["total"]);
+		var shares = civs.ToDictionary(p => p, ShareOf);
+		JsonObject Civ(Player p) => new() {
+			["civ"] = p == human || human.playerRelationships.ContainsKey(p.id) ? Owner(p) : null,
+			["you"] = p == human, ["score"] = scores[p],
+			["land"] = Math.Round(shares[p].Land, 3), ["pop"] = Math.Round(shares[p].Pop, 3),
+		};
+		Player leader = civs.OrderByDescending(p => scores[p]).First();
+		Player nearest = civs.OrderByDescending(p => Math.Min(shares[p].Land, shares[p].Pop)).First();
+		return new JsonObject {
+			["civs_left"] = civs.Count,
+			["rank"] = human.defeated ? null : 1 + civs.Count(p => scores[p] > scores[human]),
+			["you"] = human.defeated ? null : Civ(human),
+			["leader"] = Civ(leader),
+			["nearest_domination"] = Civ(nearest),
+			["domination"] = Math.Round(Domination, 3),
 		};
 	}
 
@@ -110,10 +154,16 @@ sealed partial class Session {
 			else if (pendingProduction.Contains(c))
 				blockers.Add(Blocker("choose_production", id,
 					$"The engine picked {c.itemBeingProduced.name} for {c.name}; keep it with end_turn(skip_idle=true) or choose with set_production(city=\"{id}\", item=...)."));
-			if (Moods(c).Riots)
-				blockers.Add(Blocker("disorder", id, (c.isInCivilDisorder
+			if (Moods(c) is { Riots: true } mood) {
+				JsonObject b = Blocker("disorder", id, (c.isInCivilDisorder
 					? $"{c.name} is in civil disorder and produces nothing: "
-					: $"{c.name} will fall into civil disorder when the turn ends: ") + DisorderFixes(c) + "."));
+					: $"{c.name} will fall into civil disorder when the turn ends: ") + DisorderFixes(c) + ".");
+				b["now"] = c.isInCivilDisorder;
+				b["unhappy"] = mood.Unhappy;
+				b["happy"] = mood.Happy;
+				b["luxury"] = CalmingLuxury(c) is int l and > 0 ? l : null;
+				blockers.Add(b);
+			}
 		}
 		foreach (MapUnit u in HumanUnits().Where(NeedsOrders))
 			blockers.Add(Blocker("idle_unit", ids.Of(u), $"{Label(u)} has moves and no orders"));
