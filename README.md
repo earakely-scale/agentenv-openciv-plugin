@@ -193,6 +193,17 @@ uplink, `--test` sends to Twitch without going live (its bandwidth test, visible
 shows the real OpenCiv3 client's view of each agent full size (the env needs `setup --client`), and the first run
 builds the streamer image (`streamer/`, about 1.5 GB; a change to `streamer/` builds it again, in seconds).
 
+**Stream to X too.** `--to twitch --to x` sends one stream to both, encoded once; if one drops, the other goes on.
+X needs X Premium and a public account: in Creator Studio, open Live Studio, create a livestream with a source in the
+region nearest the machine that streams, and store the source's server URL (RTMPS works) and stream key as the
+secrets `OPENCIV3_X_SERVER` and `OPENCIV3_X_STREAM_KEY`, like the Twitch key. X waits for you: once the stream has
+started, its preview shows in Live Studio, and the broadcast starts when you press Go Live there.
+
+```bash
+agent-env openciv3 stream --to twitch --to x --client-view --record ~/broadcasts &
+agent-env run openciv3 --task showmatch
+```
+
 **Cast it.** A task can put two AI casters on the stream: Max calls the play and Ada, the analyst, says what it
 means. They read the match data the viewer shows (the events, the standings, the agents' plans, notes and messages,
 who is still thinking), open the show, call wars, captured cities and lead changes as they happen, and sign off at

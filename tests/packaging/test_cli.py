@@ -204,6 +204,32 @@ def test_stream_sends_the_newest_game_under_way_without_showing_the_key(tmp_path
     assert log.read_text().splitlines()[1] == "rtmp://live.twitch.tv/app/live_123_secret?bandwidthtest=true"
 
 
+def test_stream_sends_one_stream_to_twitch_and_x_at_once(tmp_path, monkeypatch):
+    _config(monkeypatch, OPENCIV3_STREAM_KEY="live_123_secret", OPENCIV3_X_SERVER="rtmps://or.pscp.tv:443/x/",
+            OPENCIV3_X_STREAM_KEY="x_456_secret")
+    log = tmp_path / "docker.log"
+    fake_docker(tmp_path, monkeypatch, '  "image inspect") ;;\n'
+                                       f'  "run --rm") echo "$@" > {log}; echo "$STREAM_URL" >> {log} ;;\n')
+    monkeypatch.setattr(cli, "_playing", lambda url: True)
+    monkeypatch.setattr(cli, "_broadcast", lambda url: {})
+    stream = ["stream", "--url", "http://127.0.0.1:41589/live", "--to", "twitch", "--to", "x"]
+    result = CliRunner().invoke(openciv3, stream)
+    assert result.exit_code == 0, result.output
+    args, *urls = log.read_text().splitlines()
+    assert urls == ["rtmp://live.twitch.tv/app/live_123_secret", "rtmps://or.pscp.tv:443/x/x_456_secret"]
+    assert "_secret" not in result.output + args and "-e STREAM_URL" in args
+    assert ("to rtmp://live.twitch.tv/app/<stream key> and to rtmps://or.pscp.tv:443/x/<stream key> (press Go Live "
+            "in X's Live Studio once it starts)") in result.output
+    assert CliRunner().invoke(openciv3, [*stream[:3], "--to", "x"]).exit_code == 0
+    assert log.read_text().splitlines()[1:] == ["rtmps://or.pscp.tv:443/x/x_456_secret"]
+
+    _config(monkeypatch, OPENCIV3_STREAM_KEY="live_123_secret", OPENCIV3_X_SERVER="rtmps://or.pscp.tv:443/x")
+    result = CliRunner().invoke(openciv3, stream)
+    assert result.exit_code == 1
+    assert "store its server URL and stream key as the secrets OPENCIV3_X_SERVER and OPENCIV3_X_STREAM_KEY" in (
+        result.output)
+
+
 def test_stream_records_offline_with_the_tasks_casters_without_showing_any_key(tmp_path, monkeypatch):
     _config(monkeypatch)   # no stream key: offline needs none
     log = tmp_path / "docker.log"
@@ -327,10 +353,12 @@ def _streamer():
 
 def test_the_streamer_hides_the_keys_and_ends_after_the_game():
     streamer = _streamer()
-    secrets = {"live_9": "stream key", "sk-cast-1": "cast key", "": "nothing"}
+    secrets = {"live_9": "stream key", "x_7": "stream key", "sk-cast-1": "cast key", "": "nothing"}
     assert streamer.redacted("Error writing to rtmp://x/app/live_9?bandwidthtest=true: broken pipe", secrets) == (
         "Error writing to rtmp://x/app/<stream key>?bandwidthtest=true: broken pipe")
     assert streamer.redacted("caster: HTTP 401 bad key sk-cast-1", secrets) == "caster: HTTP 401 bad key <cast key>"
+    assert streamer.redacted("[tee] Slave rtmps://or.pscp.tv:443/x/x_7 failed", secrets) == (
+        "[tee] Slave rtmps://or.pscp.tv:443/x/<stream key> failed")
     assert not streamer.stop_at(None, None, 60, 1000)
     assert not streamer.stop_at(950, None, 60, 1000) and streamer.stop_at(940, None, 60, 1000)
     assert not streamer.stop_at(None, 945, 60, 1000) and streamer.stop_at(None, 940, 60, 1000)
@@ -346,11 +374,13 @@ def test_the_streamer_page_asks_for_the_casters_and_the_title():
 
 def test_the_streamer_encodes_once_for_the_stream_and_the_recording():
     streamer = _streamer()
-    both = streamer.ffmpeg_command("1280x720", 30, "3000k", "rtmp://x/app/key", "/rec/stream.mkv")
+    both = streamer.ffmpeg_command("1280x720", 30, "3000k", ["rtmp://x/app/key"], "/rec/stream.mkv")
     assert ["-f", "pulse", "-i", "broadcast.monitor"] == both[both.index("pulse") - 1:both.index("pulse") + 3]
     assert both[-5:] == ["-flags", "+global_header", "-f", "tee",
                          "[f=flv:onfail=ignore]rtmp://x/app/key|[f=matroska]/rec/stream.mkv"]
     assert ["-c:a", "aac", "-b:a", "128k"] == both[both.index("-c:a"):both.index("-c:a") + 4]
-    assert streamer.ffmpeg_command("1280x720", 30, "3000k", "rtmp://x/app/key", None)[-3:] == [
+    assert streamer.ffmpeg_command("1280x720", 30, "3000k", ["rtmp://x/app/key"], None)[-3:] == [
         "-f", "flv", "rtmp://x/app/key"]
-    assert streamer.ffmpeg_command("1280x720", 30, "3000k", "", "/rec/s.mkv")[-3:] == ["-f", "matroska", "/rec/s.mkv"]
+    assert streamer.ffmpeg_command("1280x720", 30, "3000k", [], "/rec/s.mkv")[-3:] == ["-f", "matroska", "/rec/s.mkv"]
+    twice = streamer.ffmpeg_command("1280x720", 30, "3000k", ["rtmp://t/app/a", "rtmps://x:443/x/b"], None)
+    assert twice[-3:] == ["-f", "tee", "[f=flv:onfail=ignore]rtmp://t/app/a|[f=flv:onfail=ignore]rtmps://x:443/x/b"]

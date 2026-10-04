@@ -34,6 +34,7 @@ PLAY_LINK = re.compile(r"\bPLAY (?P<civ>.+?) \((?P<label>.*)\):?(?: game \S+)? \
 NEW_GAME_LINE = re.compile(r"\bNEW GAME \S+")
 STREAMER_IMAGE = "openciv3-streamer"
 STREAM_KEY = "OPENCIV3_STREAM_KEY"
+X_SERVER, X_STREAM_KEY = "OPENCIV3_X_SERVER", "OPENCIV3_X_STREAM_KEY"
 NO_TURNS = 1_000_000   # a data.json `since` past any game: the reply carries only `live`
 
 
@@ -328,10 +329,16 @@ def _broadcast(url: str) -> dict:
 @openciv3.command()
 @click.option("--url", help="The live view to stream. Default: the newest OpenCiv3 env in Docker whose game is under "
                             "way; the command waits for one to start.")
+@click.option("--to", "destinations", multiple=True, type=click.Choice(["twitch", "x"]), default=("twitch",),
+              show_default=True,
+              help="Where the stream goes; repeat it to stream to both at once, e.g. --to twitch --to x. X takes the "
+                   f"server URL and stream key of a Live Studio source, as the secrets {X_SERVER} and "
+                   f"{X_STREAM_KEY}; press Go Live in Live Studio once the stream has started.")
 @click.option("--server", default="rtmp://live.twitch.tv/app", show_default=True,
-              help="The RTMP ingest server; the stream key is appended to it.")
+              help="Twitch's RTMP ingest server, or any other RTMP server to stream to instead; the stream key is "
+                   "appended to it.")
 @click.option("--key-secret", default=STREAM_KEY, show_default=True,
-              help="The secret that holds the stream key, from agent-env's secret store ([stores.secret] in "
+              help="The secret that holds that server's stream key, from agent-env's secret store ([stores.secret] in "
                    ".agentenv/config.toml, or an environment variable of that name).")
 @click.option("--size", default="1920x1080", show_default=True, help="The stream's resolution.")
 @click.option("--fps", default=30, show_default=True)
@@ -352,23 +359,37 @@ def _broadcast(url: str) -> dict:
 @click.option("--source", type=click.Path(exists=True, file_okay=False, path_type=Path),
               help="Checkout whose streamer/ to run, built into an image on first use. Default: the one an editable "
                    "install runs from, or the cwd.")
-def stream(url: str | None, server: str, key_secret: str, size: str, fps: int, bitrate: str, linger: int,
+def stream(url: str | None, destinations: tuple[str, ...], server: str, key_secret: str, size: str, fps: int,
+           bitrate: str, linger: int,
            client_view: bool, cast: bool | None, title: str | None, record_dir: Path | None, offline: bool,
            bandwidth_test: bool, source: Path | None):
-    """Stream a game's live view to Twitch, or any RTMP server, while the agents play it, and optionally record it. A
-    headless browser in Docker shows the page and ffmpeg sends it; the stream starts with the game and ends after
-    GAME OVER."""
+    """Stream a game's live view to Twitch, X or any RTMP server, or to several at once, while the agents play it,
+    and optionally record it. A headless browser in Docker shows the page and ffmpeg sends it; the stream starts with
+    the game and ends after GAME OVER."""
     if offline and record_dir is None:
         raise click.UsageError("--offline only records: add --record DIR")
     config = get_config()
-    env = {"STREAM_URL": ""}
-    if not offline:
-        key = config.get_secret_store().get(key_secret)
-        if not key:
-            raise click.ClickException(f"no stream key: store your Twitch stream key as the secret {key_secret}, e.g. "
-                                       f"a line '{key_secret}: <key>' in the secrets file .agentenv/config.toml names, "
-                                       f"or export {key_secret}; or record only with --offline --record DIR")
-        env["STREAM_URL"] = f"{server.rstrip('/')}/{key}" + ("?bandwidthtest=true" if bandwidth_test else "")
+    test = " as a bandwidth test (not live; see Twitch Inspector)" if bandwidth_test else ""
+    targets, where = [], []
+    for name in [] if offline else dict.fromkeys(destinations):
+        if name == "twitch":
+            key = config.get_secret_store().get(key_secret)
+            if not key:
+                raise click.ClickException(
+                    f"no stream key: store your Twitch stream key as the secret {key_secret}, e.g. a line "
+                    f"'{key_secret}: <key>' in the secrets file .agentenv/config.toml names, or export {key_secret}; "
+                    "or record only with --offline --record DIR")
+            targets.append(f"{server.rstrip('/')}/{key}" + ("?bandwidthtest=true" if bandwidth_test else ""))
+            where.append(f"to {server.rstrip('/')}/<stream key>{test}")
+        else:
+            x_server, key = (config.get_secret_store().get(secret) for secret in (X_SERVER, X_STREAM_KEY))
+            if not x_server or not key:
+                raise click.ClickException(
+                    f"no X stream: create a source in X's Live Studio (Creator Studio, X Premium) and store its server "
+                    f"URL and stream key as the secrets {X_SERVER} and {X_STREAM_KEY}, as for the Twitch key")
+            targets.append(f"{x_server.rstrip('/')}/{key}")
+            where.append(f"to {x_server.rstrip('/')}/<stream key> (press Go Live in X's Live Studio once it starts)")
+    env = {"STREAM_URL": "\n".join(targets)}
     image, context = _streamer_image(source)
     if subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode:
         click.echo(f"Building {image} from {context}")
@@ -403,8 +424,6 @@ def stream(url: str | None, server: str, key_secret: str, size: str, fps: int, b
         mount = ["-v", f"{record_dir.resolve()}:/rec"]
         if sys.platform != "darwin":   # write the recording as you, into a directory only you may write
             mount += ["--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/tmp"]
-    test = " as a bandwidth test (not live; see Twitch Inspector)" if bandwidth_test else ""
-    where = [] if offline else [f"to {server.rstrip('/')}/<stream key>{test}"]
     where += [f"into {record_dir}"] if record_dir is not None else []
     with_casters = ", with the casters" if casters is not None else ""
     click.echo(f"Streaming {url} {' and '.join(where)}{with_casters}; Ctrl-C ends the stream")

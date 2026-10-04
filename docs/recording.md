@@ -170,13 +170,14 @@ Routes: [docs/tools.md](tools.md#watching-a-game-live); the data and the `live` 
 hints, and the newest turn always shown. It alternates the map with the agents' panels, shows the summary once the
 game is over, and, with the client, keeps one agent's client view in a corner, a different agent every half minute.
 `agent-env openciv3 stream` shows that layout in Chromium on a virtual display
-(`streamer/`) and sends it with ffmpeg (H.264 at 4.5 Mbit/s, a keyframe every 2 s) to Twitch or any RTMP server. The
+(`streamer/`) and sends it with ffmpeg (H.264 at 4.5 Mbit/s, a keyframe every 2 s) to Twitch, X or any RTMP server,
+or with `--to twitch --to x` to both from one encode. The
 sound is whatever the page plays, captured from a PulseAudio null sink as 128 kbit/s AAC: silence, unless the casters
 talk. It streams the newest env whose game is under way, waiting for one to start, and ends the stream `--linger`
 seconds after GAME OVER, or a minute after the env is gone. `--record DIR` also writes the stream to
-`DIR/stream-<UTC time>.mkv`, from the same encode (ffmpeg's tee muxer: the file keeps going if the RTMP side fails),
-and `--offline` only records. The stream key comes from agent-env's secret store, and the streamer replaces it in
-everything ffmpeg prints.
+`DIR/stream-<UTC time>.mkv`, from the same encode (ffmpeg's tee muxer: the file and the other servers keep going if
+one RTMP server fails), and `--offline` only records. The stream keys come from agent-env's secret store (X's server
+URL too, `OPENCIV3_X_SERVER`), and the streamer replaces them in everything ffmpeg prints.
 
 When the task's `openciv3_match` turns on the casters (its `broadcast`, [tools.md](tools.md)), or with `--cast`,
 `streamer/caster.py` runs next to the browser: two AI casters, by default Max (play-by-play) and Ada (the analyst);

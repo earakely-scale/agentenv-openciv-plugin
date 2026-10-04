@@ -1,6 +1,7 @@
 """Streams an OpenCiv3 env's live view to an RTMP server such as Twitch, or records it, or both: Chromium shows the
 page's stream layout (`?stream`) full screen on a virtual display and plays its sound into a PulseAudio null sink, and
-ffmpeg encodes the display and the sink to STREAM_URL and, with --record, to a Matroska file. With --cast-config, two
+ffmpeg encodes the display and the sink once, to each RTMP URL in STREAM_URL (one a line) and, with --record, to a
+Matroska file. With --cast-config, two
 AI casters (caster.py) talk over the game: the page plays their voices and shows them as captions. It waits for the env
 to answer, and stops `--linger` seconds after the game ends, or once the env has been gone for a minute. STREAM_URL
 holds the stream key and CAST_API_KEY the model endpoint's key: nothing it prints shows either."""
@@ -68,9 +69,9 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
-def ffmpeg_command(size: str, fps: int, bitrate: str, target: str, record: str | None) -> list[str]:
-    """ffmpeg encoding the display and the sink's sound once, for the RTMP target, the recording, or both: the tee
-    muxer then keeps recording when the RTMP leg fails."""
+def ffmpeg_command(size: str, fps: int, bitrate: str, targets: list[str], record: str | None) -> list[str]:
+    """ffmpeg encoding the display and the sink's sound once, for the RTMP targets, the recording, or both: with
+    more than one, the tee muxer keeps the others going when an RTMP leg fails."""
     rate = int(bitrate.rstrip("k"))
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-stats_period", "60",
            "-thread_queue_size", "512", "-f", "x11grab", "-video_size", size, "-framerate", str(fps),
@@ -79,9 +80,10 @@ def ffmpeg_command(size: str, fps: int, bitrate: str, target: str, record: str |
            "-c:v", "libx264", "-preset", "veryfast", "-tune", "stillimage", "-pix_fmt", "yuv420p",
            "-b:v", bitrate, "-maxrate", bitrate, "-bufsize", f"{2 * rate}k", "-g", str(2 * fps),
            "-c:a", "aac", "-b:a", "128k", "-ar", "44100"]
-    if target and record:
-        return [*cmd, "-flags", "+global_header", "-f", "tee", f"[f=flv:onfail=ignore]{target}|[f=matroska]{record}"]
-    return [*cmd, "-f", "flv", target] if target else [*cmd, "-f", "matroska", record]
+    legs = [f"[f=flv:onfail=ignore]{target}" for target in targets] + ([f"[f=matroska]{record}"] if record else [])
+    if len(legs) > 1:
+        return [*cmd, "-flags", "+global_header", "-f", "tee", "|".join(legs)]
+    return [*cmd, "-f", "flv", targets[0]] if targets else [*cmd, "-f", "matroska", record]
 
 
 def start_pulseaudio(env: dict) -> subprocess.Popen:
@@ -115,14 +117,15 @@ def main() -> int:
     p.add_argument("--title", help="the broadcast's title, on screen and in the casters' intro")
     p.add_argument("--record", metavar="DIR", help="also write the stream to DIR/stream-<UTC time>.mkv")
     args = p.parse_args()
-    target = os.environ.get("STREAM_URL", "")
-    if not target and not args.record:
+    targets = os.environ.get("STREAM_URL", "").split()
+    if not targets and not args.record:
         print("Nothing to do: set STREAM_URL to stream, or --record DIR to record", flush=True)
         return 2
     if args.record and not os.access(args.record, os.W_OK):
         print(f"Cannot record: {args.record} is not writable by this container's user", flush=True)
         return 2
-    secrets = {target.rsplit("/", 1)[-1].split("?")[0]: "stream key", os.environ.get("CAST_API_KEY", ""): "cast key"}
+    secrets = {**{target.rsplit("/", 1)[-1].split("?")[0]: "stream key" for target in targets},
+               os.environ.get("CAST_API_KEY", ""): "cast key"}
     width, height = args.size.split("x")
 
     print(f"Waiting for {args.url}", flush=True)
@@ -143,7 +146,7 @@ def main() -> int:
     time.sleep(8)
     record = (f"{args.record.rstrip('/')}/stream-{datetime.datetime.now(datetime.UTC):%Y%m%dT%H%M%SZ}.mkv"
               if args.record else None)
-    ffmpeg = subprocess.Popen(ffmpeg_command(args.size, args.fps, args.bitrate, target, record),
+    ffmpeg = subprocess.Popen(ffmpeg_command(args.size, args.fps, args.bitrate, targets, record),
                               env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     threading.Thread(target=relay, args=(ffmpeg.stderr, secrets), daemon=True).start()
     if cast_port:   # after ffmpeg, so the recording has the intro
@@ -154,7 +157,8 @@ def main() -> int:
         threading.Thread(target=relay, args=(caster.stdout, secrets), daemon=True).start()
         procs.append(caster)
     procs.append(ffmpeg)
-    where = " and ".join([*(["to the RTMP server"] if target else []), *([f"to {record}"] if record else [])])
+    servers = f"to {len(targets)} RTMP server{'s' * (len(targets) > 1)}"
+    where = " and ".join([*([servers] if targets else []), *([f"to {record}"] if record else [])])
     print(f"Streaming {args.url} at {args.size}, {args.fps} fps, {args.bitrate} {where}"
           + (", with the casters" if cast_port else ""), flush=True)
 
