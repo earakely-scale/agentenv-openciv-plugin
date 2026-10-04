@@ -334,6 +334,13 @@ def _rank(e: dict) -> int:
     return 0 if e.get("kind") in FIRST else 1
 
 
+def short_event(e: dict) -> dict:
+    """An event as the brief lists it: disorder without its fixes, which NEEDS ORDERS gives while it lasts."""
+    if e.get("kind") in ("disorder", "disorder_started") and ": " in e.get("text", ""):
+        return {**e, "text": e["text"].split(": ", 1)[0] + "."}
+    return e
+
+
 def events_lines(events: list[dict], cap: int = MAX_EVENTS) -> list[str]:
     """Events grouped by turn; an event repeated on several turns is shown once, at its first turn."""
     seen: dict[tuple, list[int]] = {}
@@ -531,7 +538,7 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
         lines.append("CITIES none yet — found one: find_city_sites(), then unit_order(order=\"settle\", ...)")
 
     if events and s.get("last_events"):
-        lines.append("EVENTS " + " | ".join(events_lines(s["last_events"])))
+        lines.append("EVENTS " + " | ".join(events_lines([short_event(e) for e in s["last_events"]])))
     if messages:
         shown = messages[-MAX_MESSAGES:]
         while len(shown) > 1 and sum(map(len, shown)) > MESSAGE_CHARS:

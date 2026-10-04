@@ -288,6 +288,17 @@ def test_brief_names_disorder_and_its_fixes():
     assert "NEEDS ORDERS none" not in text
 
 
+def test_disorder_events_leave_the_fixes_to_needs_orders():
+    s = troubled_state()
+    fixes = "3 unhappy vs 2 happy citizens. Fix: raise luxury to 20% with set_rates(science=8, luxury=2)"
+    s["last_events"] = [{"turn": 33, "kind": "disorder_started", "x": 12, "y": 10,
+                         "text": f"Rome fell into civil disorder and produces nothing: {fixes}."}]
+    text = render.brief(s, start_techs=2)
+    assert "EVENTS T33: !! Rome fell into civil disorder and produces nothing (12,10)" in text
+    assert fixes not in text
+    assert fixes in render.events_lines(s["last_events"])[0]   # the turn report keeps them
+
+
 def test_attention_lists_risks_bare_cities_full_production_and_gold():
     text = render.brief(troubled_state(), start_techs=2)
     attention = text.split("ATTENTION\n", 1)[1].split("\nSTANDING", 1)[0].splitlines()
