@@ -1867,6 +1867,19 @@ def test_a_seat_game_restores_every_seat(launch, tmp_path):
     assert restored.call("end_turn", seat="Egypt", skip_idle=True)["waiting_for"] == ["Rome", "Greece"]
 
 
+def test_the_last_civ_left_wins_when_every_seat_disbands_itself(launch):
+    """With seats too: once the last seat still playing is defeated in its own turn, no turn ends, so the winner is
+    named at once."""
+    b = launch()
+    b.call("new_game", seed=SEED, opponents=2, seats=["Greece"])
+    for civ in ("Greece", "Rome"):
+        b.call("unit_order", seat=civ, unit="u2", order="disband")
+        res = b.call("unit_order", seat=civ, unit="u1", order="disband")
+    ai = next(p["civ"] for p in b.call("score")["players"] if p["seat"] is None)
+    assert res["message"].endswith(f"{ai} won by conquest: it is the last civilization left.")
+    assert b.call("state", seat="Greece")["victory"] == {"kind": "conquest", "civ": ai, "label": None, "turn": 0}
+
+
 def test_the_last_seat_standing_wins_by_conquest(launch, tmp_path):
     b = launch("--autosave", str(tmp_path / "a"))
     b.call("new_game", seed=SEED, opponents=1, seats=["Greece"], labels={"Rome": "A", "Greece": "B"})
