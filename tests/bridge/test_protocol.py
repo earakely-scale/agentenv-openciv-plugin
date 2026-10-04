@@ -943,10 +943,10 @@ def test_cities_change_hands(launch, tmp_path):
 
 
 def city_next_to_a_soldier(launch, tmp_path, size: int, capital: bool, owner_cities: int = 1,
-                           turns: int = 40) -> tuple[Bridge, dict, dict, dict]:
+                           turns: int = 40, homeless: bool = False) -> tuple[Bridge, dict, dict, dict]:
     """A saved game edited so that one of the seat's soldiers stands next to an enemy city of `size` (its capital or
-    not) with no defender in it, only an enemy Worker; loaded, at war with the city's owner. Returns the bridge, the
-    soldier (state), the city (world) and the save's game."""
+    not) with no defender in it, only an enemy Worker; loaded, at war with the city's owner. `homeless`: the seat has
+    no city left. Returns the bridge, the soldier (state), the city (world) and the save's game."""
     b = launch("--autosave", str(tmp_path / "a"))
     b.call("new_game", seed=SEED, opponents=3, turn_limit=400)
     b.call("autoplay", turns=turns, policy="engine_ai")
@@ -980,6 +980,8 @@ def city_next_to_a_soldier(launch, tmp_path, size: int, capital: bool, owner_cit
     g["units"] = [u for u in g["units"] if not (u["owner"] == city["owner"] and at(u) == (cx, cy))]
     g["units"].append({**worker, "id": "Worker-999", "owner": city["owner"], "currentLocation": {"x": cx, "y": cy},
                        "previousLocation": {"x": cx, "y": cy}, "isAutomated": False})
+    if homeless:
+        g["cities"] = [c for c in g["cities"] if c["owner"] != me]
     while len(city["residents"]) > size:
         city["residents"].pop()
     while len(city["residents"]) < size:
@@ -1047,6 +1049,18 @@ def test_losing_the_capital_moves_the_palace(launch, tmp_path):
     assert capital["size"] == max(c["size"] for c in now)
     b.call("end_turn", skip_idle=True)
     assert [c["name"] for c in b.call("world")["cities"] if c["owner"] == loser and c["capital"]] == [capital["name"]]
+
+
+def test_a_civ_with_no_city_makes_its_conquest_its_capital(launch, tmp_path):
+    """patches/0013: a civ that holds no city when it takes one gets its palace there (as one founding its first
+    city does); it had none, so every civ with cities keeps exactly one capital."""
+    b, soldier, city, _ = city_next_to_a_soldier(launch, tmp_path, size=3, capital=False, homeless=True)
+    assert not b.call("state")["cities"]
+    res = b.call("unit_order", unit=soldier["id"], order="attack", x=city["x"], y=city["y"])
+    assert "is yours now" in res["message"]
+    [mine] = b.call("state")["cities"]
+    assert mine["capital"] and "Palace" in mine["buildings"]
+    check_cities_and_borders(b.call("world"))
 
 
 def test_taking_a_city_of_size_1_destroys_it(launch, tmp_path):

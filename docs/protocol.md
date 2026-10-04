@@ -654,7 +654,8 @@ submodule itself stays untouched):
 13. `0013-the-palace-moves-when-the-capital-falls.patch`: a civ whose capital is taken (`CaptureCity`) or
    destroyed (`DestroyCity`) gets a new one at once and free, as in Civ III (`CityInteractions.RelocatePalace`):
    its largest city (the oldest of those), preferring one without a Forbidden Palace; a Forbidden Palace where the
-   palace lands is lost. Corruption is measured again from there.
+   palace lands is lost. Corruption is measured again from there. A civ that held no city when it took one gets
+   its palace in that city, as one founding its first city does.
 14. `0014-units-disbanded-in-a-city-add-their-shields.patch`: the ruleset's disband script
    (`C7/Lua/civ3/behaviors/gameplay.lua`) failed for every unit disbanded inside its civ's borders (`HasCity`
    read as a method, then `GetType().Name` on a MoonSharp static userdata), so none gave shields. A unit disbanded
