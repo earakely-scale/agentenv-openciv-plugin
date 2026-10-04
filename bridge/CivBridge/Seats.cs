@@ -26,6 +26,9 @@ sealed class Seat(Player player, string label) {
 	/// <summary>Peace this seat offered another seat, with the gold it pays and the turn it offered it.</summary>
 	public readonly Dictionary<Player, (int Gold, int Turn)> PeaceOffers = [];
 
+	/// <summary>Trades offered to this seat, by who offers them (an AI during its turn, or another seat).</summary>
+	public readonly Dictionary<Player, StandingTrade> TradeOffers = [];
+
 	public readonly Dictionary<City, string> ProducingSource = [];
 
 	/// <summary>What each city builds next, after its current item (set_production's `then`), first first.</summary>

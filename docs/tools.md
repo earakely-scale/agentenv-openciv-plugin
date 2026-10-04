@@ -21,7 +21,7 @@ the valid alternatives and the exact call to make instead.
 | `research` | `tech` (optional) | With no tech: researchable techs with turns and what each unlocks. With a tech: sets it, queuing any prerequisites. |
 | `end_turn` | `skip_idle` (default false), `until_attention` (default false), `max_turns` (default 5), `note` (optional) | Either END TURN BLOCKED with each blocker and the call that resolves it, or the turn report plus the next brief. At the turn limit: `GAME OVER` and final metrics. `note`: one line for the people watching, what the agent did this turn and why (see [What spectators read](#what-spectators-read)). |
 | `revolution` | `government` | Starts anarchy (no taxes or science for a few turns), then the chosen government. The brief lists the choices. |
-| `diplomacy` | `action` (`status`, `declare_war`, `propose_peace`), `civ`, `gold` | Status: one line per civ you know (war or peace, score, government, military against yours, its wars, and at war the gold it asks for peace or the turn it talks again). `declare_war` starts a war; `propose_peace` pays the asked price. |
+| `diplomacy` | `action` (`status`, `declare_war`, `propose_peace`, `quote_trade`, `propose_trade`, `accept_trade`, `decline_trade`), `civ`, `gold` (peace), `give_techs`, `give_gold`, `get_techs`, `get_gold` (trades) | Status: one line per civ you know (war or peace, score, government, military against yours, its wars, and at war the gold it asks for peace or the turn it talks again; at peace its treasury, the techs each side could trade with their worth to you and to it, and a trade it offers). `declare_war` starts a war; `propose_peace` pays the asked price. `quote_trade` says what a trade is worth to each side, whether an AI takes it and the call that balances it; `propose_trade` makes it; `accept_trade` and `decline_trade` answer a standing offer. See [Trades](#trades). |
 | `plan` | `text` (optional) | Reads, or replaces, the agent's plan (at most 1,000 characters), which every brief shows back; spectators see it too. |
 | `message` | `to` (`"all"`, or another leader's civ or label), `text` (at most 280 characters) | Sends a message to another agent's leader, or to all of them, in a game with several seats; see [Messages](#messages). Not a game action: no footer. |
 
@@ -40,6 +40,24 @@ the valid alternatives and the exact call to make instead.
 - **Attacks:** an attack on a civ you are at peace with fails with the call that declares war. The win chance
   comes from the engine's attack and defense strengths and both units' hit points. It ignores retreats, so it is
   an estimate.
+
+## Trades
+
+- **What can be traded:** techs and gold, with a civ you have met and are at peace with. A tech you give must be one
+  the civ lacks, a tech you get one you lack; a trade with an AI carries at least one tech. Misspelt tech names are
+  read as the tradeable tech they plainly mean.
+- **Values:** a tech is worth its research cost to the civ that gets it (less to a civ that knows more civs that have
+  it, and less the beakers already spent on it), gold its face value. The status lists each tradeable tech as
+  `name you/them`.
+- **An AI** takes a trade worth at least as much to it as what it gives. `quote_trade` tells you before you propose
+  it, and how much gold balances it.
+- **An AI's offers:** an AI makes offers during its turn. Each one stands until the end of your next turn: a
+  `trade_offered` event, a `TRADE` line in the brief and `OFFERS` in the status, with what each side is worth to
+  you. Most are good for the AI only, so compare the two values before `accept_trade`.
+- **Another agent's civ:** `propose_trade` offers the trade; it stands until the end of the next turn and is made
+  when the other agent accepts it (or proposes the same trade back).
+- **Research:** a tech you get is known at once. If it was the one being researched, the research moves on (your
+  queue, or the engine's pick to confirm); otherwise the research keeps its progress.
 
 ## Several agents in one game
 

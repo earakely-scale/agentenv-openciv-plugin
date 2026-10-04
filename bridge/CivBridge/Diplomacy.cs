@@ -85,6 +85,7 @@ sealed partial class Session {
 		int price = war && other == null ? p.PeacePriceFor(gd, human) : 0;
 		int refuseUntil = RefusesTalksUntil(p);
 		double ours = Military(human);
+		bool trade = !war;
 		return new JsonObject {
 			["civ"] = Owner(p),
 			["agent"] = other != null,
@@ -94,6 +95,11 @@ sealed partial class Session {
 			["peace_price"] = war && other == null && price != int.MaxValue ? price : null,
 			["peace_offered"] = war ? OfferJson(OpenOffer(other, human)) : null,
 			["you_offered"] = war ? OfferJson(OpenOffer(seat, p)) : null,
+			["gold"] = p.gold,
+			["techs_for_you"] = trade ? TechsJson(p, human, p) : null,
+			["techs_for_them"] = trade ? TechsJson(human, p, p) : null,
+			["trade_offered"] = TradeJson(Standing(seat, p), toMe: true),
+			["you_offered_trade"] = TradeJson(Standing(other, human), toMe: false),
 			["score"] = ScoreOf(p),
 			["government"] = p.government.name,
 			["military_vs_yours"] = ours > 0 ? Math.Round(Military(p) / ours, 1) : null,
@@ -125,12 +131,15 @@ sealed partial class Session {
 	JsonObject DeclareWar(Args a) {
 		EnsurePlaying();
 		Player p = CivArg(a.Str("civ"));
+		Seat other = SeatOf(p);
 		if (PlayerRelationship.AtWar(human, p)) throw new BridgeError("already_at_war", $"You are already at war with {Owner(p)}.");
 		human.DeclareWarOn(p, gd.turn);
+		seat.TradeOffers.Remove(p);
+		other?.TradeOffers.Remove(human);
 		// The engine announces only the AI's declarations; this one reaches the other seats as a turn event.
 		new MsgWarDeclaration(human, p).send();
 		DrainUi();
-		string talks = SeatOf(p) == null ? $", which refuses to talk until turn {RefusesTalksUntil(p)}" : "";
+		string talks = other == null ? $", which refuses to talk until turn {RefusesTalksUntil(p)}" : "";
 		return new JsonObject {
 			["message"] = $"{human.civilization.name} declared war on {Owner(p)}{talks}.",
 			["civ"] = CivJson(p),

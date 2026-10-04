@@ -119,7 +119,8 @@ The human player's full situation. Result:
 - `governments` lists the governments a revolution can change to now, as in `revolution`'s result;
   `tile_penalty` is true when the current government takes 1 from any tile yield above 2 (Despotism);
   `revolution_target` is the one a revolution under way ends in. `rivals[].peace_price` is the gold that civ asks for peace while at war (null at peace, or
-  while it refuses to talk).
+  while it refuses to talk). `rivals[].trade_offered` is the trade that civ offers the seat while it stands (as in
+  `diplomacy`), else null.
 - `needs_orders` is true when the unit can move, is not under a standing order, and is not fortified.
 - `blockers` lists what stops `end_turn`: `no_research` (has a city, nothing being researched),
   `no_production` (a city producing nothing), `idle_unit` (one per unit with `needs_orders`). A `disorder` blocker
@@ -401,21 +402,25 @@ Args: `skip_idle` (default false), `until_attention` (default false), `max_turns
 - Otherwise idle units hold, research is auto-picked if missing, and the turn advances (up to
   `max_turns` while `until_attention` is set and no blocker appears). Result:
   `{"blocked": false, "turns_advanced", "turn", "game_over", "defeated", "events": [...],
-  "auto": [{"kind": "research_picked"|"government_picked"|"trade_declined", "text"}]}`.
+  "auto": [{"kind": "research_picked"|"government_picked", "text"}]}`.
 
 Event kinds: `city_founded`, `city_grew`, `city_starved`, `built` (unit/building completed),
 `tech_learned`, `unit_lost`, `unit_promoted`, `settle_failed`, `goto_blocked`, `explore_done`,
 `job_done`, `contact` (met a civ), `war_declared`, `threat` (a foreign or barbarian unit within 3
 tiles of a city or a settler), `city_destroyed`, `city_captured` (the seat took a city, or a civ it knows
-took one in sight), `city_lost` (one of the seat's cities was taken), `civ_destroyed`, `disorder`. Each event is
+took one in sight), `city_lost` (one of the seat's cities was taken), `civ_destroyed`, `disorder`, `trade_offered`
+(an AI or another seat offers a trade; see `accept_trade`), `trade_signed` and `trade_declined` (another seat answered
+the seat's trade offer). Each event is
 `{"turn", "kind", "text"}`, plus `"x", "y"` when it has a location.
 
 ### `autoplay`
 Args: `turns` (required), `policy`: `null` (end turns holding everything, research auto-picked),
 `found_capital` (found the capital with the first settler on turn 1, automate workers, then like
 `null`), `engine_ai` (OpenCiv3's own AI plays the human seat each turn), and `record` (default
-false). Result: `{"turn", "game_over", "defeated", "score": {...}, "trajectory": [{"turn",
-"score": {...}}]}` (trajectory only when `record`).
+false). Result: `{"turn", "game_over", "defeated", "score": {...}, "trades_declined", "trajectory": [{"turn",
+"score": {...}}]}` (trajectory only when `record`). Every policy declines the trades AIs offer the seat
+(`trades_declined` counts them), as the env did before trading, so baselines do not depend on trades; with
+`engine_ai` the engine's AI still trades with other AIs itself during the seat's turn, as it always did.
 
 ### `score`
 Result: `{"turn", "human": {score}, "players": [{"civ", "is_human", "seat", "defeated", "score": {...}, "share":
@@ -434,8 +439,18 @@ the target. Result: `{"message", "government": {"current", "anarchy_until", "rev
 ### `diplomacy`
 No args. Result: `{"civs": [<civ>], "unmet": n}`, where a civ (one you have met and that is alive) is `{"civ",
 "agent" (another seat), "at_war", "talks", "refuses_talks_until", "peace_price", "peace_offered" and "you_offered"
-(a standing peace offer between seats: `{"gold", "until_turn"}`), "score": {...}, "government", "military_vs_yours"
-(sum of each combat unit's best strength, theirs over yours), "at_war_with": [known civs]}`.
+(a standing peace offer between seats: `{"gold", "until_turn"}`), "gold" (its treasury, as the client's deal screen
+shows it), "techs_for_you" and "techs_for_them", "trade_offered", "you_offered_trade", "score": {...},
+"government", "military_vs_yours" (sum of each combat unit's best strength, theirs over yours), "at_war_with":
+[known civs]}`.
+
+- `techs_for_you` are the techs the civ knows and you do not, `techs_for_them` the reverse (null at war), each
+  `{"name", "you_value", "they_value"}` and most valuable to the receiver first. A tech's value to a civ is the
+  engine's `TradeOffer.GoldEquivalentFor`: its research cost for that civ (`GameData.TechCostFor`: lower the more
+  civs it knows have it, and less the beakers already spent when it is the one being researched).
+- `trade_offered` is the trade the civ offers you while it stands, `you_offered_trade` the one you offered another
+  seat: `{"you_get": {"techs", "gold"}, "you_give": {"techs", "gold"}, "you_value_get", "you_value_give",
+  "until_turn"}` (the last turn it stands), else null.
 
 ### `declare_war`
 Args: `civ`. The engine's `DeclareWarOn`; the civ refuses to talk for 5 to 16 turns (longer after a sneak attack
@@ -452,6 +467,39 @@ asked price, when you can pay), `not_enough_gold`.
 An AI that wants peace offers it during its turn; the bridge cannot hold the AI's turn open, so it reports a
 `peace_offered` event (which stops `end_turn(until_attention)`) and the agent accepts with `propose_peace`. Peace
 between any two civs the human knows is reported as `peace_signed`.
+
+### Trades: `quote_trade`, `propose_trade`, `accept_trade`, `decline_trade`
+Techs and gold change hands between the seat and a civ it has met and is at peace with, through the engine's own
+deal path, as the client's deal screen does it (`DealScreen.AttemptDeal`): the AI's `Player.WouldAcceptDealFrom`
+judges a trade and `Player.ExecuteDeal` makes it. An AI takes a trade when what it gets is worth at least what it
+gives, both by its own values (its research costs, gold at face value); it has no memory of past trades and no
+mood. Gold per turn, maps, luxuries and embassies are not traded (the engine has no tradeable form for them).
+
+- `quote_trade` and `propose_trade` take `civ`, `give_techs` and `get_techs` (lists of names; default none),
+  `give_gold` and `get_gold` (default 0). Each tech given must be one you know and the civ does not (one of its
+  `techs_for_them`), each tech got the reverse; each side must have the gold it gives; a trade with an AI carries at
+  least one tech, as the engine's own trades do. Errors: `unknown_civ` (alternatives = the civs you have met),
+  `not_at_peace`, `unknown_tech` (alternatives = the techs that side can give), `not_enough_gold`, `bad_args`.
+- `quote_trade` changes nothing. Result: `{"civ", "agent", "you_give", "you_get" (each `{"techs", "gold"}`),
+  "you_value_give", "you_value_get", "they_value_give", "they_value_get", "accepts", "gold_to_balance" (the gold you
+  would add for the AI to accept), "gold_they_would_add" (the most gold you could ask on top and still have it
+  accepted), "suggest" (the balanced `propose_trade` call, when you can pay it)}`. With another seat `accepts`,
+  `gold_to_balance` and `gold_they_would_add` are null: the other agent decides.
+- `propose_trade` with an AI makes the trade or fails with `refused` (the AI's two values; suggest = the balanced
+  call, when you can pay it). Result: `{"message", "civ": <civ>, "gold", "research"}`, `research` as in `state`.
+  With another seat it only offers the trade (see Seats), with the same result.
+- An AI offers trades itself during its turn (`PlayerAI.AttemptTrading`, on about a quarter of its turns). The AI's
+  turn cannot wait for the agent, so the bridge keeps the offer for the seat until the end of its next turn
+  (`trade_offered` in `diplomacy` and `state.rivals`, and a `trade_offered` event with what each side is worth to
+  you) and lets the AI's turn go on. The AI values its offers at least even for itself; by your own values they are
+  often bad, so compare `you_value_get` with `you_value_give`. A newer offer from the same AI replaces the older one.
+- `accept_trade {civ}` makes the standing offer, checked again first: each side must still have what it gives and
+  an AI must still accept it by its values (both drift a little in a turn). Result as `propose_trade`'s. Errors:
+  `no_offer` (none stands: it lapsed, was answered, or a war ended it), `offer_changed` (with why it can no longer
+  be made). `decline_trade {civ}` drops it (`no_offer` likewise); letting it lapse does the same.
+- A tech got in a trade is known at once. If it was the one being researched, its beakers go with it and the research
+  moves on as when a tech is learned (the seat's queue goes on, else the engine picks and `choose_research` asks);
+  any other research keeps its progress (patch 0017). `declare_war` drops the trades standing between the two.
 
 ## Seats: several agents in one game
 
@@ -472,12 +520,18 @@ events, decisions and plan state are its own. An unknown seat fails with `unknow
 - **Peace between seats** has no price: `propose_peace` from one seat stands until the end of the next turn and
   reaches the other as a `peace_offered` event; a `propose_peace` from the other meanwhile signs it, each side paying
   the gold it offered. Talks are never refused between seats.
+- **Trades between seats** need both: `propose_trade` from one seat changes nothing yet; the offer stands until the
+  end of the next turn, shows in the other's `diplomacy` (`trade_offered`) and reaches it as a `trade_offered` event.
+  The other makes it with `accept_trade`, or by proposing the same trade back, once (both seats' offers between the
+  two go); the proposer then gets a `trade_signed` event, or `trade_declined` after `decline_trade`. Gold alone may
+  change hands between seats.
 - **Victory** (see Conventions): conquest also when one seat's civilization is the last an agent still plays
   (the other seats are defeated), whatever AI civs are left. The game is then over for every seat. A victory on
   score at the turn limit may be an AI civ's; the victor verifier then still ranks the seats by score, while an AI
   civ's conquest or domination leaves the match without a victor.
-- `autoplay` fails with `multi_seat`. The autosave (format 2) keeps every seat, the victory and the battles
-  `known_map` lists; `load` restores them.
+- `autoplay` fails with `multi_seat`. The autosave (format 2) keeps every seat, the victory, the battles
+  `known_map` lists and the standing peace and trade offers (`trade_offers`; a save without them loads with none);
+  `load` restores them.
 
 ## Engine patches
 
@@ -541,6 +595,11 @@ submodule itself stays untouched):
    and a traded tech further down the queue stayed in it; at the head, `PlayerAI.MaybePickTechToResearch` picked it
    again forever and the turn hung (a seat with a `set_research` queue, played by `autoplay`'s `engine_ai`). The
    completed tech now leaves the queue wherever it is, and a known tech at the head is skipped.
+17. `0017-a-traded-tech-keeps-research-progress.patch`: `Player.CompleteResearchingTech` cleared the current
+   research and its beakers for every tech it completed, so a civ that got a tech in a trade (`Player.ExecuteDeal`)
+   lost all its progress on whatever else it was researching (AIs lost it about three times per 200-turn game, and
+   an agent buying a tech would at every purchase). The research now ends only when the completed tech is the one
+   being researched; a traded tech that is the current research still takes its beakers with it.
 
 Measured over full 540-turn Standard games with 7 AIs at Regent (seeds 1-3), patches 0005-0009 take:
 - mean AI techs at T540 from 32 to 43-45, and civs with an Industrial-era tech from 0 to 3-7;
@@ -562,7 +621,7 @@ Implemented. These extend the sections above; folding them in is still to do.
 - `hurry {city}`: buys the current production with gold (or population, where the government uses forced labour).
   - Before acting, it uses `GetHurryProductionDetails`; refusals give `cannot_hurry` with the engine's reason and the cost.
   - Result: `{"message", "gold_cost", "pop_cost", "city"}`.
-- **Trades stay auto-declined.** Every declined offer is an `auto` entry, `trade_declined`, that says what was offered.
+- **Trades** were auto-declined; they are now made with `propose_trade` and `accept_trade` (see Trades above).
 - **Defenders keep order.** Under Despotism, each military unit in a city suppresses one unhappy citizen (up to 2). `state` reports it and the disorder hints say so.
 
 ### Who decides

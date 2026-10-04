@@ -182,6 +182,8 @@ class Game:
         self.met = False
         self.government, self.anarchy_until, self.revolution_target = "Despotism", None, None
         self.wars, self.talks_from, self.barbarian_killed = set(), {}, False
+        # Greece's side of trades: its techs and treasury, and an offer it stands by (set with _game).
+        self.greece_known, self.greece_gold, self.trade_offer = ["Alphabet", "Masonry", "Ceremonial Burial"], 60, None
         self.battles = []  # known_map's, every one the seat's own attack
         self.threats_seen = set()
         self.risk_seen = set()
@@ -411,7 +413,8 @@ class Game:
             "cities": [self.city_view(c) for c in self.cities.values()],
             "units": [self.unit_view(u) for u in self.units.values()],
             "rivals": [{"civ": o, "met": o == "Greece" and self.met, "at_war": o in self.wars,
-                        "peace_price": self.peace_price(o), "cities_seen": 1 if o == "Greece" else 0}
+                        "peace_price": self.peace_price(o), "cities_seen": 1 if o == "Greece" else 0,
+                        "trade_offered": self.trade_offer if o == "Greece" and o not in self.wars else None}
                        for o in self.opponents],
             "blockers": self.blockers(), "decisions": json.loads(json.dumps(self.decisions)),
             "last_events": self.last_events,
@@ -431,7 +434,67 @@ class Game:
                 "refuses_talks_until": (self.talks_from[civ] if war and self.turn < self.talks_from.get(civ, 0)
                                         else None),
                 "peace_price": self.peace_price(civ), "government": "Despotism", "military_vs_yours": 1.5,
-                "score": {"total": 30 + self.turn, "cities": 1, "pop": 2, "tiles": 9, "techs": 3}, "at_war_with": []}
+                "score": {"total": 30 + self.turn, "cities": 1, "pop": 2, "tiles": 9, "techs": 3}, "at_war_with": [],
+                "gold": self.greece_gold,
+                "techs_for_you": None if war else self.tradeable(self.greece_known, self.known),
+                "techs_for_them": None if war else self.tradeable(self.known, self.greece_known),
+                "trade_offered": self.trade_offer if self.trade_offer and not war else None, "you_offered_trade": None}
+
+    # ---- trades: Greece values a tech at its cost, and takes a trade worth at least as much to it as it gives ----
+
+    @staticmethod
+    def tradeable(have, lack) -> list:
+        return [{"name": t, "you_value": TECHS[t][0], "they_value": TECHS[t][0]} for t in have if t not in lack]
+
+    def deal(self, a) -> tuple[str, dict, dict]:
+        civ = self.met_civ(a["civ"])
+        if civ in self.wars:
+            raise Refused("not_at_peace", f"You are at war with {civ}; make peace first.")
+        sides = {"give": (self.known, self.greece_known, self.gold), "get": (self.greece_known, self.known,
+                                                                            self.greece_gold)}
+        offer = {}
+        for side, (have, lack, gold) in sides.items():
+            options = [t for t in have if t not in lack]
+            techs = a.get(f"{side}_techs") or []
+            if bad := [t for t in techs if t not in options]:
+                raise Refused("unknown_tech", f"{bad[0]} cannot be traded that way; it can be: {', '.join(options)}.",
+                              options)
+            if a.get(f"{side}_gold", 0) > gold:
+                raise Refused("not_enough_gold", f"Only {gold} gold to give, not {a[f'{side}_gold']}.")
+            offer[side] = {"techs": techs, "gold": a.get(f"{side}_gold", 0)}
+        return civ, offer["give"], offer["get"]
+
+    def quote_trade(self, a) -> dict:
+        civ, give, get = self.deal(a)
+        value = {k: sum(TECHS[t][0] for t in o["techs"]) + o["gold"] for k, o in (("give", give), ("get", get))}
+        short = max(0, value["get"] - value["give"])
+        balanced = f'give_gold={give["gold"] + short}, get_techs={json.dumps(get["techs"])}'
+        return {"civ": civ, "agent": False, "you_give": give, "you_get": get, "you_value_give": value["give"],
+                "you_value_get": value["get"], "they_value_give": value["give"], "they_value_get": value["get"],
+                "accepts": short == 0, "gold_to_balance": short, "gold_they_would_add": 0,
+                "suggest": None if short == 0 else f'diplomacy(action="propose_trade", civ="{civ}", {balanced})'}
+
+    def make_trade(self, civ, give, get) -> dict:
+        self.known += get["techs"]
+        self.greece_known += give["techs"]
+        self.gold += get["gold"] - give["gold"]
+        self.greece_gold += give["gold"] - get["gold"]
+        return {"message": f"Traded with {civ}.", "civ": self.civ_view(civ), "gold": self.gold}
+
+    def propose_trade(self, a) -> dict:
+        q = self.quote_trade(a)
+        if not q["accepts"]:
+            raise Refused("refused", f"{q['civ']} wants {q['gold_to_balance']} gold more.", suggest=q["suggest"])
+        return self.make_trade(q["civ"], q["you_give"], q["you_get"])
+
+    def answer_trade(self, a, accept: bool) -> dict:
+        civ = self.met_civ(a["civ"])
+        offer, self.trade_offer = self.trade_offer, None
+        if offer is None:
+            raise Refused("no_offer", f"{civ} has no trade offer standing for you.")
+        if accept:
+            return self.make_trade(civ, offer["you_give"], offer["you_get"])
+        return {"message": f"Declined {civ}'s offer.", "civ": self.civ_view(civ)}
 
     def met_civ(self, name) -> str:
         met = ["Greece"] if self.met else []
@@ -1029,6 +1092,12 @@ class Game:
             return self.declare_war(a)
         if cmd == "propose_peace":
             return self.propose_peace(a)
+        if cmd == "quote_trade":
+            return self.quote_trade(a)
+        if cmd == "propose_trade":
+            return self.propose_trade(a)
+        if cmd in ("accept_trade", "decline_trade"):
+            return self.answer_trade(a, cmd == "accept_trade")
         if cmd == "hurry":
             return self.hurry(a)
         if cmd == "techs":
