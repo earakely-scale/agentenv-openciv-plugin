@@ -52,9 +52,10 @@ def at(o: dict) -> tuple[int, int]:
 
 def check_cargo(world: dict) -> None:
     """The invariants of units at sea: a land unit on water is aboard a live ship of its owner on its tile; a ship
-    carries no more than its capacity, only land units, all on its tile; a sea unit on land is in its owner's city; and
-    no tile holds two owners' units."""
+    carries no more than its capacity, only land units, all on its tile; a sea unit on land is in its owner's city; no
+    tile holds two owners' units; and no city stands on water (a settler founds one only ashore)."""
     water = {(t[0], t[1]) for t in world["tiles"] if t[2] in WATER}
+    assert not [c for c in world["cities"] if at(c) in water], "a city on water"
     by_id = {u["id"]: u for u in world["units"]}
     cities = {(c["x"], c["y"]): c["owner"] for c in world["cities"]}
     ships = {u["id"] for u in world["units"] if u["type"] in SHIPS}
@@ -530,7 +531,8 @@ def test_a_civ_destroyed_with_a_passenger_at_sea(launch, tmp_path):
 def test_a_ship_with_no_port_left_lands_its_settler(launch, tmp_path):
     """patches/0022: an AI loses its only city while its Galley carries a Settler far out at sea, with no plan (as
     after a load). With no port left the ship sails to the nearest shore and the Settler goes ashore (it used to stay
-    aboard for the rest of the game, as the ship only landed cargo next to its own tile)."""
+    aboard for the rest of the game, as the ship only landed cargo next to its own tile), and founds its city on land
+    (with no city left it used to found one where it stood, on the water)."""
     b, _, loser, _ = last_city_taken(launch, tmp_path, "Settler")
     assert not b.call("world")["players"][loser]["defeated"], "a civ with a settler lives on"
     for _ in range(20):
@@ -542,6 +544,9 @@ def test_a_ship_with_no_port_left_lands_its_settler(launch, tmp_path):
             break
     assert settler is None or not settler["aboard"], settler
     assert settler or [c for c in world["cities"] if c["owner"] == loser], "the Settler went ashore and founded a city"
+    for _ in range(5):
+        b.call("end_turn", skip_idle=True)
+        check_cargo(b.call("world"))
 
 
 def test_a_broke_ai_spares_the_ship_carrying_its_settler(launch, tmp_path):
