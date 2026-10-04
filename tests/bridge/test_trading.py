@@ -293,3 +293,55 @@ def test_seats_trade_when_both_agree(launch, tmp_path):  # noqa: F811
     r.call("propose_trade", seat="Rome", civ="Greece", give_gold=1)
     assert r.call("decline_trade", seat="Greece", civ="Rome")["message"] == "Declined Rome's offer."
     assert ("trade_declined", "Greece declined your offer of 1 gold for nothing.") in kinds(end_round(r)["Rome"])
+
+
+def test_offers_end_with_the_game(launch, tmp_path):  # noqa: F811
+    """A game that ends (here at its turn limit) ends the offers standing in it: none is told, listed or accepted."""
+    b = seat_game(launch, "--autosave", str(tmp_path / "a"))
+    for civ in SEATS:
+        b.call("unit_order", seat=civ, unit="u1", order="found_city")
+    end_round(b)
+    path = tmp_path / "a" / "autosave.json"
+    tech = meet(path, "Rome", "Greece", 50)
+    save = json.loads(path.read_text())
+    save["bridge"]["turn_limit"] = save["game"]["turnNumber"] + 1
+    path.write_text(json.dumps(save))
+    r = launch("--autosave", str(tmp_path / "b"))
+    r.call("load", path=str(path))
+    r.call("propose_trade", seat="Rome", civ="Greece", give_techs=[tech], get_gold=10)
+    assert civ_named(r, "Rome", "Greece")["trade_offered"]
+    events = end_round(r)
+    assert r.call("state", seat="Greece")["game_over"]
+    assert not any(k == "trade_offered" for k, _ in kinds(events["Greece"]))
+    assert civ_named(r, "Rome", "Greece")["trade_offered"] is None
+    assert r.error("accept_trade", seat="Greece", civ="Rome")["code"] == "game_over"
+
+
+def test_a_tech_got_in_a_trade_replaces_an_obsolete_unit_in_production(launch, tmp_path):  # noqa: F811
+    """Feudalism got mid-turn makes the Spearman a city is building obsolete (a Pikeman can be built there, with
+    Iron): the city builds the Pikeman instead, keeping its shields, rather than finishing an obsolete unit."""
+    b = seat_game(launch, "--autosave", str(tmp_path / "a"))
+    for civ in SEATS:
+        b.call("unit_order", seat=civ, unit="u1", order="found_city")
+    end_round(b)
+    path = tmp_path / "a" / "autosave.json"
+    meet(path, "Rome", "Greece", 50)
+    save = json.loads(path.read_text())
+    g = save["game"]
+    players = {p["civilization"]: p for p in g["players"]}
+    players["Rome"]["knownTechs"] = sorted(set(players["Rome"]["knownTechs"]) | {"tech-1", "tech-8"})
+    players["Greece"]["knownTechs"] = sorted(set(players["Greece"]["knownTechs"]) | {"tech-23"})
+    city = next(c for c in g["cities"] if c["owner"] == players["Rome"]["id"])
+    city["producible"], city["producibleType"], city["shieldsStored"] = "Spearman", "unit", 9
+    at = city["location"]
+    next(t for t in g["map"]["tiles"] if (t["x"], t["y"]) == (at["x"], at["y"]))["resource"] = "Iron"
+    path.write_text(json.dumps(save))
+    r = launch()
+    r.call("load", path=str(path))
+    assert r.call("city", seat="Rome", city="c1")["producing"] == "Spearman"
+    r.call("propose_trade", seat="Greece", civ="Rome", give_techs=["Feudalism"])
+    res = r.call("accept_trade", seat="Rome", civ="Greece")
+    name = city["name"]
+    assert res["message"].endswith(f"{name} now builds a Pikeman: the Spearman it was building is obsolete.")
+    c1 = r.call("city", seat="Rome", city="c1")
+    assert (c1["producing"], c1["production_stored"]) == ("Pikeman", 9)

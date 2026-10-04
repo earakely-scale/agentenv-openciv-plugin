@@ -184,10 +184,13 @@ sealed partial class Session {
 		return Execute(p, give, get, $"Traded with {civ}: you gave {Describe(give)} and got {Describe(get)}.");
 	}
 
-	/// <summary>The trade `from` offers `s`'s civ, while it stands: not lapsed, and the two still alive and at peace.</summary>
+	/// <summary>
+	/// The trade `from` offers `s`'s civ, while it stands: not lapsed, the game not over (no victory, the turn limit not
+	/// reached), and the two still alive and at peace.
+	/// </summary>
 	StandingTrade Standing(Seat s, Player from) =>
-		s != null && s.TradeOffers.TryGetValue(from, out StandingTrade t) && gd.turn <= t.Until && !from.defeated && !s.Player.defeated
-			&& !PlayerRelationship.AtWar(s.Player, from) ? t : null;
+		s != null && s.TradeOffers.TryGetValue(from, out StandingTrade t) && gd.turn <= t.Until && victory == null && gd.turn < turnLimit
+			&& !from.defeated && !s.Player.defeated && !PlayerRelationship.AtWar(s.Player, from) ? t : null;
 
 	/// <summary>
 	/// The trade `from` offers `s`'s civ (s the seat, or `from` the seat) while it stands and can be made as it is: the views
@@ -246,16 +249,34 @@ sealed partial class Session {
 		var research = new Dictionary<Seat, ID>();
 		foreach (Seat s in seats) research[s] = s.Player.currentlyResearchedTech;
 		p.ExecuteDeal(gd, human, give, get);
+		var switched = new Dictionary<Seat, List<string>>();
 		EachSeat(s => {
 			if (human.currentlyResearchedTech != research[s]) ResearchMoved();
+			switched[s] = ReplaceObsoleteProduction();
 		});
 		DrainUi();
+		if (switched[seat].Count > 0) message += " " + string.Join(" ", switched[seat]);
 		return new JsonObject {
 			["message"] = message,
 			["civ"] = CivJson(p),
 			["gold"] = human.gold,
 			["research"] = Research(),
 		};
+	}
+
+	/// <summary>
+	/// A tech got mid-turn (in a trade) can make the unit a city is building obsolete: the city builds the unit that
+	/// replaces it instead, keeping its shields (as Civ III does), rather than finishing an obsolete unit.
+	/// </summary>
+	List<string> ReplaceObsoleteProduction() {
+		var told = new List<string>();
+		foreach (City c in HumanCities()) {
+			if (c.itemBeingProduced is not UnitPrototype u || u.UpgradeTargetIn(c, c.GetAccessibleResources(gd)) is not UnitPrototype better)
+				continue;
+			c.SetItemBeingProduced(better);
+			told.Add($"{c.name} now builds {WithArticle(better.name)}: the {u.name} it was building is obsolete.");
+		}
+		return told;
 	}
 
 	/// <summary>An AI's offer, made during its turn: it stands for the seat's next turn (the AI's turn cannot wait for the agent).</summary>

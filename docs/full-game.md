@@ -83,8 +83,12 @@ rotated at a 100K context cap.
      building's culture doubles at AD 1001 (about T216) and quadruples at AD 2001 (about T491), where Civ III
      doubles each building 1000 years after it was built. The thresholds are met earlier than in Civ III. Fixing
      the build year would change every game's borders and baselines, and is left for its own patch.
-   - Measured in engine-AI games (Standard, 7 AIs, Regent, Roaming, the bridge before and after): with a 540-turn
-     limit nothing changes. Seeds 1 and 2 end on score at T540 as before (Rome, the engine-AI-played seat). Their
+   - Re-measured with every feature of this round (buildings, trading, later units, naval play): on seed 1 the
+     engine-AI-played seat (Rome, 76 cities) wins by culture at T463, with 346,039 culture at T540 against Egypt's
+     144,866 (2.39x): the buildings' economy and the captures push it past the 2x rule; seed 2 ends on score at
+     T540 with Babylon on top. So an engine_ai baseline can now end before the turn limit (autoplay plays on).
+   - Measured with the culture victory alone (Standard, 7 AIs, Regent, Roaming, the bridge before and after): with
+     a 540-turn limit nothing changed. Seeds 1 and 2 ended on score at T540 (Rome, the engine-AI-played seat). Their
      top civ passes 100,000 culture around T460-475 but never holds twice the next civ's (top-to-second at T540:
      215,753 to 167,994, 1.28x, and 191,107 to 161,557, 1.18x), and the best city reaches 15,461 (Thebes) and
      12,033 (Sidon). In a 1000-turn game (seed 1), Egypt now wins by culture on T595, when Thebes passes 20,000;

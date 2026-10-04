@@ -149,11 +149,18 @@ def idle_groups(units: list[dict]) -> list[tuple[str, int]]:
     return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
 
 
+def cargo_text(u: dict) -> str:
+    """A ship's passengers, for a list of units: ", cargo u4 u5"."""
+    return ", cargo " + " ".join(u["cargo"]) if u.get("cargo") else ""
+
+
 def batch_hint(units: list[dict]) -> str:
-    """A unit_orders call for idle units, by type: workers work, settlers settle, the rest fortify."""
+    """A unit_orders call for idle units, by type: workers work, settlers settle, the rest fortify. A ship carrying
+    passengers is left out: fortified at sea, it would park them there out of sight."""
     def order(t: str) -> str:
         return "auto_work" if t == "Worker" else "explore" if t in ("Scout", "Explorer") else "fortify"
-    groups = [t for t, _ in idle_groups(units) if t != "Settler"][:2]
+    laden = {u["type"] for u in units if u.get("cargo")}
+    groups = [t for t, _ in idle_groups(units) if t != "Settler" and t not in laden][:2]
     if not groups:
         return 'unit_orders(orders=[{"unit": "idle", "order": "..."}])'
     return "unit_orders(orders=[" + ", ".join(f'{{"unit": "idle:{t}", "order": "{order(t)}"}}' for t in groups) + "])"
@@ -521,7 +528,8 @@ def attention_lines(state: dict) -> list[str]:
     if line := upgrades_line(state):
         out.append(line)
     gold = state.get("gold", 0)
-    if gold >= IDLE_GOLD:
+    # Gold the upgrade line above asks for is not idle.
+    if gold >= IDLE_GOLD and not any((u.get("upgrade") or {}).get("ok") for u in state.get("units", [])):
         hints = [h for h in (science_fix(state),) if h]
         if state.get("government") not in FORCED_LABOUR and cities:
             hints.append('buy(city="...") rushes a city\'s production')
@@ -685,7 +693,7 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
 
     standing = [u for u in s.get("units", []) if not u.get("needs_orders") and u.get("status") not in ("idle", "done")]
     if standing:
-        items = [f"{u['id']} {u['type']} {status_text(u)}" for u in standing[:MAX_STANDING]]
+        items = [f"{u['id']} {u['type']} {status_text(u)}" + cargo_text(u) for u in standing[:MAX_STANDING]]
         if len(standing) > MAX_STANDING:
             items.append(f"+{len(standing) - MAX_STANDING} more")
         lines.append("STANDING " + " · ".join(items))

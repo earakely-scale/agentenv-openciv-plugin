@@ -46,3 +46,18 @@ async def test_list_units_names_passengers_and_cargo(env):
     listed = {t.name: t for t in await env.mcp.list_tools()}
     description = " ".join(listed["list_units"].description.split())
     assert '("aboard u3" on a ship), a ship\'s cargo ("cargo 1/2: u5")' in description
+
+
+def test_a_laden_ship_is_not_told_to_fortify_and_standing_shows_its_cargo():
+    """Fortified at sea, a ship parks its passengers out of sight: the batch hint leaves laden ships out, and the
+    STANDING line names who is aboard."""
+    from test_render import state, unit
+
+    s = state(2, idle=0, standing=0, n_events=0)
+    galley = {**unit(3, "Galley", 30, 10, needs=True), "capacity": 2, "cargo": ["u4", "u5"]}
+    warriors = [unit(n, "Warrior", 20, 10, needs=True) for n in (6, 7)]
+    hint = render.batch_hint([galley, *warriors])
+    assert hint == 'unit_orders(orders=[{"unit": "idle:Warrior", "order": "fortify"}])'
+    s["units"] = [{**galley, "needs_orders": False, "status": "fortified"},
+                  {**unit(4, "Warrior", 30, 10, status="aboard"), "aboard": "u3"}]
+    assert "STANDING u3 Galley fortified, cargo u4 u5" in render.brief(s, start_techs=2)

@@ -22,11 +22,11 @@ Goal: the highest score at turn {turn_limit}. Score = 10 per city + 3 per citize
 sizes) + 1 per tile inside your borders + 4 per known technology, counting the ones you start with.
 
 The tools: get_turn_brief (your whole situation, including what is waiting for a decision),
-list_units, view_map, find_city_sites, unit_order (including attack and bombard, and board and unload
-to carry land units by ship), city_info,
+list_units, view_map, find_city_sites, unit_order (including attack and bombard, upgrade for gold in a
+city, and board and unload to carry land units by ship), unit_orders (many units at once), city_info,
 set_production, research, set_rates (science and luxury rates), buy (rush production with gold),
-revolution (change government), diplomacy (the civilizations you know, war and peace), end_turn and
-plan (notes that every brief shows back).
+revolution (change government), diplomacy (the civilizations you know, war and peace, and trades of techs
+and gold), end_turn and plan (notes that every brief shows back).
 
 The game advances only when you end your turn; the other civilizations and the barbarians move in
 between. A city that falls in war is captured: it loses a citizen, and one of size 1 is destroyed instead.

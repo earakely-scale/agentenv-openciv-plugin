@@ -94,3 +94,15 @@ async def test_the_brief_and_list_units_name_the_upgrades(env):
     listed = {t.name: t for t in await env.mcp.list_tools()}
     assert "units that can upgrade and the call" in listed["get_turn_brief"].description
     assert "in a city its upgrade and the gold (or why not now)" in listed["list_units"].description
+
+
+def test_gold_an_upgrade_asks_for_is_not_called_unspent():
+    from test_render import state, unit
+
+    s = state(2, idle=0, standing=0, n_events=0)
+    s["gold"] = 300
+    assert "gold 300 unspent" in render.brief(s, start_techs=2)
+    s["units"] = [{**unit(5, "Spearman", 12, 10, status="fortified"),
+                   "upgrade": {"to": "Pikeman", "gold": 30, "ok": True}}]
+    text = render.brief(s, start_techs=2)
+    assert "can upgrade for 30 gold" in text and "unspent" not in text

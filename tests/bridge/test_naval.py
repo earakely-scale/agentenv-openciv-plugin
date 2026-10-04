@@ -5,6 +5,7 @@ sea takes its passengers with it (patches/0020), the AI explores by sea (patches
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import test_protocol
 from test_protocol import SEED, Bridge, found_capital, unit
@@ -77,8 +78,14 @@ def check_cargo(world: dict) -> None:
     assert all(len(o) == 1 for o in owners.values()), {p: o for p, o in owners.items() if len(o) > 1}
 
 
-SHIPS = {"Galley", "Caravel", "Galleon", "Frigate", "Privateer", "Curragh", "Ironclad", "Transport", "Destroyer"}
-CAPACITY = {"Galley": 2, "Caravel": 3, "Galleon": 4, "Frigate": 2, "Transport": 8}
+def sea_units() -> dict[str, int]:
+    """Every sea unit of the ruleset the bridge ships with, by its capacity (land units it carries)."""
+    rules = json.loads((Path(test_protocol.CMD[0]).parent / "Lua" / "civ3" / "ruleset.json").read_text())
+    return {p["name"]: p.get("capacity", 0) for p in rules["unitPrototypes"] if "Sea" in p.get("categories", [])}
+
+
+CAPACITY = sea_units()
+SHIPS = set(CAPACITY)
 
 
 def harbour(launch, tmp_path, turns: int = 1) -> tuple[Bridge, dict]:

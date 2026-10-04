@@ -61,8 +61,10 @@ the valid alternatives and the exact call to make instead.
   two values before `accept_trade`.
 - **Another agent's civ:** `propose_trade` offers the trade; it stands until the end of the next turn and is made
   when the other agent accepts it (or proposes the same trade back).
+- **The game's end** ends every offer: after a victory or the turn limit none is told, listed or accepted.
 - **Research:** a tech you get is known at once. If it was the one being researched, the research moves on (your
   queue, or the engine's pick to confirm); otherwise the research keeps its progress.
+
 ## Upgrades
 
 - **Where and what:** a unit standing in one of your cities upgrades to the furthest unit along its line that the
@@ -80,7 +82,8 @@ the valid alternatives and the exact call to make instead.
   Samurai a Cavalry, defence 3); the unit line shows the target, so check it before you upgrade a city's defender.
 - **Obsolete units:** a unit leaves a city's options exactly when it could upgrade there (Archers at Invention,
   not before); `set_production` says which unit replaces it, and a queued unit that went obsolete leaves the queue
-  with the same reason.
+  with the same reason. A unit being built that goes obsolete when a trade brings its tech mid-turn is replaced by
+  the unit that replaces it, keeping its shields; the trade's message says so.
 - **The AI** upgrades its city garrisons too, with the gold above a turn's upkeep, and not into a weaker unit.
 
 ## Several agents in one game
