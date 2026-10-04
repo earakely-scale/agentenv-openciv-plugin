@@ -18,27 +18,32 @@ sealed partial class Session {
 		};
 	}
 
+	/// <summary>The city's yields as if in order: a city in civil disorder makes nothing, but what a building would add
+	/// once order returns is what counts (the AI's ChooseProducible.ScoreBuilding values it the same way).</summary>
+	static (CommerceBreakdown, CorruptableValue) YieldsInOrder(City c) =>
+		(c.CurrentCommerceYield(respectCivilDisorder: false), c.CurrentProductionYield(respectCivilDisorder: false));
+
 	/// <summary>
-	/// The city's yields with the building added, as the engine computes them: it is put in the city's buildings for
-	/// the call and taken out again (as LuxuryHappiness does with the rates). Corruption is the city's current figure.
+	/// The city's yields in order with the building added, as the engine computes them: it is put in the city's
+	/// buildings for the call and taken out again (as LuxuryHappiness does with the rates). Corruption is the city's
+	/// current figure.
 	/// </summary>
 	static (CommerceBreakdown, CorruptableValue) YieldsWith(City c, Building b) {
 		var cb = new CityBuilding { building = b, builtByPlayer = c.owner, year = 0 };
 		c.constructed_buildings.Add(cb);
 		try {
-			return (c.CurrentCommerceYield(), c.CurrentProductionYield());
+			return YieldsInOrder(c);
 		} finally {
 			c.constructed_buildings.Remove(cb);
 		}
 	}
 
 	/// <summary>What a building does, in short phrases from its engine fields, economic effects first; a multiplier says
-	/// what it would add in this city now (at the current rates, tiles and corruption).</summary>
+	/// what it would add in this city now (at the current rates, tiles and corruption, in order).</summary>
 	List<string> BuildingEffects(Building b, City c) {
 		var effects = new List<string>();
 		if (b.sciencePercent > 0 || b.taxPercent > 0 || b.luxuryPercent > 0 || b.productionPercent > 0) {
-			CommerceBreakdown now = c.CurrentCommerceYield();
-			CorruptableValue shieldsNow = c.CurrentProductionYield();
+			var (now, shieldsNow) = YieldsInOrder(c);
 			var (commerce, shields) = YieldsWith(c, b);
 			if (b.sciencePercent > 0)
 				effects.Add($"+{b.sciencePercent}% science (+{commerce.beakers - now.beakers} here)");
@@ -54,8 +59,8 @@ sealed partial class Session {
 		if (b.treasuryEarnsInterest)
 			effects.Add($"interest on the treasury ({gd.rules.TreasuryInterestRate * 100:0}%, at most {gd.rules.MaxInterest} gold a turn)");
 		if (b.reducesCorruption) {
-			CommerceBreakdown commerce = c.CurrentCommerceYield();
-			effects.Add($"less corruption ({commerce.corrupted} commerce, {c.CurrentProductionYield().corrupt} shields lost here)");
+			var (commerce, shields) = YieldsInOrder(c);
+			effects.Add($"less corruption ({commerce.corrupted} commerce, {shields.corrupt} shields lost here)");
 		}
 		if (b.isForbiddenPalace) effects.Add("a second centre against corruption");
 		if (b.contentFacesInCity > 0) effects.Add($"{b.contentFacesInCity} unhappy made content");

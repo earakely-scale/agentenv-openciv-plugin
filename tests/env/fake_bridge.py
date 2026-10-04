@@ -64,7 +64,7 @@ ITEMS = {  # name: (kind, cost, required tech)
 POP_COST = {"Settler": 2, "Worker": 1}
 EFFECTS = {  # city_info's effects of a building option (the fake's buildings add no percentages)
     "Barracks": ["veteran land units", "upkeep 1"], "Granary": ["keeps half its food on growth", "upkeep 1"],
-    "Temple": ["1 unhappy made content", "+2 culture", "upkeep 1"], "Walls": ["+50% defence up to size 6", "upkeep 1"],
+    "Temple": ["1 unhappy made content", "+2 culture", "upkeep 1"], "Walls": ["+50% defence up to size 6"],
 }
 ORDERS = {
     "Settler": ["settle", "found_city", "goto", "hold", "disband"],

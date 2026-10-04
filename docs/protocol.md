@@ -339,9 +339,10 @@ screen's map (the client's `C7/Map/TileAssignmentLayer.cs`):
 - A building option also has `"effects"`, what it does in short phrases from its engine fields, economic ones first:
   `["+50% science (+2 here)", "+3 culture", "upkeep 1"]`. A percentage says what it would add in this city now, at
   the current rates, tiles and corruption: the engine's yields with the building put in the city for the call
-  (`"+50% tax and luxury (+3 gold, +1 luxury here)"`, `"+25% shields (+3 here)"`). The others: `"interest on the
-  treasury (5%, at most 50 gold a turn)"`, `"less corruption (4 commerce, 3 shields lost here)"` (what the city loses
-  now), `"a second centre against corruption"`, `"N unhappy made content"`, `"more happiness from luxury
+  (`"+50% tax and luxury (+3 gold, +1 luxury here)"`, `"+25% shields (+3 here)"`). A city in disorder makes nothing,
+  so its figures are those it would have in order (the engine's `respectCivilDisorder: false`), as the AI values
+  them. The others: `"interest on the treasury (5%, at most 50 gold a turn)"`, `"less corruption (4 commerce, 3
+  shields lost here)"` (what the city loses now, in order), `"a second centre against corruption"`, `"N unhappy made content"`, `"more happiness from luxury
   resources"`, `"grows past 6"`, `"grows past 12"`, `"keeps half its food on growth"`, `"+50% defence"` (with `"up
   to size 6"` for walls), `"+1 food on water tiles"` (shield, commerce), `"veteran land units"`, `"veteran sea
   units"`, `"a Granary in every city on the continent"` (or `"in every city"`), `"+3 culture"`, `"upkeep 1"`.
@@ -570,10 +571,11 @@ submodule itself stays untouched):
    science, Copernicus' Observatory and Newton's University +100%, Marketplace, Bank and Stock Exchange +50% tax and
    luxury, Factory and Manufacturing Plant +25% shields, and Wall Street the `treasuryEarnsInterest` flag the engine
    already paid on (5% of the treasury, at most 50 gold a turn). `ImportCiv3` maps the BIQ's three +50% flags. The AI
-   (`ChooseProducible.ScoreBuilding`) values such a building by what it would add in the city. Everything that reads
-   the city's yields (finances, research, the AI's budget and government choice, moods, the client's city screen)
-   follows; nothing draws from `GameData.rng`. A save keeps its own building definitions, so a save made before the
-   patch has no multipliers.
+   (`ChooseProducible.ScoreBuilding`) values such a building by what it would add in the city in order:
+   `CurrentProductionYield`, like `CurrentCommerceYieldRaw`, takes `respectCivilDisorder`, so a Marketplace's luxury
+   counts in a city that riots. Everything that reads the city's yields (finances, research, the AI's budget and
+   government choice, moods, the client's city screen) follows; nothing draws from `GameData.rng`. A save keeps its
+   own building definitions, so a save made before the patch has no multipliers.
 
 Measured over full 540-turn Standard games with 7 AIs at Regent (seeds 1-3), patches 0005-0009 take:
 - mean AI techs at T540 from 32 to 43-45, and civs with an Industrial-era tech from 0 to 3-7;

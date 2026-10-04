@@ -1,4 +1,4 @@
-Buildings multiply the city's science, gold and shields, as in Civilization III. SaveBuilding and Building get sciencePercent, taxPercent, luxuryPercent and productionPercent; City.Boost raises the beakers, taxes and luxuries left after corruption and the sliders (specialists included, Wealth not) in CurrentCommerceYieldRaw, and the useful shields left after waste in CurrentProductionYield, by the sum of the city's buildings' percentages, rounded down, and records what it added in CommerceBreakdown.fromBuildings and CorruptableValue.fromBuildings. The ruleset gives Library, University and Research Lab +50% science, Copernicus' Observatory and Newton's University +100%, Marketplace, Bank and Stock Exchange +50% tax and luxury, Factory and Manufacturing Plant +25% shields, and Wall Street the treasuryEarnsInterest flag the engine already pays (5% of the treasury, at most 50 gold). ImportCiv3 maps the BIQ's three +50% flags. The AI (ChooseProducible.ScoreBuilding) values such a building by what it would add in the city. Without this a Library, Marketplace, University, Bank or Factory cost upkeep and returned nothing. No random number is drawn; a save keeps its own buildings, so saves made before this have no multipliers.
+Buildings multiply the city's science, gold and shields, as in Civilization III. SaveBuilding and Building get sciencePercent, taxPercent, luxuryPercent and productionPercent; City.Boost raises the beakers, taxes and luxuries left after corruption and the sliders (specialists included, Wealth not) in CurrentCommerceYieldRaw, and the useful shields left after waste in CurrentProductionYield, by the sum of the city's buildings' percentages, rounded down, and records what it added in CommerceBreakdown.fromBuildings and CorruptableValue.fromBuildings. The ruleset gives Library, University and Research Lab +50% science, Copernicus' Observatory and Newton's University +100%, Marketplace, Bank and Stock Exchange +50% tax and luxury, Factory and Manufacturing Plant +25% shields, and Wall Street the treasuryEarnsInterest flag the engine already pays (5% of the treasury, at most 50 gold). ImportCiv3 maps the BIQ's three +50% flags. The AI (ChooseProducible.ScoreBuilding) values such a building by what it would add in the city when in order: CurrentProductionYield, like CurrentCommerceYieldRaw, can ignore civil disorder, so a Marketplace's luxury counts in a rioting city. Without this a Library, Marketplace, University, Bank or Factory cost upkeep and returned nothing. No random number is drawn; a save keeps its own buildings, so saves made before this have no multipliers.
 
 --- a/C7Engine/C7GameData/Save/SaveBuilding.cs
 +++ b/C7Engine/C7GameData/Save/SaveBuilding.cs
@@ -71,7 +71,28 @@ Buildings multiply the city's science, gold and shields, as in Civilization III.
  	}
  
  	public class City {
-@@ -536,6 +545,11 @@
+@@ -514,7 +523,7 @@
+ 			return yield;
+ 		}
+ 
+-		public CorruptableValue CurrentProductionYield() {
++		public CorruptableValue CurrentProductionYield(bool respectCivilDisorder = true) {
+ 			int yield = location.ProductionYield(this).yield;
+ 			foreach (CityResident r in residents) {
+ 				yield += r.tileWorked.ProductionYield(this).yield;
+@@ -527,8 +536,9 @@
+ 			// setting corruption to 100% because CorruptableValue would give us
+ 			// one useful commerce in that situation.
+ 			//
+-			// The same is true for civil disorder.
+-			if (owner.government.transitionType || isInCivilDisorder) {
++			// The same is true for civil disorder, which can be ignored to see
++			// what the city would make in order (as for commerce below).
++			if (owner.government.transitionType || (isInCivilDisorder && respectCivilDisorder)) {
+ 				result.useful = 0;
+ 				result.corrupt = yield;
+ 			}
+@@ -536,6 +546,11 @@
  			// TODO: add specialist shields here. Do specialists still work in
  			// civil disorder?
  
@@ -83,7 +104,7 @@ Buildings multiply the city's science, gold and shields, as in Civilization III.
  			return result;
  		}
  
-@@ -574,9 +588,23 @@
+@@ -574,9 +589,23 @@
  				result.taxes += cr.citizenType.Taxes;
  			}
  
@@ -121,21 +142,23 @@ Buildings multiply the city's science, gold and shields, as in Civilization III.
  				if (bldg.RequiredAdvance != -1) {
 --- a/C7Engine/AI/ChooseProducible.cs
 +++ b/C7Engine/AI/ChooseProducible.cs
-@@ -225,6 +225,20 @@
+@@ -225,6 +225,22 @@
  				score += Math.Max(city.residents.Count - city.GetLuxuries(gd).Keys.Count, 0) * (city.GetLuxuries(gd).Keys.Count / 2);
  			}
  
 +			// A building that raises the city's science, taxes, luxuries or
 +			// shields is worth what it would add here: each percentage applies
-+			// to the base the current buildings already raise.
++			// to the base the current buildings already raise. A city in civil
++			// disorder is valued as it would be in order, since the luxuries
++			// matter most there.
 +			if (building.sciencePercent > 0 || building.taxPercent > 0 || building.luxuryPercent > 0 || building.productionPercent > 0) {
 +				List<CityBuilding> have = city.GetBuildings();
-+				CommerceBreakdown now = city.CurrentCommerceYieldRaw();
++				CommerceBreakdown now = city.CurrentCommerceYieldRaw(respectCivilDisorder: false);
 +				float Gain(int value, int percentNow, int percentAdded) => value * percentAdded / (100f + percentNow);
 +				float gain = Gain(now.beakers, have.Sum(b => b.building.sciencePercent), building.sciencePercent)
 +					+ Gain(now.taxes, have.Sum(b => b.building.taxPercent), building.taxPercent)
 +					+ Gain(now.happiness, have.Sum(b => b.building.luxuryPercent), building.luxuryPercent)
-+					+ Gain(city.CurrentProductionYield().useful, have.Sum(b => b.building.productionPercent), building.productionPercent);
++					+ Gain(city.CurrentProductionYield(respectCivilDisorder: false).useful, have.Sum(b => b.building.productionPercent), building.productionPercent);
 +				score += Math.Max(gain, 0) * 5;
 +			}
 +

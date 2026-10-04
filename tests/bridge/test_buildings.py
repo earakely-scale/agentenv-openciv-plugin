@@ -132,3 +132,53 @@ def test_wall_street_pays_interest(launch, tmp_path):
         b.call("end_turn", skip_idle=True)
         assert b.call("state")["gold"] == gold + s["gold_per_turn"]
         b.close()
+
+
+def test_the_ai_values_a_building_by_what_it_adds_in_order(launch, tmp_path):
+    """The engine picks what a city builds next by ChooseProducible's scores: a capital whose science comes from four
+    Scientists, at the end of its Settler, picks a Library, which adds half of it (with only its culture to count, it
+    picks a Worker). In a city that riots and makes nothing, a Library's option says what it would add once order
+    returns, the figure the AI counts too, not +0."""
+    save, _, me = saved_game(launch, tmp_path)
+    capital = next(c for c in save["game"]["cities"] if c["owner"] == me and c["capital"])
+    nationality = capital["residents"][0]["nationality"]
+
+    def scientists(g: dict) -> None:
+        c = next(x for x in g["cities"] if x["id"] == capital["id"])
+        c["buildings"] = [b for b in c["buildings"] if b["building"] not in ECONOMY]
+        c["shieldsStored"] = 400   # whatever it builds is done at the turn's end
+        c["residents"] += [{"citizenType": "CitizenType-4", "nationality": nationality, "city": c["id"]}] * 4
+    b = load_with(launch, tmp_path, save, scientists)
+    b.call("set_rates", science=6, luxury=0)
+    info = b.call("city", city=capital["name"])
+    assert info["commerce"]["science"] >= 20 and not info["disorder"]
+    assert "Library" in {o["name"] for o in info["options"]}
+    b.call("end_turn", skip_idle=True)
+    assert b.call("city", city=capital["name"])["producing"] == "Library"
+    b.close()
+
+    # Six more laborers on the free tiles next to the capital: at the turn's end it riots.
+    def crowded(g: dict) -> None:
+        c = next(x for x in g["cities"] if x["id"] == capital["id"])
+        c["buildings"] = [b for b in c["buildings"] if b["building"] not in ECONOMY]
+        x, y = c["location"]["x"], c["location"]["y"]
+        worked = {(r["tileWorked"]["x"], r["tileWorked"]["y"]) for d in g["cities"] for r in d["residents"]
+                  if "tileWorked" in r}
+        near = [(x + dx, y + dy) for dx, dy in ((1, -1), (1, 1), (-1, -1), (-1, 1), (2, 0), (-2, 0), (0, 2), (0, -2),
+                                                (3, -1), (3, 1), (-3, -1), (-3, 1), (2, -2), (2, 2), (-2, -2), (-2, 2))]
+        free = [t for t in near if t not in worked and t[0] >= 0][:6]
+        assert len(free) == 6
+        c["residents"] += [{"citizenType": "CitizenType-1", "nationality": nationality, "city": c["id"],
+                            "tileWorked": {"x": tx, "y": ty}} for tx, ty in free]
+    b = load_with(launch, tmp_path, save, crowded)
+    b.call("set_rates", science=6, luxury=0)
+    in_order = b.call("city", city=capital["name"])
+    assert not in_order["disorder"] and in_order["commerce"]["science"] >= 4
+    library = next(o for o in in_order["options"] if o["name"] == "Library")["effects"][0]
+    b.call("end_turn", skip_idle=True)
+    riot = b.call("city", city=capital["name"])
+    assert riot["disorder"] and riot["commerce"]["science"] == riot["shields"]["useful"] == 0
+    # The same tiles, rates and corruption as before the riot: the same figure, which is more than nothing.
+    assert next(o for o in riot["options"] if o["name"] == "Library")["effects"][0] == library
+    assert library != "+50% science (+0 here)"
+    b.close()

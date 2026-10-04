@@ -81,7 +81,8 @@ rotated at a 100K context cap.
    - Buildings now have their economic effects (patch 0016): Library, University and Research Lab +50%
      science, Copernicus' Observatory and Newton's University +100%, Marketplace, Bank and Stock Exchange +50%
      tax and luxury, Factory and Manufacturing Plant +25% shields, and Wall Street pays 5% interest (at most 50
-     gold). Before, they cost upkeep and returned nothing, and the AI valued a Library only for its culture.
+     gold). Before, they cost upkeep and returned nothing, and the AI valued a Library only for its culture; now
+     it values one by what it would add in that city, in order (a Marketplace's luxury counts in a city that riots).
    - Measured with engine_ai in every seat at Regent, before and after patch 0016:
 
      | | Small, 5 AIs, T200 (seeds 1-4) | Standard, 7 AIs, T540 (seeds 1-3) |
