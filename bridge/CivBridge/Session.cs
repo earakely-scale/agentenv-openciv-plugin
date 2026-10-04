@@ -16,6 +16,7 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 	static readonly string[] Commands = [
 		"new_game", "load", "state", "map", "known_map", "city_sites", "unit_order", "unit_orders", "city", "set_production", "set_rates", "hurry",
 		"techs", "set_research", "end_turn", "autoplay", "score", "world", "revolution", "diplomacy", "declare_war", "propose_peace",
+		"quote_trade", "propose_trade", "accept_trade", "decline_trade",
 	];
 	static readonly string[] Policies = ["null", "found_capital", "settler_bot", "engine_ai"];
 
@@ -67,6 +68,10 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 			"diplomacy" => Diplomacy(),
 			"declare_war" => DeclareWar(a),
 			"propose_peace" => ProposePeace(a),
+			"quote_trade" => QuoteTrade(a),
+			"propose_trade" => ProposeTrade(a),
+			"accept_trade" => AcceptTrade(a),
+			"decline_trade" => DeclineTrade(a),
 			_ => ScoreAll(),
 		};
 	}
@@ -156,12 +161,18 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 		var events = new List<JsonObject>();
 		int advanced = 0;
 		bool attention;
-		do {
-			List<JsonObject> turn = await AdvanceTurn(engineAi: false);
-			events.AddRange(turn);
-			advanced++;
-			attention = turn.Any(e => AttentionEvents.Contains((string)e["kind"]));
-		} while (untilAttention && advanced < maxTurns && !GameOver && !attention && Blockers().Count == 0);
+		holdingSince = gd.turn;
+		try {
+			do {
+				List<JsonObject> turn = await AdvanceTurn(engineAi: false);
+				events.AddRange(turn);
+				advanced++;
+				attention = turn.Any(e => AttentionEvents.Contains((string)e["kind"]));
+			} while (untilAttention && advanced < maxTurns && !GameOver && !attention && Blockers().Count == 0);
+		} finally {
+			holdingSince = int.MaxValue;
+		}
+		events = Fresh(events);
 		lastEvents = events;
 
 		return new JsonObject {
@@ -185,14 +196,20 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 		autos = [];
 		var trajectory = new JsonArray();
 		if (record) trajectory.Add(Point());
-		// Unlike end_turn this keeps going after a defeat, so baselines always cover the requested turns.
-		for (int i = 0; i < turns && gd.turn < turnLimit; i++) {
-			if (!human.defeated) {
-				if (policy == "found_capital") await FoundCapitalAndAutomate();
-				else if (policy == "settler_bot") await SettlerBotTurn();
+		tradesDeclined = 0;
+		autoplaying = true;
+		try {
+			// Unlike end_turn this keeps going after a defeat, so baselines always cover the requested turns.
+			for (int i = 0; i < turns && gd.turn < turnLimit; i++) {
+				if (!human.defeated) {
+					if (policy == "found_capital") await FoundCapitalAndAutomate();
+					else if (policy == "settler_bot") await SettlerBotTurn();
+				}
+				lastEvents = await AdvanceTurn(engineAi: policy == "engine_ai");
+				if (record) trajectory.Add(Point());
 			}
-			lastEvents = await AdvanceTurn(engineAi: policy == "engine_ai");
-			if (record) trajectory.Add(Point());
+		} finally {
+			autoplaying = false;
 		}
 
 		var result = new JsonObject {
@@ -200,6 +217,7 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 			["game_over"] = GameOver,
 			["defeated"] = human.defeated,
 			["score"] = ScoreOf(human),
+			["trades_declined"] = tradesDeclined,
 		};
 		if (record) result["trajectory"] = trajectory;
 		return result;
@@ -266,6 +284,8 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 			advancing = false;
 		}
 		watchdog.Kick();
+		HoldOffers();
+		PruneTrades();
 
 		var raised = uiMessages.ToList();
 		uiMessages.Clear();
@@ -291,7 +311,7 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 			DrainUi();
 			ids.Sync(gd, human);
 			PruneOrders();
-			turnEvents = events;
+			turnEvents = Fresh(events);
 			s.Ready = false;
 		});
 		if (victory == null && CheckVictory() is Victory won) {
@@ -348,9 +368,14 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 					EngineStorage.ProcessNextMessageToEngine();
 					break;
 				case MsgShowTradeOffer o:
-					// The AI's turn is suspended until the "diplomacy screen" closes: decline right away.
-					(SeatOf(o.humanPlayer) ?? seat).Autos.Add(Auto("trade_declined",
-						$"Declined {o.aiPlayer.civilization.name}'s offer of {Describe(o.aiGive)} for {Describe(o.aiWant)}: the env declines every trade."));
+					// The AI's turn is suspended until the "diplomacy screen" closes, so the offer is kept for the seat's
+					// next turn (accept_trade) and the screen closed at once. Autoplay declines it, as baselines always did.
+					if (autoplaying) {
+						tradesDeclined++;
+					} else {
+						OfferedByAi(o);
+						uiMessages.Add((m, advancing ? null : seat));
+					}
 					new MsgDiplomacyCompleted().send();
 					EngineStorage.ProcessNextMessageToEngine();
 					break;
@@ -371,6 +396,9 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 			// A city taken is told even when the seat took it: engine-AI play and standing orders take cities too.
 			if (actor == seat && m is not MsgCityCaptured) continue;
 			switch (m) {
+				case MsgShowTradeOffer o when o.humanPlayer == human && !o.aiWant.partOfPeaceTreaty && !o.aiGive.partOfPeaceTreaty:
+					events.Add(TradeOfferedEvent(o));
+					break;
 				case MsgShowTradeOffer o when o.humanPlayer == human:
 					events.Add(Event("peace_offered", $"{o.aiPlayer.civilization.name} offered peace"
 						+ (o.aiWant.gold is > 0 ? $" for {o.aiWant.gold} gold" : "")

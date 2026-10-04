@@ -1,0 +1,17 @@
+A tech a civ gets another way than research (a trade, Player.ExecuteDeal) no longer wipes what it is researching. Player.CompleteResearchingTech cleared the current research and its beakers (SetCurrentlyResearchedTech(null)) for every tech it completed, so a civ that got Alphabet in a trade while researching Masonry lost all its Masonry progress, and PlayerAI.MaybePickTechToResearch then started Masonry again from nothing (seen in AI-only games: Persia 12 beakers to 0, Carthage 23 to 0, about three times per 200-turn game; an agent buying techs would lose its progress at every purchase). The current research now ends only when the completed tech is the one being researched: normal research and a traded tech that was the current research behave as before (its beakers go with it, which the receiver's valuation, GameData.TechCostFor, already subtracts), and the free-tech branch of SetCurrentlyResearchedTech has no current research then.
+
+--- a/C7Engine/C7GameData/Player.cs
++++ b/C7Engine/C7GameData/Player.cs
+@@ -975,7 +975,11 @@
+ 			// trigger callback for techs that enable improvements to redraw map
+ 			TechImprovementCallback(this, tech);
+ 
+-			SetCurrentlyResearchedTech(null);
++			// Only the tech being researched ends its research: one got another way (a trade) leaves the current
++			// research and its progress alone.
++			if (currentlyResearchedTech == tech.id) {
++				SetCurrentlyResearchedTech(null);
++			}
+ 
+ 			// remove the completed tech from the research queue, wherever it is: a tech got in a trade need not be
+ 			// at its head, and the head is still to research then

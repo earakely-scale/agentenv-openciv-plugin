@@ -235,12 +235,12 @@ def test_turn_report_groups_events_by_turn():
            "events": [{"turn": 23, "kind": "built", "text": "Rome completed Warrior.", "x": 12, "y": 10},
                       {"turn": 24, "kind": "unit_lost", "text": "u5 Worker was killed", "x": 14, "y": 9},
                       {"turn": 24, "kind": "city_grew", "text": "Veii grew to size 2"}],
-           "auto": [{"kind": "trade_declined", "text": "declined a trade offer from Greece"}]}
+           "auto": [{"kind": "research_picked", "text": "the engine picked Pottery"}]}
     assert render.turn_report(res, 23) == (
         "TURN T23 → T25 (2 turns)\n"
         "  T23: Rome completed Warrior (12,10)\n"
         "  T24: !! u5 Worker was killed (14,9) · Veii grew to size 2\n"
-        "  auto: declined a trade offer from Greece")
+        "  auto: the engine picked Pottery")
 
 
 def test_city_detail_and_techs():
@@ -411,13 +411,6 @@ def test_peaceful_and_repeated_threats_are_not_spam():
     lines = render.events_lines(events, cap=2)
     assert lines == ["T44: !! Barbarians Galley 3 tiles W of Veii (T44–T46)", "T46: Founded Cumae", "+1 more"]
     assert render.event_text(events[0]) == "Zululand Archer (at peace) 2 tiles N of Rome"
-
-
-def test_declined_trades_are_summarised():
-    autos = [{"kind": "trade_declined", "text": f"Declined a trade from Greece #{i}"} for i in range(5)]
-    report = render.turn_report({"turn": 5, "turns_advanced": 1, "auto": autos}, 4)
-    assert report.count("auto: Declined") == 3
-    assert report.endswith("auto: +2 more trade offers declined (the env declines every offer)")
 
 
 def test_vs_line_marks_failed_baselines():

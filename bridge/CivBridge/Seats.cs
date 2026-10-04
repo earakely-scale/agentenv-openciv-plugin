@@ -26,6 +26,9 @@ sealed class Seat(Player player, string label) {
 	/// <summary>Peace this seat offered another seat, with the gold it pays and the turn it offered it.</summary>
 	public readonly Dictionary<Player, (int Gold, int Turn)> PeaceOffers = [];
 
+	/// <summary>Trades offered to this seat, by who offers them (an AI during its turn, or another seat).</summary>
+	public readonly Dictionary<Player, StandingTrade> TradeOffers = [];
+
 	public readonly Dictionary<City, string> ProducingSource = [];
 
 	/// <summary>What each city builds next, after its current item (set_production's `then`), first first.</summary>
@@ -173,11 +176,12 @@ sealed partial class Session {
 	}
 
 	/// <summary>Tells another seat what the active seat did to it; it reads the event with its events of this turn.</summary>
-	void Notify(Player p, string kind, string text, Tile at = null) {
-		if (SeatOf(p) is not Seat other || other == seat) return;
+	JsonObject Notify(Player p, string kind, string text, Tile at = null) {
+		if (SeatOf(p) is not Seat other || other == seat) return null;
 		JsonObject e = Event(kind, text, at);
 		e["turn"] = gd.turn;
 		other.Incoming.Add(e);
+		return e;
 	}
 
 	sealed record Victory(string Kind, Player Player, int Turn);

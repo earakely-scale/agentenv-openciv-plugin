@@ -14,7 +14,8 @@ URGENT = {"threat", "unit_lost", "war_declared", "city_destroyed", "disorder", "
 # Kept first when a turn has more events than fit; threats go last, they repeat the most.
 FIRST = {"city_founded", "unit_lost", "city_destroyed", "civ_destroyed", "war_declared", "disorder", "disorder_started",
          "gold_stolen", "defenseless", "tech_learned", "city_starved", "settle_failed", "goto_blocked",
-         "engine_restarted", "peace_offered", "peace_signed", "government_picked", "city_lost", "city_captured"}
+         "engine_restarted", "peace_offered", "peace_signed", "government_picked", "city_lost", "city_captured",
+         "trade_offered", "trade_signed"}
 CITY_TARGETS = ((1, 1), (15, 2), (30, 3), (45, 4), (60, 5), (80, 6), (100, 7))
 TECHS_LEARNED_TARGETS = ((20, 2), (40, 4), (60, 6), (80, 8), (100, 10))
 TERRAIN = {"grassland": "g", "plains": "p", "desert": "d", "tundra": "t", "floodplain": "f", "hills": "h",
@@ -23,7 +24,7 @@ TERRAIN = {"grassland": "g", "plains": "p", "desert": "d", "tundra": "t", "flood
 TERRAIN_NAMES = {"g": "grassland", "p": "plains", "d": "desert", "t": "tundra", "f": "flood plain", "h": "hills",
                  "m": "mountains", "F": "forest", "j": "jungle", "s": "marsh", "v": "volcano", "~": "water"}
 BASELINE_LABELS = {"engine_ai": "built-in AI", "settler_bot": "settler bot", "null": "do-nothing"}
-MAX_UNIT_LINES, MAX_STANDING, MAX_CITY_LINES, MAX_EVENTS, MAX_AUTO, MAX_MESSAGES = 5, 6, 6, 5, 3, 12
+MAX_UNIT_LINES, MAX_STANDING, MAX_CITY_LINES, MAX_EVENTS, MAX_MESSAGES = 5, 6, 6, 5, 12
 MAX_DETAILED_CITIES, MAX_PICKS, MAX_BATCH_LINES = 4, 8, 30
 # The characters of messages a brief lists at most (about 300 tokens; the oldest are left out first): every brief
 # repeats them, and the seat has read each one in full once already.
@@ -393,9 +394,12 @@ def _rank(e: dict) -> int:
 
 
 def short_event(e: dict) -> dict:
-    """An event as the brief lists it: disorder without its fixes, which NEEDS ORDERS gives while it lasts."""
+    """An event as the brief lists it: disorder without its fixes, which NEEDS ORDERS gives while it lasts, and a trade
+    offer without the call that accepts it, which its TRADE line gives while it stands."""
     if e.get("kind") in ("disorder", "disorder_started") and ": " in e.get("text", ""):
         return {**e, "text": e["text"].split(": ", 1)[0] + "."}
+    if e.get("kind") == "trade_offered" and " Accept " in e.get("text", ""):
+        return {**e, "text": e["text"].split(" Accept ", 1)[0]}
     return e
 
 
@@ -533,6 +537,8 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
                      + (" (engine pick)" if r.get("source") == "engine" else ""))
     else:
         lines.append("RESEARCH none — research() lists techs")
+    lines += ["TRADE " + trade_offer_text(r["civ"], r["trade_offered"]) for r in s.get("rivals", [])
+              if r.get("trade_offered")]
     if s.get("revolution_target"):
         lines.append(f"GOVERNMENT anarchy, then {s['revolution_target']}")
     elif s.get("governments"):
@@ -641,6 +647,42 @@ def offer_text(o: dict) -> str:
     return (f" with {o['gold']} gold" if o.get("gold") else "") + f", until T{o['until_turn']}"
 
 
+def goods(g: dict | None) -> str:
+    """One side of a trade: its techs and gold."""
+    parts = [*(g or {}).get("techs", []), *([f"{g['gold']} gold"] if (g or {}).get("gold") else [])]
+    return ", ".join(parts) or "nothing"
+
+
+def trade_offer_text(civ: str, o: dict) -> str:
+    """An offer standing for the seat, with what each side is worth to it, and the call that accepts it."""
+    return (f"{civ} offers {goods(o['you_get'])} (worth {o['you_value_get']} to you) for {goods(o['you_give'])} "
+            f"(worth {o['you_value_give']} to you), until T{o['until_turn']}: accept with "
+            + call("diplomacy", action="accept_trade", civ=civ))
+
+
+def tradeable_text(techs: list[dict] | None, max_techs: int = 4) -> str:
+    shown = [f"{t['name']} {t['you_value']}/{t['they_value']}" for t in (techs or [])[:max_techs]]
+    more = f", +{len(techs) - max_techs} more" if len(techs or []) > max_techs else ""
+    return ", ".join(shown) + more if shown else "none"
+
+
+def trade_quote(q: dict) -> str:
+    """quote_trade's answer: both sides' values, whether an AI takes it, and the call that would balance it."""
+    head = (f"{q['civ']}: you give {goods(q['you_give'])} (worth {q['you_value_give']} to you, "
+            f"{q['they_value_give']} to them) · you get {goods(q['you_get'])} (worth {q['you_value_get']} to you, "
+            f"{q['they_value_get']} to them)")
+    if q.get("accepts") is None:
+        return head + " · another agent decides: propose_trade offers it"
+    if q["accepts"]:
+        more = f"; it would add up to {q['gold_they_would_add']} gold" if q.get("gold_they_would_add") else ""
+        return head + f" · {q['civ']} accepts{more} → " + call(
+            "diplomacy", action="propose_trade", civ=q["civ"],
+            **{k: v for k, v in (("give_techs", q["you_give"]["techs"]), ("give_gold", q["you_give"]["gold"]),
+                                 ("get_techs", q["you_get"]["techs"]), ("get_gold", q["you_get"]["gold"])) if v})
+    fix = f" → {q['suggest']}" if q.get("suggest") else ", more than you have"
+    return head + f" · {q['civ']} refuses: it wants {q['gold_to_balance']} gold more{fix}"
+
+
 def civ_line(c: dict) -> str:
     sc = c.get("score") or {}
     if c.get("at_war") and c.get("agent"):
@@ -661,6 +703,16 @@ def civ_line(c: dict) -> str:
         parts.append(f"military {num(c['military_vs_yours'])}× yours")
     if c.get("at_war_with"):
         parts.append("at war with " + ", ".join(c["at_war_with"]))
+    if not c.get("at_war") and "gold" in c:
+        parts.append(f"gold {c['gold']}")
+        if c.get("techs_for_you") or c.get("techs_for_them"):
+            parts.append(f"has {tradeable_text(c.get('techs_for_you'))}; "
+                         f"lacks {tradeable_text(c.get('techs_for_them'))} (worth to you/them)")
+    if c.get("trade_offered"):
+        parts.append("OFFERS " + trade_offer_text(c["civ"], c["trade_offered"]).split(" offers ", 1)[1])
+    if c.get("you_offered_trade"):
+        o = c["you_offered_trade"]
+        parts.append(f"you offered {goods(o['you_give'])} for {goods(o['you_get'])}, until T{o['until_turn']}")
     return " · ".join(p for p in parts if p)
 
 
@@ -673,18 +725,17 @@ def diplomacy(d: dict) -> str:
     if any(c.get("at_war") and c.get("agent") for c in civs):
         lines.append("Peace with another agent's civ: both propose it (" + call("diplomacy", action="propose_peace",
                      civ="...") + "), the second within a turn of the first; each pays the gold it offers.")
+    if any(c.get("techs_for_you") or c.get("techs_for_them") for c in civs):
+        lines.append("Trade: " + call("diplomacy", action="quote_trade", civ="...", get_techs=["..."], give_gold=0)
+                     + " says what each side is worth and whether an AI takes it; propose_trade makes the trade. "
+                     "An AI takes a trade it values at least even; another agent's civ accepts with accept_trade.")
     return "\n".join(lines)
 
 
 # ---- end turn ----
 
 def auto_lines(autos: list[dict]) -> list[str]:
-    trades = [a for a in autos if a.get("kind") == "trade_declined"]
-    others = [a for a in autos if a.get("kind") != "trade_declined"]
-    lines = [f"auto: {a.get('text') or a.get('kind')}" for a in others + trades[:MAX_AUTO]]
-    if len(trades) > MAX_AUTO:
-        lines.append(f"auto: +{len(trades) - MAX_AUTO} more trade offers declined (the env declines every offer)")
-    return lines
+    return [f"auto: {a.get('text') or a.get('kind')}" for a in autos]
 
 
 def turn_report(result: dict, prev_turn: int) -> str:

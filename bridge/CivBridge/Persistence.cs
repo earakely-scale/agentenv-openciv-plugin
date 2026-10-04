@@ -113,6 +113,7 @@ sealed partial class Session {
 			["peace_offers"] = Json.Array(seat.PeaceOffers, kv => new JsonObject {
 				["civ"] = Owner(kv.Key), ["gold"] = kv.Value.Gold, ["turn"] = kv.Value.Turn,
 			}),
+			["trade_offers"] = TradesState(),
 		};
 	}
 
@@ -218,6 +219,7 @@ sealed partial class Session {
 		foreach (JsonNode o in s["peace_offers"]!.AsArray())
 			if (gd.players.FirstOrDefault(x => x.civilization.name == (string)o["civ"]) is Player to)
 				seat.PeaceOffers[to] = ((int)o["gold"], (int)o["turn"]);
+		RestoreTrades(s["trade_offers"] as JsonArray);
 	}
 }
 

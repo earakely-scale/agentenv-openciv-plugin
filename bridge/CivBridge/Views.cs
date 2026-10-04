@@ -49,6 +49,7 @@ sealed partial class Session {
 					["at_war"] = war,
 					["peace_price"] = war && other == null && p.PeacePriceFor(gd, h) is int price && price != int.MaxValue ? price : null,
 					["peace_offered"] = war ? OfferJson(OpenOffer(other, h)) : null,
+					["trade_offered"] = met ? TradeJson(OpenTrade(seat, p), toMe: true) : null,
 					["cities_seen"] = p.cities.Count(c => h.tileKnowledge.isTileKnown(c.location)),
 				};
 			}),

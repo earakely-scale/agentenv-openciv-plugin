@@ -166,7 +166,7 @@ def test_initial_state(game):
     assert [(b["kind"], b["id"]) for b in s["blockers"]] == [("idle_unit", "u1"), ("idle_unit", "u2")]
     assert {r["civ"] for r in s["rivals"]} == set(game.call("score")["players"][i]["civ"] for i in (1, 2, 3))
     assert all(r == {"civ": r["civ"], "agent": False, "met": False, "at_war": False, "peace_price": None,
-                     "peace_offered": None, "cities_seen": 0}
+                     "peace_offered": None, "trade_offered": None, "cities_seen": 0}
                for r in s["rivals"])
 
 
