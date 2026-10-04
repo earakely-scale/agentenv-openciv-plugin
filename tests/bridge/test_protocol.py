@@ -529,6 +529,39 @@ def test_the_last_civilization_left_wins_by_conquest(launch, tmp_path):
     assert res["events"][-1] == {"turn": 1, "kind": "victory", "text": won}
 
 
+def test_two_thirds_of_the_land_and_people_win_by_domination(launch, tmp_path):
+    """Civ III's domination victory: the save edited so that Rome holds all but one of its rival's cities."""
+    b = launch("--autosave", str(tmp_path / "a"))
+    b.call("new_game", seed=SEED, size="Tiny", opponents=1, turn_limit=400)
+    b.call("autoplay", turns=250, policy="engine_ai")
+    b.call("end_turn", skip_idle=True)
+    path = tmp_path / "a" / "autosave.json"
+    save = json.loads(path.read_text())
+    g = save["game"]
+    me = next(p for p in g["players"] if p["human"])["id"]
+    rival = next(p for p in g["players"] if not p["human"] and "Barbarian" not in p["civilization"])["id"]
+    given = [c for c in g["cities"] if c["owner"] == rival][1:]
+    assert given
+    spots = set()
+    for c in given:
+        c["owner"], c["capital"] = me, False
+        c["perPlayerCulture"][me] = c["perPlayerCulture"].pop(rival, 0)
+        c["buildings"] = [x for x in c.get("buildings", []) if x["building"] != "Palace"]
+        spots.add((c["location"]["x"], c["location"]["y"]))
+    g["units"] = [u for u in g["units"] if not (u["owner"] == rival and (
+        u["currentLocation"]["x"], u["currentLocation"]["y"]) in spots)]
+    path.write_text(json.dumps(save))
+    r = launch()
+    r.call("load", path=str(path))
+    you = r.call("state")["race"]["you"]
+    assert you["land"] >= 2 / 3 and you["pop"] >= 2 / 3, you
+    res = r.call("end_turn", skip_idle=True)
+    turn = r.call("state")["turn"]
+    assert res["game_over"] and r.call("state")["victory"] == {
+        "kind": "domination", "civ": "Rome", "label": None, "turn": turn}
+    assert res["events"][-1]["kind"] == "victory" and res["events"][-1]["text"].startswith("Rome won by domination: ")
+
+
 def test_a_riot_says_which_luxury_rate_ends_it(launch):
     """A disorder blocker carries the moods and the lowest luxury rate that calms the city (the brief folds several
     riots into one line with the rate that calms them all)."""

@@ -297,7 +297,8 @@ async def test_agents_cannot_play_a_human_seat(env):
     assert "Greece is played by a person." in await mcp_error(env, "get_turn_brief", "Greece")
     assert "Greece is played by a person." in await mcp_error(env, "unit_order", "you", unit="u1", order="hold")
     assert (await mcp(env, "get_turn_brief", "Rome")).startswith("T1/8 (3950 BC) · Rome")
-    assert (await mcp(env, "get_turn_brief")).startswith("T1/8 (3950 BC) · Rome")    # no header: the first seat, an agent's
+    # no header: the first seat, an agent's
+    assert (await mcp(env, "get_turn_brief")).startswith("T1/8 (3950 BC) · Rome")
     assert env.seats[1].actions.calls == {}
 
     await env.new_game(seats=["Greece"], humans=["Rome"])
