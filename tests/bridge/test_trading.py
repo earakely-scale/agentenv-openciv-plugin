@@ -345,3 +345,25 @@ def test_a_tech_got_in_a_trade_replaces_an_obsolete_unit_in_production(launch, t
     assert res["message"].endswith(f"{name} now builds a Pikeman: the Spearman it was building is obsolete.")
     c1 = r.call("city", seat="Rome", city="c1")
     assert (c1["producing"], c1["production_stored"]) == ("Pikeman", 9)
+
+
+def test_offers_told_in_the_turn_a_victory_ends_the_game_are_not_told(launch, tmp_path):  # noqa: F811
+    """The turn that ends in a victory (here Rome's capital passes 20,000 culture) delivers no offer: it would end
+    with the game at once."""
+    b = seat_game(launch, "--autosave", str(tmp_path / "a"))
+    for civ in SEATS:
+        b.call("unit_order", seat=civ, unit="u1", order="found_city")
+    end_round(b)
+    path = tmp_path / "a" / "autosave.json"
+    tech = meet(path, "Rome", "Greece", 50)
+    save = json.loads(path.read_text())
+    rome = next(p for p in save["game"]["players"] if p["civilization"] == "Rome")["id"]
+    next(c for c in save["game"]["cities"] if c["owner"] == rome)["perPlayerCulture"][rome] = 19_999
+    path.write_text(json.dumps(save))
+    r = launch()
+    r.call("load", path=str(path))
+    r.call("propose_trade", seat="Rome", civ="Greece", give_techs=[tech], get_gold=10)
+    events = end_round(r)
+    assert r.call("state", seat="Greece")["victory"]["kind"] == "culture"
+    assert [k for k, _ in kinds(events["Greece"])][-1] == "victory"
+    assert not any(k == "trade_offered" for k, _ in kinds(events["Greece"]))

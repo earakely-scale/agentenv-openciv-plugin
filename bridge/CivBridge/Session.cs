@@ -321,7 +321,11 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 		});
 		if (victory == null && CheckVictory() is Victory won) {
 			victory = won;
-			EachSeat(s => s.TurnEvents.Add(Event("victory", VictoryText(won))));
+			// The offers this turn delivered end with the game (Trade.cs Standing).
+			EachSeat(s => {
+				s.TurnEvents.RemoveAll(e => (string)e["kind"] == "trade_offered");
+				s.TurnEvents.Add(Event("victory", VictoryText(won)));
+			});
 		}
 		Autosave();
 		Record();
