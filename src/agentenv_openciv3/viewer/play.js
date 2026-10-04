@@ -56,6 +56,18 @@ function playBattles(list) {
   S.painter.queueBattles(fresh);
   draw();
 }
+// The moves the seat saw (known_map moves: its own units' and others' in sight) walk on the art map in the order they
+// were made, with the battles; like battles, each walks once.
+function playMoves(list) {
+  if (!artOn() || !list || !list.length || !S.painter.queueMoves) return;
+  const key = `openciv3-moves-${S.gameId}`, seen = new Set(JSON.parse(sessionStorage.getItem(key) || "[]"));
+  const fresh = list.filter(m => !seen.has(m.seq));
+  if (!fresh.length) return;
+  for (const m of fresh) seen.add(m.seq);
+  sessionStorage.setItem(key, JSON.stringify([...seen].slice(-600)));
+  S.painter.queueMoves(fresh);
+  draw();
+}
 
 // The unit orders, as the game's command bar shows them: [order, label, key shown, key code]
 const ORDERS = [
@@ -158,6 +170,7 @@ async function loadView() {
   else if (newGame && v.state.turn > 0 && (v.state.last_events || []).length) turnReport();
   if (v.game.game_over) gameOver();
   if (v.game.art) loadArt();
+  playMoves(v.map.moves);
   playBattles(v.map.battles);
   return v;
 }

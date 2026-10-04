@@ -495,7 +495,7 @@ class Renderer:
         turn = self.turns[ti]
         towns = {(c[0], c[1]) for c in turn["cities"]}
         ur = max(1.5, min(2.3, self.hw / 3)) * SS
-        for _id, x, y, o, typ in turn["units"]:
+        for _id, x, y, o, typ, *_ in turn["units"]:
             if (x, y) in towns or not (typ < len(self.military) and self.military[typ]) or not self.visible(x, y):
                 continue
             i = self.at.get((x, y))

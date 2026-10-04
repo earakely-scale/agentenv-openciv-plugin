@@ -1,5 +1,6 @@
 """The match viewer (docs/viewer.md): one page, live (`GET /live`) or with a whole game embedded (the `html` format);
-and the play UI (docs/play.md, `GET /play`), which shares the viewer's map drawing (map.js)."""
+and the play UI (docs/play.md, `GET /play`). Both draw the map in the client's art when the env has it (map.js,
+art.js; the viewer through viewart.js)."""
 
 from __future__ import annotations
 
@@ -20,11 +21,18 @@ def _json(value) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c")
 
 
+def art_kit() -> str:
+    """The play page's map drawing in the client's art (map.js, art.js) and the viewer's use of it (viewart.js), in a
+    scope of their own (their helpers share names with app.js's): `ArtKit.Art`, `ArtKit.ViewArt`."""
+    body = "\n".join(_asset(f) for f in ("map.js", "art.js", "viewart.js"))
+    return f"const ArtKit = (() => {{\n{body}\nreturn {{Art, ViewArt}};\n}})();\n"
+
+
 def page(data: dict | None = None, videos: dict[str, dict] | None = None) -> str:
     """The viewer as one HTML file. `data` is a `MatchData.document()`; None makes the live page, which fetches
     `live/data.json` itself. `videos` names the client's video of each seat (civ -> {"file", "fps", "turns"})."""
-    fills = {"CSS": _asset("app.css"), "JS": _asset("app.js").replace("</script", "<\\/script"),
-             "DATA": _json(data), "VIDEOS": _json(videos)}
+    js = (art_kit() + _asset("app.js")).replace("</script", "<\\/script")
+    fills = {"CSS": _asset("app.css"), "JS": js, "DATA": _json(data), "VIDEOS": _json(videos)}
     return PLACEHOLDER.sub(lambda m: fills[m[1] or m[2]], _asset("index.html"))
 
 

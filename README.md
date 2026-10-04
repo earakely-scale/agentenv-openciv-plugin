@@ -151,7 +151,9 @@ each new turn as it arrives:
   fog included.
 - **Agents:** one panel per agent, each with its own view, its stats, and whether it is still playing the turn.
 - **Summary:** standings, who led when, rank by turn, the expansion race and the key moments, so far.
-- **Client view:** with `--client`, the real OpenCiv3 client's view of the game from any agent's seat.
+- **Client view:** with `--client`, the real OpenCiv3 client's view of the game from any agent's seat. The map
+  itself is drawn in the client's art too (**T** for the plain map): units walk the paths they took and battles play
+  as the client plays them ([docs/viewer.md](docs/viewer.md#6-the-clients-art)).
 - **Timeline:** play, scrub or step through every turn played so far. Wars, captured and razed cities and lead changes
   are marked. Links keep the view, e.g. `/live#focus=Greece&client=Greece`.
 
@@ -244,8 +246,8 @@ minutes while others wait has its turn ended for it (`human_turn_seconds` in the
 task waits for the game to end (`openciv3_await_game`), then grades it and saves the recording.
 
 With the client in the image (`agent-env openciv3 setup --client`), the page draws the map in the OpenCiv3 client's
-own art: its terrain, rivers, cities, unit sprites, fog of war and HUD, as the client draws them; **T** switches to
-the plain map ([docs/play.md](docs/play.md#6-the-games-art)).
+own art: its terrain, rivers, cities, unit sprites, fog of war and HUD, as the client draws them, and the units you
+see move walk where they went; **T** switches to the plain map ([docs/play.md](docs/play.md#6-the-games-art)).
 
 To seat yourself in any match, add `"humans": {"you": "Rome"}` to its `openciv3_match` step and an
 `openciv3_await_game` step that grading and the recording depend on. [docs/play.md](docs/play.md) has the details.
@@ -612,7 +614,8 @@ This repository is licensed under the Apache License 2.0 ([LICENSE](LICENSE), [N
   with the patches in `patches/` applied: a defeated player no longer hangs the turn loop, war declarations use the
   game's seeded RNG, budget and AI-turn errors are contained, buildings that need another building and small wonders
   become buildable, the AI funds its science, supports its units, changes government and makes peace, research
-  cost follows the difficulty, battles tell an observer each round as they are fought, and a city taken changes hands.
+  cost follows the difficulty, battles tell an observer each round as they are fought, a city taken changes hands,
+  and units tell an observer each step they take.
 - The image also contains Blast (Apache-2.0), Serilog (Apache-2.0), MoonSharp (BSD-3-Clause), ini-parser (MIT), the
   .NET runtime (MIT) and a static FFmpeg build (GPL-3.0-or-later); it carries their licences in
   `/opt/civbridge/licenses/`. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

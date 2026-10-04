@@ -327,3 +327,105 @@ def test_the_ticker_goes_round_every_seat(doc, tmp_path):
     assert all(sorted(out["busy"][k:k + 9]) == list(range(9)) for k in range(0, 28)), out["busy"]
     assert all(sorted(out["quiet"][k:k + 9]) == list(range(9)) for k in range(0, 4)), out["quiet"]
     assert out["fresh"][0] == 7 and out["fresh"][1] != 7                # a new note goes first, then the round goes on
+
+
+def fake_art(root: Path, monkeypatch) -> Path:
+    """The client's art converted for the browser (webart.py), from test_webart's small stand-in for the C7 tree: one
+    unit, the Warrior."""
+    import importlib.util
+
+    from agentenv_openciv3 import webart
+    where = Path(__file__).resolve().parents[1] / "env" / "test_webart.py"
+    spec = importlib.util.spec_from_file_location("test_webart", where)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setattr(webart, "UNIT_ART", {"Warrior": "Tribal Mediterranean Warrior"})
+    out = root / "webart"
+    webart.convert(mod.client_tree(root), out)
+    return out
+
+
+PROBE_ART = """
+  const errors = [], samples = [];
+  addEventListener("error", e => errors.push(String(e.message)));
+  setInterval(() => {
+    if (M.ready) paint();   // a frame now: headless virtual time draws few of its own
+    samples.push({t: Math.round(performance.now()), art: !!VA, on: artOn(), ti: S.ti, last: M.ready ? M.last : -1,
+      walking: VA ? VA.drawn.walking : 0, fights: VA ? VA.drawn.fights : 0, units: VA ? VA.drawn.units : 0,
+      chips: $$("#layers .chip").map(b => b.textContent + (b.classList.contains("on") ? "+" : ""))});
+    if (samples.length === 150) setArt(false);
+    $("#probe").textContent = JSON.stringify({samples, errors});
+  }, 100);"""
+
+
+def test_the_live_view_draws_the_client_art_and_plays_a_turn_out(doc, tmp_path, monkeypatch):
+    """With the env's art (GET /play/art/), the live view draws the map in the client's art; a turn that arrives plays
+    out on it: a unit walks the path it took (patches/0012) and the turn's battle plays (patches/0010). T (here
+    setArt) goes back to the plain map. A recording never loads the art."""
+    import copy
+
+    d = copy.deepcopy(doc)
+    last = d["turns"][-1]
+    warrior = d["meta"]["unit_types"].index("Warrior")
+    uid, x, y = next((u[0], u[1], u[2]) for u in last["units"] if u[4] == warrior)
+    last["moves"] = [[90, uid, 0, warrior, 1, x + 2, y, x + 1, y + 1, x, y]]
+    side = [0, warrior, x, y, 3, 2, 3]
+    last["battles"] = [[91, 0, "a", "adaa", 0, 1, *side, 1, warrior, x + 2, y, 3, 0, 3]]
+    art = fake_art(tmp_path, monkeypatch)
+    asked, polls = [], [0]
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def reply(self, body: bytes, ctype: str):
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            url = urllib.parse.urlparse(self.path)
+            asked.append(url.path)
+            if url.path == "/live":
+                self.reply(probed(viewer.page(), PROBE_ART).encode(), "text/html; charset=utf-8")
+            elif url.path == "/live/data.json":
+                since = int(dict(urllib.parse.parse_qsl(url.query)).get("since", -1))
+                polls[0] += 1
+                upto = d["turns"][-1]["turn"] if polls[0] > 3 else d["turns"][-2]["turn"]
+                out = {k: d[k] for k in ("schema", "game", "meta", "players")}
+                out["turns"] = [t for t in d["turns"] if since < t["turn"] <= upto]
+                if since < 0:
+                    out["static"] = d["static"]
+                out["live"] = {"turn": upto, "game_over": False, "client": False, "recording": True,
+                               "min_turn_seconds": 0, "messages": [], "seats": []}
+                self.reply(json.dumps(out).encode(), "application/json")
+            elif url.path.startswith("/play/art/") and (art / url.path[len("/play/art/"):]).is_file():
+                path = art / url.path[len("/play/art/"):]
+                self.reply(path.read_bytes(), "font/ttf" if path.suffix == ".ttf" else
+                           "application/json" if path.suffix == ".json" else "image/png")
+            else:
+                self.send_error(404)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        out = run(f"http://127.0.0.1:{server.server_port}/live", 30000, tmp_path)
+    finally:
+        server.shutdown()
+    samples = out["samples"]
+    assert not out["errors"], out["errors"]
+    assert "/play/art/manifest.json" in asked
+    on = [s for s in samples if s["on"]]
+    assert on and on[0]["chips"][0] == "Art+" and "Territory" not in on[0]["chips"] and any(s["units"] for s in on)
+    arrived = next(k for k, s in enumerate(samples) if s["ti"] == s["last"] and s["last"] == len(d["turns"]) - 1)
+    after = samples[arrived:150]
+    assert any(s["walking"] for s in after), "the warrior walked its path"
+    assert any(s["fights"] for s in after), "the battle played"
+    assert not samples[-1]["on"] and samples[-1]["chips"][0] == "Art" and "Territory+" in samples[-1]["chips"]
+
+    # A recording carries no art: it never asks for it, and draws the plain map.
+    page = tmp_path / "recording.html"
+    page.write_text(probed(viewer.page(d), "$('#probe').textContent = JSON.stringify({va: VA, kit: typeof ArtKit});"),
+                    encoding="utf-8")
+    assert run(page.as_uri(), 3000, tmp_path) == {"va": None, "kit": "object"}

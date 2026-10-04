@@ -18,16 +18,24 @@ sealed partial class Session {
 		[88, 88, 88], [232, 216, 160], [160, 48, 48], [48, 168, 112], [104, 72, 40], [184, 132, 200], [24, 80, 48], [216, 80, 96],
 	];
 
-	JsonObject World() => WorldSnapshot();
+	JsonObject World() => WorldSnapshot(shownSeq);
 
 	const int SnapshotSchema = 2;
 
-	JsonObject WorldSnapshot() {
+	/// <summary>The snapshot, with the moves and battles after `since` in their sequence.</summary>
+	JsonObject WorldSnapshot(int since) {
 		var index = gd.players.Select((p, i) => (p, i)).ToDictionary(x => x.p, x => x.i);
 		var indexById = gd.players.Select((p, i) => (p, i)).ToDictionary(x => x.p.id, x => x.i);
 		int[][] colors = PlayerColors();
 		// Bit k of a tile's `known` is seats[k]; seats are opponent slots, so at most 31 fit a positive int.
 		var known = seats.Select(s => s.Player.tileKnowledge.knownTiles).ToArray();
+		// A resource shows once some civ knows of it (Player.KnowsAboutResource): Iron, say, only once a civ has Bronze Working.
+		var civs = gd.players.Where(p => !p.isBarbarians).ToList();
+		var resources = new Dictionary<Resource, bool>();
+		bool Discovered(Resource r) {
+			if (!resources.TryGetValue(r, out bool k)) resources[r] = k = civs.Any(p => p.KnowsAboutResource(r));
+			return k;
+		}
 		var tiles = new JsonArray();
 		foreach (Tile t in gd.map.tiles) {
 			Player owner = t.OwningPlayer();
@@ -37,7 +45,9 @@ sealed partial class Session {
 			tiles.Add(new JsonArray(
 				t.XCoordinate, t.YCoordinate, t.baseTerrainType.Key,
 				t.overlayTerrainType != t.baseTerrainType ? t.overlayTerrainType.Key : null,
-				owner == null ? -1 : index[owner], RiverMask(t), mask));
+				owner == null ? -1 : index[owner], RiverMask(t), mask,
+				t.Resource != null && t.Resource != Resource.NONE && Discovered(t.Resource) ? t.Resource.Name : null,
+				Json.Strings(ImprovementKeys(t)), BonusGrassland(t) ? 1 : 0));
 		}
 		return new JsonObject {
 			["schema"] = SnapshotSchema,
@@ -69,11 +79,16 @@ sealed partial class Session {
 				["id"] = c.id?.ToString(),
 				["x"] = c.location.XCoordinate, ["y"] = c.location.YCoordinate, ["name"] = c.name, ["owner"] = index[c.owner],
 				["size"] = c.residents.Count, ["capital"] = c.IsCapital(), ["production"] = c.itemBeingProduced?.name,
+				["era"] = Math.Clamp(c.owner.EraIndex(), 0, EraNames.Length - 1), ["walls"] = c.HasWalls(),
 			}),
 			["units"] = Json.Array(gd.mapUnits.Where(u => Tile.IsTileValid(u.location)), u => new JsonObject {
 				["id"] = u.id?.ToString(),
 				["x"] = u.location.XCoordinate, ["y"] = u.location.YCoordinate, ["owner"] = index[u.owner], ["type"] = u.unitType.name,
+				["hp"] = u.hitPointsRemaining, ["hp_max"] = u.maxHitPoints, ["fortified"] = u.isFortified,
 			}),
+			// What happened since the last snapshot, in order (patches/0010 and 0012): each unit's steps and every battle.
+			["moves"] = SnapshotMoves(since),
+			["battles"] = SnapshotBattles(since),
 			["victory"] = VictoryJson(),
 			["events"] = new JsonArray(seats.SelectMany(s => s.TurnEvents.Select(e => {
 				JsonObject copy = e.DeepClone().AsObject();
@@ -100,16 +115,20 @@ sealed partial class Session {
 		}).ToArray();
 	}
 
+	/// <summary>Writes the turn's snapshot (with --record), with the moves and battles since the last one; either way, the
+	/// next one starts its moves and battles here.</summary>
 	void Record() {
-		if (recordDir == null) return;
-		string path = System.IO.Path.Combine(recordDir, $"turn-{gd.turn:0000}.json.gz");
-		try {
-			using FileStream file = File.Create(path);
-			using var gzip = new GZipStream(file, CompressionLevel.Fastest);
-			using var w = new Utf8JsonWriter(gzip);
-			WorldSnapshot().WriteTo(w);
-		} catch (Exception e) {
-			Log.Warning(e, "recording {Path} failed", path);
+		if (recordDir != null) {
+			string path = System.IO.Path.Combine(recordDir, $"turn-{gd.turn:0000}.json.gz");
+			try {
+				using FileStream file = File.Create(path);
+				using var gzip = new GZipStream(file, CompressionLevel.Fastest);
+				using var w = new Utf8JsonWriter(gzip);
+				WorldSnapshot(recordedSeq).WriteTo(w);
+			} catch (Exception e) {
+				Log.Warning(e, "recording {Path} failed", path);
+			}
 		}
+		(shownSeq, recordedSeq) = (recordedSeq, eventSeq);
 	}
 }

@@ -14,6 +14,7 @@ import re
 import shlex
 import subprocess
 import threading
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -871,6 +872,113 @@ def snapshots(path: Path) -> list[dict]:
     return [json.loads(gzip.decompress(f.read_bytes())) for f in sorted(path.glob("turn-*.json.gz"))]
 
 
+def test_known_map_has_each_step_the_seat_saw(launch):
+    """patches/0012: a unit sent somewhere walks there a step at a time, and known_map has each step: the seat's own
+    goto as a run of steps with its id, other civs' and barbarians' units in sight as theirs, without ids. Without the
+    patch there are no steps at all."""
+    b = launch()
+    b.call("new_game", seed=SEED, turn_limit=400, barbarians="Raging")
+    u = unit(b.call("state"), "u2")
+    tiles = b.call("map", x=u["x"], y=u["y"], radius=2)["tiles"]
+    dest = next(t for t in tiles if t["dist"] == 2 and t["city_site"]["ok"])
+    res = b.call("unit_order", unit="u2", order="goto", x=dest["x"], y=dest["y"])
+    km = b.call("known_map")
+    me = next(p["index"] for p in km["players"] if p["me"])
+    [walk] = km["moves"]
+    assert (walk["id"], walk["owner"], walk["type"], walk["turn"]) == ("u2", me, "Worker", 0)
+    assert walk["path"][0] == [u["x"], u["y"]] and walk["path"][-1] == [res["unit"]["x"], res["unit"]["y"]]
+    check_moves(km, me)
+    # An entry stays the same while it is listed, and no step is ever in two entries: a page plays each once.
+    entries, covered = {}, {}
+    seen_foreign = False
+    for _ in range(40):
+        b.call("autoplay", turns=1, policy="engine_ai")
+        km = b.call("known_map")
+        check_known_map(km, b.call("world"), b.call("state"))
+        for m in km["moves"]:
+            assert entries.setdefault(m["seq"], m) == m, (m, entries[m["seq"]])
+            for k in range(m["seq"], m["seq"] + len(m["path"]) - 1):
+                assert covered.setdefault(k, m["seq"]) == m["seq"], f"step {k} in two entries"
+        seen_foreign |= any(m["owner"] != me for m in km["moves"])
+        if seen_foreign and km["turn"] >= 20:
+            break
+    else:
+        pytest.fail(f"no other civ's unit seen moving by T{km['turn']}")
+
+
+def test_a_goto_over_turns_lists_each_step_once(launch):
+    """A seat's worker sent two tiles away takes a step on the order, the turn's last move (no AI civ, the other seat
+    has ended), and the next on its standing order, the new turn's first: each turn's steps are an entry of their own,
+    which stays the same while listed, so a page never walks a step twice."""
+    b = launch()
+    b.call("new_game", seed=SEED, turn_limit=100, opponents=1, seats=["Greece"])
+    u = unit(b.call("state", seat="Greece"), "u2")
+    far = next(t for t in b.call("map", seat="Greece", x=u["x"], y=u["y"], radius=2)["tiles"] if t["dist"] == 2)
+    b.call("unit_order", seat="Greece", unit="u2", order="goto", x=far["x"], y=far["y"])
+    entries, covered, turns = {}, {}, set()
+    for _ in range(4):
+        km = b.call("known_map", seat="Greece")
+        for m in km["moves"]:
+            assert entries.setdefault(m["seq"], m) == m, (m, entries[m["seq"]])
+            for k in range(m["seq"], m["seq"] + len(m["path"]) - 1):
+                assert covered.setdefault(k, m["seq"]) == m["seq"], f"step {k} in two entries"
+            turns |= {m["turn"]} if m["id"] == "u2" else set()
+        for civ in ("Rome", "Greece"):
+            b.call("end_turn", seat=civ, skip_idle=True)
+    assert turns == {0, 1}, turns   # a step on the order, the next on the standing order
+
+
+def test_snapshots_say_how_every_unit_moved(launch, tmp_path):
+    """Every snapshot has each unit's steps since the last one, and every battle, in one sequence: a unit's runs lead
+    from where the last snapshot had it to where this one has it."""
+    b = launch("--record", str(tmp_path / "rec"))
+    b.call("new_game", seed=SEED, opponents=4, turn_limit=400, barbarians="Raging")
+    b.call("autoplay", turns=40, policy="engine_ai")
+    snaps = snapshots(tmp_path / "rec")
+    seqs = [m["seq"] for s in snaps for m in s["moves"]] + [x["seq"] for s in snaps for x in s["battles"]]
+    assert len(seqs) == len(set(seqs)) and len(seqs) > 100
+    traced = followed = 0
+    for before, now in pairwise(snaps):
+        assert [m["seq"] for m in now["moves"]] == sorted(m["seq"] for m in now["moves"])
+        for m in now["moves"]:
+            assert list(m) == ["seq", "unit", "owner", "type", "path", "seen"] and len(m["path"]) >= 2
+            assert isinstance(m["seen"], int) and m["seen"] in (0, 1)
+        for x in now["battles"]:
+            assert "id" not in x["attacker"] and "id" not in x["defender"] and x["seen"] in (0, 1)
+            assert x["winner"] in ("attacker", "defender", "retreat") and x["turn"] == now["turn"] - 1
+        was = {u["id"]: u for u in before["units"]}
+        for u in now["units"]:
+            runs = sorted((m for m in now["moves"] if m["unit"] == u["id"]), key=lambda m: m["seq"])
+            if not runs or u["id"] not in was:
+                continue
+            traced += 1
+            path = [[was[u["id"]]["x"], was[u["id"]]["y"]]]
+            for m in runs:
+                if m["path"][0] != path[-1]:
+                    break
+                path += m["path"][1:]
+            else:
+                followed += path[-1] == [u["x"], u["y"]]
+    # Units carried aboard move without steps of their own; no others.
+    assert traced > 50 and followed >= 0.95 * traced, (followed, traced)
+
+
+def test_the_sequence_goes_on_in_a_restored_game(launch, tmp_path):
+    """An autosave keeps the sequence steps and battles share: after a restore they go on from where it was, so a
+    page that has played them doesn't skip new ones."""
+    b = launch("--autosave", str(tmp_path / "a"))
+    b.call("new_game", seed=SEED, turn_limit=100)
+    b.call("autoplay", turns=10, policy="engine_ai")
+    km = b.call("known_map")
+    last = max([m["seq"] for m in km["moves"]] + [x["seq"] for x in km["battles"]])
+    restored = launch()
+    restored.call("load", path=str(tmp_path / "a" / "autosave.json"))
+    assert restored.call("known_map")["moves"] == []
+    restored.call("autoplay", turns=1, policy="engine_ai")
+    new = [m["seq"] for m in restored.call("known_map")["moves"]]
+    assert new and min(new) > last
+
+
 def test_world_snapshot_schema_2(launch, tmp_path):
     b = launch("--record", str(tmp_path / "rec"))
     b.call("new_game", seed=SEED)
@@ -910,6 +1018,27 @@ def test_world_snapshot_schema_2(launch, tmp_path):
     assert all((u["owner"], u["type"]) == (rome["index"], "Worker") for u in trail)
     assert len({(u["x"], u["y"]) for u in trail}) > 1, "the exploring worker never moved"
     assert (trail[-1]["x"], trail[-1]["y"]) == (unit(state, "u2")["x"], unit(state, "u2")["y"])
+
+    # What the client's art draws: a tile's resource (once some civ knows of it), improvements and bonus grassland; a
+    # city's era and walls; a unit's hit points and whether it is fortified.
+    for row in world["tiles"]:
+        assert len(row) == 10 and (row[7] is None or isinstance(row[7], str)) and row[9] in (0, 1)
+        assert all(isinstance(i, str) for i in row[8])
+    assert any(row[7] for row in world["tiles"]) and any(row[8] for row in world["tiles"])
+    assert (city["era"], city["walls"]) == (0, False)
+    assert all(0 < u["hp"] <= u["hp_max"] and isinstance(u["fortified"], bool) for u in world["units"])
+
+    # Each snapshot says how the worker went from where the last one had it (patches/0012): its runs of steps, in order.
+    for before, now in pairwise(snaps):
+        runs = sorted((m for m in now["moves"] if m["unit"] == worker["id"]), key=lambda m: m["seq"])
+        was = next(u for u in before["units"] if u["id"] == worker["id"])
+        at = next(u for u in now["units"] if u["id"] == worker["id"])
+        path = [[was["x"], was["y"]]]
+        for m in runs:
+            assert m["path"][0] == path[-1] and (m["owner"], m["type"], m["seen"]) == (rome["index"], "Worker", 1)
+            path += m["path"][1:]
+        assert path[-1] == [at["x"], at["y"]]
+    assert sum(len(m["path"]) - 1 for s in snaps for m in s["moves"] if m["unit"] == worker["id"]) >= 3
 
 
 # Opposite river edges: NE=1/SW=4, SE=2/NW=8, N=16/S=64, E=32/W=128, with the (dx, dy) of the neighbour across each.
@@ -967,7 +1096,7 @@ def client_colors(world: dict) -> list[str]:
 def check_known_map(km: dict, world: dict, state: dict, k: int = 0) -> None:
     """known_map for seats[k] against the world snapshot (which sees through the fog) and the seat's own state."""
     me = world["seats"][k]["index"]
-    assert list(km) == ["turn", "width", "height", "wrap_x", "players", "tiles", "cities", "units", "battles"]
+    assert list(km) == ["turn", "width", "height", "wrap_x", "players", "tiles", "cities", "units", "battles", "moves"]
     assert (km["turn"], km["width"], km["height"], km["wrap_x"]) == (
         world["turn"], world["map"]["width"], world["map"]["height"], world["map"]["wrap_x"])
     assert km["players"] == [{"index": p["index"], "civ": p["civ"], "barbarian": p["civ"] == "Barbarians",
@@ -1039,10 +1168,25 @@ def check_known_map(km: dict, world: dict, state: dict, k: int = 0) -> None:
     assert {(u["x"], u["y"], u["owner"], u["type"]): u["count"] for u in foreign} == groups
     assert len(foreign) == len(groups)
 
-    # Battles this turn and the last, oldest first, each one the seat fought or had in sight.
+    # Battles this turn and the last, oldest first, each one the seat fought or had in sight; and the steps it saw.
     for x in km["battles"]:
         check_battle(x, me, km)
     assert [x["id"] for x in km["battles"]] == sorted({x["id"] for x in km["battles"]})
+    check_moves(km, me)
+
+
+def check_moves(km: dict, me: int) -> None:
+    """known_map moves (docs/protocol.md): runs of steps, each to a neighbouring tile, oldest first, numbered in one
+    sequence with the battles; only the seat's own units carry ids."""
+    seqs = [m["seq"] for m in km["moves"]]
+    assert seqs == sorted(set(seqs)) and not set(seqs) & {x["seq"] for x in km["battles"]}
+    for m in km["moves"]:
+        assert list(m) == ["seq", "turn", "owner", "type", "id", "path"]
+        assert m["turn"] in (km["turn"] - 1, km["turn"]) and len(m["path"]) >= 2
+        assert 0 <= m["owner"] < len(km["players"]) and isinstance(m["type"], str) and m["type"]
+        for a, b in pairwise(m["path"]):
+            assert neighbours(km, {"x": a[0], "y": a[1]}, {"x": b[0], "y": b[1]}), m
+        assert m["id"] is None if m["owner"] != me else m["id"] is None or m["id"].startswith("u")
 
 
 def neighbours(km: dict, a: dict, b: dict) -> bool:
@@ -1055,8 +1199,10 @@ def neighbours(km: dict, a: dict, b: dict) -> bool:
 def check_battle(x: dict, me: int, km: dict) -> None:
     """A known_map battle (docs/protocol.md) against itself: the hit points each side lost are the rounds the other
     won, the winner is the side left standing, and only the seat's own units carry ids."""
-    assert list(x) == ["id", "turn", "kind", "attacker", "defender", "rounds", "winner", "city", "captured", "razed"]
+    assert list(x) == ["id", "seq", "turn", "kind", "attacker", "defender", "rounds", "winner", "city", "captured",
+                       "razed"]
     assert isinstance(x["id"], int) and x["id"] > 0 and x["turn"] in (km["turn"] - 1, km["turn"])
+    assert isinstance(x["seq"], int) and x["seq"] >= x["id"]
     assert x["kind"] in ("attack", "bombard") and x["rounds"] and set(x["rounds"]) <= {"a", "d"}
     a, d = x["attacker"], x["defender"]
     for side in (a, d):

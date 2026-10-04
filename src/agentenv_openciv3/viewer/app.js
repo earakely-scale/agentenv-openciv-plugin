@@ -108,7 +108,8 @@ class Match {
       x: (x - this.seam + W) % W, y, base: m.terrain[t], over: o >= 0 ? m.terrain[o] : null, river: r,
     }));
     this.tileAt = new Map(this.tiles.map((t, i) => [t.x * 4096 + t.y, i]));
-    this.ownersCk = new Map(); this.knownCk = new Map();
+    this.ownersCk = new Map(); this.knownCk = new Map(); this.looksCk = new Map();
+    this.looksBase = Int32Array.from(doc.static.tiles, ([, , , o]) => Match.look(o, -1, 0, 0));
     this.landBox = this.box(this.tiles.filter(t => !WATER.has(t.base)), 3);
     this.series = {}; this.events = []; this.leaders = []; this.unitIndex = []; this.messages = [];
   }
@@ -150,14 +151,14 @@ class Match {
   name(i) { const p = this.byIndex[i]; return p ? (p.label || p.civ) : "?"; }
   full(i) { const p = this.byIndex[i]; return p ? (p.label ? `${p.label} · ${p.civ}` : p.civ) : "?"; }
   tileIndex(x, y) { return this.tileAt.get(((x + this.W) % this.W) * 4096 + y); }
-  // Owners / known masks at turn index ti, from the per-turn deltas with a checkpoint every 10 turns.
-  _layer(ti, key, ck, fill) {
+  // Owners / known masks / looks at turn index ti, from the per-turn deltas with a checkpoint every 10 turns.
+  _layer(ti, key, ck, fill, value = r => r[1]) {
     if (ck.has(ti)) return ck.get(ti);
     let start = -1, base = null;
     for (const [k, v] of ck) if (k <= ti && k > start) { start = k; base = v; }
-    const arr = base ? Int32Array.from(base) : new Int32Array(this.tiles.length).fill(fill);
+    const arr = base ? Int32Array.from(base) : typeof fill === "number" ? new Int32Array(this.tiles.length).fill(fill) : Int32Array.from(fill);
     for (let t = start + 1; t <= ti; t++) {
-      for (const [i, v] of this.turns[t][key]) arr[i] = v;
+      for (const r of this.turns[t][key] || []) arr[r[0]] = value(r);
       if (t % 10 === 0 && !ck.has(t)) ck.set(t, Int32Array.from(arr));
     }
     ck.set(ti, arr);
@@ -166,6 +167,12 @@ class Match {
   }
   owners(ti) { return this._layer(ti, "owners", this.ownersCk, -1); }
   known(ti) { return this._layer(ti, "known", this.knownCk, 0); }
+  // How each tile looks at turn index ti (docs/viewer.md, `looks`), one int a tile: Match.unlook reads it.
+  looks(ti) { return this._layer(ti, "looks", this.looksCk, this.looksBase, ([, o, r, imp, b]) => Match.look(o, r, imp, b)); }
+  static look(overlay, resource, improvements, bonus) {
+    return ((overlay + 1) & 31) | (((resource + 1) & 127) << 5) | ((bonus & 1) << 12) | ((improvements & 0xffff) << 13);
+  }
+  static unlook(v) { return [(v & 31) - 1, ((v >> 5) & 127) - 1, (v >> 13) & 0xffff, (v >> 12) & 1]; }
   ranks(ti) {
     const order = this.civs.map(p => p.index).sort((a, b) => this.series[b][ti][0] - this.series[a][ti][0] || a - b);
     return Object.fromEntries(order.map((i, r) => [i, r + 1]));
@@ -376,7 +383,14 @@ class Painter {
     const cityAt = new Set(turn.cities.map(c => c[0] * 4096 + c[1]));
     if (o.units !== false && v.hw >= 4) this._units(ctx, ti, v, w, h, {focus, seen, cityAt, anim, at});
     const cities = this._cities(ctx, ti, v, w, h, {focus, seen, anim, at});
-    if ((o.labels || "auto") !== "none") this._labels(ctx, cities, v, w, h, o);
+    this.extras(ctx, ti, v, w, h, o, cities);
+    return cities;
+  }
+  // Over the map, plain or in the client's art: the city labels, the recent battles' marks and the pulses.
+  extras(ctx, ti, v, w, h, o, cities) {
+    const m = this.m, known = o.pov != null ? m.known(ti) : null, bit = o.pov != null ? 1 << o.pov : 0;
+    const seen = i => !known || (known[i] & bit) !== 0;
+    if ((o.labels || "auto") !== "none" && cities) this._labels(ctx, cities, v, w, h, o);
     for (const mk of o.marks || []) {
       const i = m.tileIndex(mk.x, mk.y); if (i == null || !seen(i)) continue;
       const [cx, cy] = this.center(mk.x, mk.y, v); if (cx < -20 || cy < -20 || cx > w + 20 || cy > h + 20) continue;
@@ -393,7 +407,6 @@ class Painter {
       const [cx, cy] = this.center(pl.x, pl.y, v), r = v.hw * (0.8 + pl.t * 2.4);
       ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.strokeStyle = rgb(pl.rgb, 1 - pl.t); ctx.lineWidth = 2.5; ctx.stroke();
     }
-    return cities;
   }
   _units(ctx, ti, v, w, h, {focus, seen, cityAt, anim, at}) {
     const m = this.m, types = m.meta.unit_types || [], civilian = new Set(m.meta.civilian || []);
@@ -524,6 +537,11 @@ function star(ctx, cx, cy, r) {
 
 const M = new Match();
 let P = null;                           // the painter, made when the first document arrives
+// The map in the OpenCiv3 client's own art (viewart.js), when the env serves it (GET /play/art/, the client image):
+// ART is the loaded art, VA its painter; T or the Art chip switches back to the plain map, and the browser remembers.
+let ART = null, VA = null;
+const ART_MIN_HW = 6;                   // further out than this the art is noise: the plain map shows instead
+const artOn = () => !!(VA && S.art && S.v && S.v.hw >= ART_MIN_HW);
 const LIVE = !window.OPENCIV_DATA;
 // ?stream: a full-screen layout for broadcasting (agent-env openciv3 stream), with a director instead of controls;
 // &client puts the spotlit agent's client view full size instead of in the corner, &cast=URL plays the casters'
@@ -540,6 +558,7 @@ const S = {
   kinds: new Set(["civ_destroyed", "city_captured", "city_destroyed", "war_declared", "peace_signed", "lead_change",
     "victory", "city_founded", "government_changed", "unit_lost"]),
   v: null, userMoved: false, flying: false, anim: null, pulses: [], client: {open: false, seat: null, big: false},
+  art: (() => { try { return localStorage.getItem("openciv3.viewer.art") !== "0"; } catch (e) { return true; } })(),
 };
 const METRICS = [["Score", 0], ["Cities", 1], ["Pop", 2], ["Land", 3], ["Techs", 4]];
 
@@ -644,7 +663,7 @@ function shell() {
     </div>
     <div class="hints"><kbd>Space</kbd> play · <kbd>←</kbd><kbd>→</kbd> turn (<kbd>Shift</kbd> ×10) · <kbd>1</kbd>–<kbd>9</kbd> follow
       an agent · <kbd>V</kbd> see as it · <kbd>C</kbd> its client view · <kbd>M</kbd><kbd>A</kbd><kbd>S</kbd> views ·
-      <kbd>Esc</kbd> clear · drag to pan, wheel to zoom</div>
+      <kbd>Esc</kbd> clear · <kbd>T</kbd> client art · drag to pan, wheel to zoom</div>
   </footer>`;
   document.body.appendChild(tip);
   document.body.classList.toggle("stream", STREAM);
@@ -677,6 +696,11 @@ function setTurn(i, {animate = false, user = false} = {}) {
   const from = S.ti;
   S.ti = i;
   S.anim = animate && i === from + 1 ? {from, start: performance.now()} : null;
+  if (VA) {
+    VA.stop();
+    // stepping or following live, a turn plays out in full (moves and battles in order); played, units only walk
+    if (S.anim) VA.play(from, i, {full: !S.playing, ms: animMs(), pov: S.pov});
+  }
   if (S.anim) {
     const now = performance.now();
     for (const e of M.turns[i].events)
@@ -799,9 +823,35 @@ function paint() {
     const t = (now - S.anim.start) / animMs();
     if (t >= 1) S.anim = null; else anim = {from: S.anim.from, t};
   }
-  P.draw(ctx, S.ti, S.v, w, h, {...S.layers, focus: S.focus, pov: S.pov, dpr, anim, marks: battleMarks(S.ti), moving: S.flying,
-    pulses: S.pulses.map(p => ({...p, t: (now - p.start) / 1500}))});
-  if (S.anim || S.pulses.length) raf = requestAnimationFrame(paint);
+  const o = {...S.layers, focus: S.focus, pov: S.pov, dpr, anim, marks: battleMarks(S.ti), moving: S.flying,
+    pulses: S.pulses.map(p => ({...p, t: (now - p.start) / 1500}))};
+  let busy = false;
+  if (artOn()) {
+    const cities = VA.draw(ctx, S.ti, S.v, w, h, {pov: S.pov, dpr, units: S.layers.units});
+    if (S.layers.units && S.v.hw < 8) P._units(ctx, S.ti, S.v, w, h, {focus: null, seen: povSeen(), cityAt: new Set(), anim, at: anim ? ease(anim.t) : 1});
+    // the client's own labels once they fit, else the viewer's, which make room for each other
+    if (S.layers.labels !== "none" && S.v.hw >= 29) { VA.labels(ctx, cities, S.v); P.extras(ctx, S.ti, S.v, w, h, {...o, labels: "none"}, cities); }
+    else P.extras(ctx, S.ti, S.v, w, h, o, cities);
+    busy = VA.busy(now);
+  } else P.draw(ctx, S.ti, S.v, w, h, o);
+  if (S.anim || S.pulses.length || busy) raf = requestAnimationFrame(paint);
+}
+function povSeen() {
+  if (S.pov == null) return () => true;
+  const known = M.known(S.ti), bit = 1 << S.pov;
+  return i => (known[i] & bit) !== 0;
+}
+// Loads the client's art once, live only (a recording carries none: the art has no licence to travel with it).
+async function loadArt() {
+  if (!LIVE || ART || typeof ArtKit === "undefined") return;
+  try { ART = await ArtKit.Art.load("play/art/"); } catch (e) { return; }   // no art in this env
+  VA = new ArtKit.ViewArt(ART, M);
+  renderLayers(); draw();
+}
+function setArt(on) {
+  S.art = on;
+  try { localStorage.setItem("openciv3.viewer.art", on ? "1" : "0"); } catch (e) { /* private mode */ }
+  renderLayers(); draw();
 }
 // Where the fighting is: cities razed or taken in the last 4 turns, units lost in the last 2, fading with age.
 const MARK_SPAN = {city_destroyed: 4, city_captured: 4, unit_lost: 2, attacked: 2, bombarded: 2};
@@ -882,12 +932,17 @@ function mapClick(e) {
 }
 const LAYERS = [["territory", "Territory"], ["borders", "Borders"], ["units", "Units"], ["labels", "Labels"]];
 function renderLayers() {
-  $("#layers").innerHTML = LAYERS.map(([k, l]) => {
-    const on = k === "labels" ? S.layers.labels !== "none" : S.layers[k];
-    return `<button class="chip ${on ? "on" : ""}" data-k="${k}">${k === "labels" ? `Labels: ${S.layers.labels}` : l}</button>`;
-  }).join("");
+  const art = !!VA && S.art;
+  $("#layers").innerHTML = (VA ? `<button class="chip ${art ? "on" : ""}" data-k="art" title="The client's art (T)">Art</button>` : "") +
+    LAYERS.filter(([k]) => !(art && (k === "territory" || k === "borders"))).map(([k, l]) => {
+      const on = k === "labels" ? S.layers.labels !== "none" : S.layers[k];
+      return `<button class="chip ${on ? "on" : ""}" data-k="${k}">${k === "labels" ? `Labels: ${S.layers.labels}` : l}</button>`;
+    }).join("");
+  const legend = $(".legendbox");
+  if (legend) legend.hidden = art;
   for (const b of $$("#layers .chip")) b.onclick = () => {
     const k = b.dataset.k;
+    if (k === "art") return setArt(!S.art);
     if (k === "labels") S.layers.labels = {auto: "all", all: "none", none: "auto"}[S.layers.labels]; else S.layers[k] = !S.layers[k];
     renderLayers(); draw();
   };
@@ -1440,6 +1495,7 @@ function keys() {
     else if ((k === "v" || k === "V") && S.focus != null && M.byIndex[S.focus].seat != null) setPov(S.pov === M.byIndex[S.focus].seat ? null : M.byIndex[S.focus].seat);
     else if (k === "c" || k === "C") S.client.open ? closeClient() : openClient(S.focus != null && M.byIndex[S.focus].seat != null ? S.focus : null);
     else if (k === "l" || k === "L") { if (LIVE) goLive(); }
+    else if ((k === "t" || k === "T") && VA) setArt(!S.art);
     else if (k === "+" || k === "=") $("#zin").click();
     else if (k === "-") $("#zout").click();
     else if (k === "0") $("#zfit").click();
@@ -1795,6 +1851,7 @@ function start() {
   setTurn(S.ti);
   if (S.client.open) renderClient();
   if (STREAM) broadcastStart();
+  loadArt();
 }
 function waiting(msg) {
   $("#emptymsg").hidden = false; $("#emptymsg").innerHTML = `<div>${esc(msg)}</div><div class="muted">${LIVE ? "This page follows the game as it plays." : ""}</div>`;

@@ -336,6 +336,7 @@ sealed partial class Session {
 			["cities"] = cities,
 			["units"] = units,
 			["battles"] = BattlesJson(),
+			["moves"] = MovesJson(),
 		};
 	}
 

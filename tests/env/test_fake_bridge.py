@@ -126,7 +126,7 @@ async def test_world_snapshot_matches_recording_md(fake_cmd, tmp_path):
     finally:
         await b.close()
     assert_shape(SNAPSHOT_EXAMPLE, world, doc=RECORDING)
-    assert len(world["tiles"]) == 60 * 60 // 2 and len(world["tiles"][0]) == 7
+    assert len(world["tiles"]) == 60 * 60 // 2 and len(world["tiles"][0]) == 10
     assert world["players"][-1]["civ"] == "Barbarians"
     files = sorted(p.name for p in tmp_path.iterdir())
     assert files[0] == "turn-0001.json.gz" and len(files) == 1 + (world["turn"] - 1)

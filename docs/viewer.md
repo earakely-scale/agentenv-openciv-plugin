@@ -33,18 +33,23 @@ the turns it hasn't seen; a recording embeds the whole document.
            "terrain": ["ocean", "sea", "coast", "grassland", ...],
            "unit_types": ["Settler", "Warrior", ...],   // grows; always sent whole
            "civilian": ["Settler", "Worker", ...],      // unit types that don't fight
+           "resources": ["Wheat", ...], "improvements": ["road", ...],   // grow; looks index them
            "victory": null},
   "players": [{"index": 1, "civ": "Rome", "label": "opus", "barbarian": false,
                "human": true,           // only on a seat a person plays (docs/play.md)
                "seat": 0,               // the seat number (bit in `known`), or null for an AI civ
                "color": "#3987e5", "engine_color": "#c43434"}],
-  "static": {"tiles": [[x, y, terrain, overlay_or_-1, river]]},   // sent once (since=-1)
+  "static": {"tiles": [[x, y, terrain, overlay_or_-1, river]]},   // sent once (since=-1); river: its edges (NE=1, SE=2, SW=4, NW=8), 0 none
   "turns": [{
     "turn": 12,
     "owners": [[tile, owner]],          // changes since the turn before; tile indexes static.tiles
     "known":  [[tile, mask]],           // changes since the turn before
-    "cities": [[x, y, name, owner, size, capital, production_or_null, id_or_null]],
-    "units":  [[id, x, y, owner, type]],            // id: a small int for the engine id (-1 if none); type indexes meta.unit_types
+    "looks":  [[tile, overlay, resource, improvements, bonus]],   // changes; only when there are some (below)
+    "cities": [[x, y, name, owner, size, capital, production_or_null, id_or_null, era, walls]],
+    "units":  [[id, x, y, owner, type, hp, hp_max, fortified]],   // id: a small int for the engine id (-1 if none);
+                                        // type indexes meta.unit_types; the last three only when not a healthy 3-hp unit
+    "moves":  [[seq, id, owner, type, seen, x0, y0, x1, y1, ...]],  // only when there are some (below)
+    "battles": [[seq, kind, winner, rounds, city, seen, ...attacker, ...defender]],
     "scores": {"1": [total, cities, pop, tiles, techs, defeated]},
     "stats":  {"1": {"gold": 40, "government": "Despotism", "research": "Bronze Working", "at_war": [3]}},
     "events": [{"kind": "city_captured", "owner": 1, "from": 3, "x": 10, "y": 12, "text": "...",
@@ -67,6 +72,16 @@ the turns it hasn't seen; a recording embeds the whole document.
   `notes` (at most 140 characters, the `end_turn` note of the turn the seat ended), `plans` (the first 300
   characters of a plan, cut with `…`) and `messages` (at most 280; `from` and `to` are player indices, `to` is
   `"all"` for every other leader). The `live` object has the turn being played's.
+- **How tiles look** (`looks`): a row for each tile whose overlay, resource, improvements or bonus grassland changed
+  since the turn before (the first turn: each with a resource, improvement or bonus), from the snapshot's art fields
+  ([recording.md](recording.md)): `overlay` indexes `meta.terrain` (-1 for none: a forest cleared), `resource` indexes
+  `meta.resources` (-1 for none), `improvements` is a bit mask over `meta.improvements`, `bonus` 1 for bonus
+  grassland. Older recordings have none.
+- **Moves and battles** (patches 0010 and 0012): what happened during turn - 1, in the order it happened (`seq`).
+  A move is one unit's run of steps: `id` as in `units`, `seen` the seats that saw it (a mask as in `known`), then
+  the tiles it walked, from where it stood. A battle: `kind` 0 an attack, 1 a bombardment; `winner` `"a"`, `"d"`
+  or `"r"` (a retreat); `rounds` a letter a round, `"a"` won by the attacker; `city` 0 none, 1 it stood, 2 taken,
+  3 destroyed; `seen` as for a move; then each side as `owner, type, x, y, hp_before, hp_after, hp_max`.
 - **Derived events** cover every civ: `city_founded`, `city_captured`, `city_destroyed`, `civ_destroyed`,
   `tech_learned`, `government_changed`, `war_declared`, `peace_signed`, `lead_change`. Bridge events are kept for
   the kinds the snapshots can't show (`unit_lost`, `gold_stolen`, `disorder`, …); per-seat chatter (`city_grew`,
@@ -154,3 +169,26 @@ Agent-written text (notes, plans, messages) and the casters' lines are shown as 
 viewer and recordings show the same notes, plans and messages: the agent card and each agent's panel carry its newest
 note and its plan, and a diplomacy section lists the messages up to the turn shown, newest first, those to or from the
 followed agent when one is followed.
+
+## 6. The client's art
+
+When the env has the client's art (the client image; `GET /play/art/`, [play.md](play.md#6-the-games-art)), the live
+view draws the map with it, as the play page does, for every civ at once or for the seat it sees as. **T**, or the
+Art chip, goes back to the plain map, and the browser remembers. Zoomed out until a tile is under 12 px wide, the
+plain map shows instead, the art being noise there.
+
+- **The picture** (terrain, rivers, forests and hills, improvements, resources, borders in each civ's colour,
+  cities by size and era) is ArtPainter's (art.js), drawn in chunks at a quarter, half and full scale and kept from
+  turn to turn wherever nothing in them changed (a tile's owner or look, a city); a chunk out of date is redrawn a
+  few a frame, the old one standing in meanwhile. Zoomed in far enough to fit them (a tile 58 px wide), the cities'
+  labels are the client's; further out they are the viewer's, which make room for each other.
+- **Units** are the client's sprites in their civ's colour, one per tile (a fighting one first) with a mark per unit
+  stacked there, hit point bars and the fortify pose; further out than a tile 16 px wide, the viewer's dots.
+- **A turn arriving** plays out: the units walk the paths they took (`moves`), a step at a time with their run
+  animation, facing the way they go; a unit that moved with no path (aboard a ship) slides there. Stepping a turn or
+  following live, the turn plays in full, in order: steps and battles by `seq`, the battles as the client plays
+  them (both units attack each round, the loser dies), several at once, a few seconds in all. Played (Play), the
+  units only walk, within the turn's time.
+- **Recordings** carry no art: the art has no licence to travel with them (THIRD_PARTY_NOTICES.md), so the `html`
+  format and its videos draw the plain map. The streamer (`agent-env openciv3 stream`, with `--record` for a video
+  file) shows the live view, art and all.
