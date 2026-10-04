@@ -288,6 +288,12 @@ sealed partial class Session {
 			string why = FoundSite(u.location) ?? (u.movementPoints.canMove ? null : "no moves left this turn");
 			o["can_found_city"] = why == null ? new JsonObject { ["ok"] = true } : new JsonObject { ["ok"] = false, ["reason"] = why };
 		}
+		// A passenger is carried by its ship (patches/0020: lost with it at sea); a ship lists who is aboard.
+		if (ShipOf(u) is MapUnit ship) o["aboard"] = ids.Of(ship);
+		if (u.CanTransport()) {
+			o["capacity"] = u.unitType.capacity;
+			o["cargo"] = Json.Strings(Cargo(u).Select(x => ids.Of(x)));
+		}
 		o["orders"] = Json.Strings(ValidOrders(u));
 		if (AttackTargets(u) is { Count: > 0 } targets) o["attack_targets"] = Json.Array(targets, e => TargetJson(u, e));
 		o["needs_orders"] = NeedsOrders(u);
@@ -296,6 +302,7 @@ sealed partial class Session {
 
 	string Status(MapUnit u) =>
 		orders.TryGetValue(u, out Order o) ? o.Kind
+		: u.IsLoaded() ? "aboard"
 		: u.isFortified ? "fortified"
 		: u.isAutomated && u.currentAI is ExplorerAI ? "exploring"
 		: u.isAutomated ? "auto_work"
@@ -303,7 +310,8 @@ sealed partial class Session {
 		: u.path?.PathLength() > 0 ? "goto"
 		: u.movementPoints.canMove ? "idle" : "done";
 
-	bool NeedsOrders(MapUnit u) => !GameOver && u.CanBeActive() && !orders.ContainsKey(u);
+	// A passenger waits for its ship, awake or not: it is never what holds up the turn.
+	bool NeedsOrders(MapUnit u) => !GameOver && u.CanBeActive() && !orders.ContainsKey(u) && !u.IsLoaded();
 
 	JsonObject Map(Args a) {
 		Tile center = TileArg(a.Int("x"), a.Int("y"), requireExplored: false);
@@ -473,8 +481,11 @@ sealed partial class Session {
 
 	JsonArray TileUnits(Tile t) {
 		var list = new JsonArray();
-		foreach (MapUnit u in t.unitsOnTile.Where(u => u.owner == human).OrderBy(u => Ids.Number(ids.Of(u))))
-			list.Add(new JsonObject { ["owner"] = human.civilization.name, ["type"] = u.unitType.name, ["count"] = 1, ["id"] = ids.Of(u) });
+		foreach (MapUnit u in t.unitsOnTile.Where(u => u.owner == human).OrderBy(u => Ids.Number(ids.Of(u)))) {
+			var o = new JsonObject { ["owner"] = human.civilization.name, ["type"] = u.unitType.name, ["count"] = 1, ["id"] = ids.Of(u) };
+			if (ShipOf(u) is MapUnit ship) o["aboard"] = ids.Of(ship);
+			list.Add(o);
+		}
 		foreach (var g in t.unitsOnTile.Where(u => u.owner != human).GroupBy(u => (Owner(u.owner), u.unitType.name)))
 			list.Add(new JsonObject { ["owner"] = g.Key.Item1, ["type"] = g.Key.name, ["count"] = g.Count() });
 		return list;

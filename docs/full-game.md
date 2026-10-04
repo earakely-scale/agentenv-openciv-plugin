@@ -92,7 +92,22 @@ rotated at a 100K context cap.
    - At Regent, 6 to 15 wars per game end in peace, where none did.
 5. **Military tops out around 1700.** The standalone ruleset keeps 27 of 124 units, and there are no
    upgrades, air units or armies (S to switch the ruleset, M to L for the rest).
-6. **The AI ignores water**, so play on Pangaea only (L).
+6. **The AI ignored water: fixed for exploring and settling** by patches 0020-0022.
+   - It built no boat (a Curragh never won its city's production choice), settled only its own landmass and moved
+     nothing across water; a ship lost at sea left its passengers stranded on the water.
+   - Now the AI builds a few ships to explore the ocean (at most min(4, 1 + cities / 6) at a time), ferries a
+     settler and its escort to sites on other landmasses, and a ship lost at sea takes its passengers with it.
+     The agent boards ships (`board`, `unload`) and sees who is aboard what.
+   - Measured, 300 turns, Small, 3 AIs, Regent, the engine AI in the seat, seeds 1-3, before and after: on
+     Archipelago, 0 → 14-17 boats built per game, 0 → 6-36 cities on another landmass, the seat's known tiles
+     390-700 → 2,882-3,027; on Continents, 0 → 16-20 boats, 0 → 1-23 overseas cities, 823-916 → 2,886-2,970 known
+     tiles. Wall time went from 22-30 s to 28-42 s a game (1.05-1.43×); no turn hung and no unit was stranded.
+   - Still missing (L each): naval warfare (ships attacking ships, bombarding coasts, escorting ferries);
+     amphibious invasion and war across water, so on Continents AIs on different landmasses still never fight
+     (`WarPriority` skips cities on other continents); AI troop transport beyond one settler and its escort; Civ
+     III's coast-only Galley and sinking (here a Galley sails the open ocean safely), transport chaining, carriers
+     and submarines; barbarian sea raids (barbarian galleys spawn and never move); the AI's use of Harbors, the
+     Great Lighthouse and Magellan's; trade by sea.
 
 **Tools** (what the agent can do):
 
@@ -103,6 +118,7 @@ rotated at a 100K context cap.
 | Diplomacy | **done for war and peace:** the `diplomacy` tool, with peace at the AI's price and AI offers reported as events. Trading techs and gold is not done (M) |
 | Acting at scale | **done:** `unit_orders` orders many units at once (by id, or every idle unit of a type), `set_production` sets many cities at once (`"all"`, `"pending"`, a list) and takes a queue (`then`) the bridge follows after each completion, `list_units` filters by type, and with many cities the brief folds the engine's picks into one line and `city_info` gives one line per city |
 | Seeing rivals | a rivals view and seen foreign cities (S) |
+| Crossing water | **done:** `board` (a ship in port, or one on an adjacent water tile) and `unload` (in a city) orders; a passenger lands with `goto` or `settle`; units show `aboard`, ships `capacity` and `cargo`, and `city_sites` for a unit aboard ranks the islands along the ship's waters |
 | The date and victory status | **done:** the brief dates each turn, ranks the seat by score and gives its share of the land and population against the civ nearest domination; `data/get` carries the victory |
 
 **Harness** (what breaks at 540 turns):
@@ -148,7 +164,7 @@ rotated at a 100K context cap.
 | 1 | Small, 5 AIs, Regent, Roaming, 200 turns | resumable env, a larger plan, `revolution`, a rivals view, the date, the building patch | 3 Sonnet seeds reach T200 over several sessions with no harness error; a run resumes from its autosave; the agent leaves Despotism |
 | 2 | Standard, 7 AIs, 300 turns | `attack` and `bombard`, diplomacy with the peace guard, batching, end checks in the bridge | 3 seeds finish or win, none defeated; the brief stays under 2.5K tokens at 20+ cities |
 | 3 | Standard, 7 AIs, 540 turns | AI governments and science, AI peace, small wonders, the full ruleset, checkpoints | an engine-only game reaches the Industrial era and ends a war in peace; 3 Sonnet seeds finish T540 for $34 to $88 each |
-| 4 | Continents, Huge with 16 civs, space or UN victory | naval transport, an AI that crosses water, space and UN in the engine | – |
+| 4 | Continents, Huge with 16 civs, space or UN victory | naval transport and an AI that explores and settles across water (done: patches 0020-0022), an AI that fights across water, space and UN in the engine | – |
 
 Rung 3 is what "a full game like a human plays" means. In this engine, turns 300 to 540 change little
 until the engine items under rung 3 land.

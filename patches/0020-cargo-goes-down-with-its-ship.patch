@@ -1,0 +1,26 @@
+Cargo goes down with its ship: a ship that is lost (sunk in battle, disbanded, or disbanded by patch 0007's broke AI) took nothing with it. GameData.RemoveUnit left the units aboard on the water, still loaded on a ship that no longer existed, with no route anywhere: a land unit stranded at sea for the rest of the game. Now, as in Civilization III, a ship lost at sea loses its passengers with it, and a ship lost in a city puts its passengers ashore there, awake.
+
+--- a/C7Engine/C7GameData/GameData.cs
++++ b/C7Engine/C7GameData/GameData.cs
+@@ -307,6 +307,21 @@
+ 			unit.hitPointsRemaining = 0;
+ 			unit.movementPoints.onConsumeAll();
+ 
++			// A ship's passengers go down with it at sea, as in Civ III; in a
++			// city they go ashore. This must run while the ship is still on its
++			// tile, so its cargo can be found. Cargo never carries cargo (only
++			// land units board), so this recurses once at most.
++			if (unit.CanTransport() && Tile.IsTileValid(unit.location)) {
++				foreach (MapUnit cargo in unit.location.unitsOnTile.Where(u => u != unit && u.IsLoadedIn(unit)).ToList()) {
++					cargo.loadedOnUnitId = null;
++					if (unit.location.IsLand()) {
++						cargo.Wake();
++					} else {
++						RemoveUnit(cargo);
++					}
++				}
++			}
++
+ 			if (unit.currentAI != null) {
+ 				unit.currentAI.UpdateOnDeath();
+ 				unit.currentAI = null;

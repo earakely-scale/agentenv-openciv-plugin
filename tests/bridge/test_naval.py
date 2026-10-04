@@ -1,0 +1,411 @@
+"""Naval play over the bridge: units board ships and cross water (board/unload, aboard/cargo/capacity), a ship lost at
+sea takes its passengers with it (patches/0020), the AI explores by sea (patches/0021) and ferries settlers overseas
+(patches/0022). Run like test_protocol.py, whose Bridge and fixtures these share."""
+
+from __future__ import annotations
+
+import json
+
+import test_protocol
+from test_protocol import SEED, Bridge, found_capital, unit
+
+launch = test_protocol.launch   # the fixture
+
+WATER = {"coast", "sea", "ocean"}
+STEPS = ((2, 0), (-2, 0), (0, 2), (0, -2), (1, 1), (1, -1), (-1, 1), (-1, -1))
+
+
+class Geo:
+    """The map of a save: terrain, neighbours (x wraps) and the engine's continent ids, which number each landmass and
+    each body of water (two water tiles that only touch diagonally between two land tiles are not connected)."""
+
+    def __init__(self, save: dict):
+        g = save["game"]
+        self.width, self.wrap = g["map"]["tilesWide"], g["map"]["wrapHorizontally"]
+        self.tiles = {(t["x"], t["y"]): t for t in g["map"]["tiles"]}
+        self.part = {p: t["continent"] for p, t in self.tiles.items()}
+        self.sizes: dict[int, int] = {}
+        for c in self.part.values():
+            self.sizes[c] = self.sizes.get(c, 0) + 1
+
+    def water(self, p: tuple[int, int]) -> bool:
+        return self.tiles[p]["baseTerrain"] in WATER
+
+    def neighbours(self, p: tuple[int, int]) -> list[tuple[int, int]]:
+        out = []
+        for dx, dy in STEPS:
+            x, y = p[0] + dx, p[1] + dy
+            if self.wrap:
+                x %= self.width
+            if (x, y) in self.tiles:
+                out.append((x, y))
+        return out
+
+    def size(self, p: tuple[int, int]) -> int:
+        return self.sizes[self.part[p]]
+
+
+def at(o: dict) -> tuple[int, int]:
+    loc = o.get("location") or o.get("currentLocation") or o
+    return loc["x"], loc["y"]
+
+
+def check_cargo(world: dict) -> None:
+    """The invariants of units at sea: a land unit on water is aboard a live ship of its owner on its tile; a ship
+    carries no more than its capacity, only land units, all on its tile; a sea unit on land is in its owner's city; and
+    no tile holds two owners' units."""
+    water = {(t[0], t[1]) for t in world["tiles"] if t[2] in WATER}
+    by_id = {u["id"]: u for u in world["units"]}
+    cities = {(c["x"], c["y"]): c["owner"] for c in world["cities"]}
+    ships = {u["id"] for u in world["units"] if u["type"] in SHIPS}
+    owners: dict[tuple[int, int], set[int]] = {}
+    for u in world["units"]:
+        p = at(u)
+        owners.setdefault(p, set()).add(u["owner"])
+        if u["type"] in SHIPS:
+            assert not u["aboard"] and (p in water or cities.get(p) == u["owner"]), u
+            continue
+        if u["aboard"]:
+            ship = by_id.get(u["aboard"])
+            assert ship and ship["id"] in ships and at(ship) == p and ship["owner"] == u["owner"], u
+        else:
+            assert p not in water, f"{u} stands on the water with no ship"
+    for sid in ships:
+        aboard = [u for u in world["units"] if u["aboard"] == sid]
+        assert len(aboard) <= CAPACITY.get(by_id[sid]["type"], 0), (by_id[sid], aboard)
+    assert all(len(o) == 1 for o in owners.values()), {p: o for p, o in owners.items() if len(o) > 1}
+
+
+SHIPS = {"Galley", "Caravel", "Galleon", "Frigate", "Privateer", "Curragh", "Ironclad", "Transport", "Destroyer"}
+CAPACITY = {"Galley": 2, "Caravel": 3, "Galleon": 4, "Frigate": 2, "Transport": 8}
+
+
+def harbour(launch, tmp_path, turns: int = 1) -> tuple[Bridge, dict]:
+    """Archipelago seed 1, the capital founded and the save edited: the seat knows the whole map, and a Settler and a
+    Warrior stand on a shore of its island next to a Galley on the ocean, with a second Galley and a Warrior in the
+    capital and a Spearman with no moves on the shore. Returns the loaded bridge and the plan: the shore, the Galley's
+    tile, and a water tile next to a site on another island."""
+    b = launch("--autosave", str(tmp_path / "a"))
+    b.call("new_game", seed=SEED, size="Small", landform="Archipelago", turn_limit=300)
+    capital = found_capital(b)
+    for _ in range(turns):
+        b.call("end_turn", skip_idle=True)
+    path = tmp_path / "a" / "autosave.json"
+    save = json.loads(path.read_text())
+    g = save["game"]
+    geo = Geo(save)
+    me = next(p for p in g["players"] if p["human"])
+    me["tileKnowledge"] = [{"x": x, "y": y} for x, y in geo.tiles]
+    home = geo.part[at(capital)]
+    taken = {at(u) for u in g["units"]} | {at(c) for c in g["cities"]}
+    near = [c for c in g["cities"] if c["owner"] != me["id"]]
+    ocean = max((c for p, c in geo.part.items() if geo.water(p)), key=geo.sizes.__getitem__)
+
+    def site(p: tuple[int, int]) -> bool:
+        return (not geo.water(p) and geo.part[p] != home and p not in taken and geo.size(p) >= 20
+                and geo.tiles[p]["baseTerrain"] in ("grassland", "plains")
+                and all(max(abs(p[0] - at(c)[0]), abs(p[1] - at(c)[1])) > 6 for c in near))
+
+    # The shore nearest the capital on the ocean (the capital itself is on a lake), then the nearest site overseas.
+    shores = sorted(((s, w) for s in geo.tiles if geo.part[s] == home and s not in taken
+                     for w in geo.neighbours(s) if geo.part[w] == ocean and w not in taken),
+                    key=lambda sw: abs(sw[0][0] - at(capital)[0]) + abs(sw[0][1] - at(capital)[1]))
+    shore, sea = shores[0]
+    landings = sorted(((w, s) for s in geo.tiles if site(s) for w in geo.neighbours(s)
+                       if geo.part[w] == ocean and w not in taken),
+                      key=lambda ws: abs(ws[0][0] - sea[0]) + abs(ws[0][1] - sea[1]))
+    landing, target = landings[0]
+
+    template = next(u for u in g["units"] if u["owner"] == me["id"])
+
+    def add(uid: str, kind: str, p: tuple[int, int], moves: float) -> None:
+        g["units"].append({**template, "id": uid, "name": kind, "prototype": kind,
+                           "currentLocation": {"x": p[0], "y": p[1]},
+                           "previousLocation": {"x": p[0], "y": p[1]}, "hitPointsRemaining": 3,
+                           "movePointsRemaining": moves, "isAutomated": False, "workerProgressTowardsJob": 0})
+
+    add("Galley-901", "Galley", sea, 3)
+    add("Galley-902", "Galley", at(capital), 3)
+    add("Settler-903", "Settler", shore, 1)
+    add("Warrior-904", "Warrior", shore, 1)
+    add("Warrior-905", "Warrior", at(capital), 1)
+    add("Spearman-906", "Spearman", shore, 0)
+    edited = tmp_path / "harbour.json"
+    edited.write_text(json.dumps(save))
+    r = launch("--autosave", str(tmp_path / "b"))
+    r.call("load", path=str(edited))
+    s = r.call("state")
+
+    def find(kind: str, p: tuple[int, int]) -> str:
+        return next(u["id"] for u in s["units"] if u["type"] == kind and at(u) == p)
+
+    return r, {"capital": at(capital), "shore": shore, "sea": sea, "landing": landing, "site": target, "home": home,
+               "geo": geo, "galley": find("Galley", sea), "port_galley": find("Galley", at(capital)),
+               "settler": find("Settler", shore), "warrior": find("Warrior", shore),
+               "guard": find("Warrior", at(capital)),
+               "spearman": find("Spearman", shore)}
+
+
+def sail(b: Bridge, ship: str, to: tuple[int, int], turns: int = 20) -> dict:
+    """Orders the ship to `to` and ends turns until it is there; returns its state."""
+    b.call("unit_order", unit=ship, order="goto", x=to[0], y=to[1])
+    for _ in range(turns):
+        u = unit(b.call("state"), ship)
+        if at(u) == to:
+            return u
+        b.call("end_turn", skip_idle=True)
+    raise AssertionError(f"{ship} never reached {to}")
+
+
+def test_a_unit_boards_a_ship_and_founds_a_city_overseas(launch, tmp_path):
+    """A Settler and a Warrior board a Galley from the shore (each steps onto it, which takes its moves), the Galley
+    sails them to another island, and the Settler founds a city there straight from the ship."""
+    b, h = harbour(launch, tmp_path)
+    galley, settler, warrior = h["galley"], h["settler"], h["warrior"]
+    s = b.call("state")
+    assert "board" in unit(s, settler)["orders"] and unit(s, galley)["capacity"] == 2 and unit(s, galley)["cargo"] == []
+    assert "aboard" not in unit(s, settler)
+
+    res = b.call("unit_order", unit=settler, order="board", x=h["sea"][0], y=h["sea"][1])
+    assert res["message"] == (f"{settler} Settler went aboard {galley} Galley at ({h['sea'][0]},{h['sea'][1]}) (1/2), "
+                              "which took its moves; the ship carries it from now on.")
+    assert res["unit"]["aboard"] == galley and res["unit"]["status"] == "aboard" and not res["unit"]["needs_orders"]
+    assert at(res["unit"]) == h["sea"]
+    b.call("unit_order", unit=warrior, order="board", x=h["sea"][0], y=h["sea"][1])
+    s = b.call("state")
+    assert unit(s, galley)["cargo"] == [settler, warrior] and unit(s, warrior)["aboard"] == galley
+    assert "board" not in unit(s, galley)["orders"]
+    check_cargo(b.call("world"))
+    # A passenger never holds up the turn, even woken: it waits for its ship.
+    assert b.call("unit_order", unit=warrior, order="wake")["message"] == f"{warrior} Warrior had no standing order."
+    w = unit(b.call("state"), warrior)
+    assert (w["status"], w["needs_orders"], w["aboard"]) == ("aboard", False, galley) and "wake" not in w["orders"]
+    assert all(x.get("id") != warrior for x in b.call("state")["blockers"])
+
+    # The ship carries them; the city sites of a unit aboard are on the islands along its waters.
+    sail(b, galley, h["landing"])
+    s = b.call("state")
+    assert at(unit(s, settler)) == at(unit(s, warrior)) == h["landing"] and unit(s, settler)["aboard"] == galley
+    sites = b.call("city_sites", unit=settler)["sites"]
+    assert sites and all(h["geo"].part[at(x)] != h["home"] for x in sites)
+    check_cargo(b.call("world"))
+
+    # Straight from the ship: the settler steps ashore (which takes its moves) and founds the city at the start of the
+    # next turn; the Warrior goes ashore with it.
+    res = b.call("unit_order", unit=settler, order="settle", x=h["site"][0], y=h["site"][1])
+    assert at(res["unit"]) == h["site"] and "aboard" not in res["unit"], res["message"]
+    assert unit(b.call("state"), galley)["cargo"] == [warrior]
+    res = b.call("unit_order", unit=warrior, order="goto", x=h["site"][0], y=h["site"][1])
+    assert at(res["unit"]) == h["site"] and "aboard" not in res["unit"], res["message"]
+    assert unit(b.call("state"), galley)["cargo"] == []
+    check_cargo(b.call("world"))
+    events = b.call("end_turn", skip_idle=True)["events"]
+    [city] = [c for c in b.call("state")["cities"] if at(c) == h["site"]]
+    assert any(e["kind"] == "city_founded" and city["name"] in e["text"] for e in events), events
+    assert h["geo"].part[h["site"]] != h["home"]
+
+
+def test_a_ship_lost_at_sea_takes_its_passengers(launch, tmp_path):
+    """patches/0020: a Galley disbanded at sea takes the Settler and Warrior aboard with it (without the patch they
+    stayed on the water, aboard a ship that no longer existed); one disbanded in port puts its passenger ashore."""
+    b, h = harbour(launch, tmp_path)
+    galley, settler, warrior = h["galley"], h["settler"], h["warrior"]
+    for u in (settler, warrior):
+        b.call("unit_order", unit=u, order="board", x=h["sea"][0], y=h["sea"][1])
+    res = b.call("unit_order", unit=galley, order="disband")
+    lost = f"{settler} Settler, {warrior} Warrior aboard were lost with it."
+    assert res["message"] == f"{galley} Galley was disbanded. {lost}"
+    s = b.call("state")
+    assert not {galley, settler, warrior} & {u["id"] for u in s["units"]}
+    assert b.error("unit_order", unit=warrior, order="goto", x=h["shore"][0], y=h["shore"][1])["code"] == "unknown_unit"
+    check_cargo(b.call("world"))
+
+    port, guard = h["port_galley"], h["guard"]
+    res = b.call("unit_order", unit=guard, order="board")
+    assert res["message"] == (f"{guard} Warrior is aboard {port} Galley at ({h['capital'][0]},{h['capital'][1]}) "
+                              "(1/2); the ship carries it from now on.")
+    res = b.call("unit_order", unit=port, order="disband")
+    assert res["message"].endswith(f" {guard} Warrior went ashore.")
+    g = unit(b.call("state"), guard)
+    assert "aboard" not in g and at(g) == h["capital"] and g["status"] == "idle"
+    check_cargo(b.call("world"))
+    b.call("end_turn", skip_idle=True)
+    check_cargo(b.call("world"))
+
+
+def test_unload_only_in_a_city(launch, tmp_path):
+    """At sea a passenger lands by goto or settle, not by unload; in a city unload puts every passenger ashore."""
+    b, h = harbour(launch, tmp_path)
+    b.call("unit_order", unit=h["settler"], order="board", x=h["sea"][0], y=h["sea"][1])
+    for who in (h["galley"], h["settler"]):
+        err = b.error("unit_order", unit=who, order="unload")
+        assert err["code"] == "invalid_order"
+        assert "at sea, order each passenger to goto or settle a land tile" in err["message"]
+        assert "unload" not in err["alternatives"]
+
+    port, guard, worker = h["port_galley"], h["guard"], "u2"
+    assert unit(b.call("state"), worker)["x"] == h["capital"][0]
+    for u in (guard, worker):
+        b.call("unit_order", unit=u, order="board")
+    s = b.call("state")
+    assert unit(s, port)["cargo"] == [worker, guard] and "unload" in unit(s, port)["orders"]
+    assert "board" not in unit(s, guard)["orders"]
+    err = b.error("unit_order", unit=guard, order="board")
+    assert err["message"].startswith(f"{guard} Warrior is already aboard {port} Galley.")
+    res = b.call("unit_order", unit=port, order="unload")
+    assert res["message"] == f"{worker} Worker, {guard} Warrior went ashore in Rome and await orders."
+    s = b.call("state")
+    assert unit(s, port)["cargo"] == [] and all("aboard" not in unit(s, u) for u in (guard, worker))
+    assert unit(s, guard)["needs_orders"]
+    # A passenger can also go ashore by itself.
+    b.call("unit_order", unit=guard, order="board")
+    res = b.call("unit_order", unit=guard, order="unload")
+    assert res["message"] == f"{guard} Warrior went ashore in Rome and awaits orders."
+
+
+def test_board_refuses_what_it_cannot_do(launch, tmp_path):
+    """Every refusal names what went wrong and, where there is one, the call that works."""
+    b, h = harbour(launch, tmp_path)
+    galley, settler, warrior = h["galley"], h["settler"], h["warrior"]
+    x, y = h["sea"]
+    err = b.error("unit_order", unit=galley, order="board")
+    assert err["code"] == "invalid_order" and "only land units can" in err["message"]
+    err = b.error("unit_order", unit=settler, order="board")
+    board = f'unit_order(unit="{settler}", order="board", x={x}, y={y})'
+    assert err["code"] == "no_transport" and err["suggest"] == board
+    far = h["landing"]
+    assert b.error("unit_order", unit=settler, order="board", x=far[0], y=far[1])["code"] == "bad_target"
+    land = next(p for p in h["geo"].neighbours(h["shore"]) if not h["geo"].water(p))
+    assert b.error("unit_order", unit=settler, order="board", x=land[0], y=land[1])["code"] == "bad_target"
+    err = b.error("unit_order", unit=settler, order="goto", x=x, y=y)
+    assert err["code"] == "bad_target" and err["suggest"] == board
+    err = b.error("unit_order", unit=h["spearman"], order="board", x=x, y=y)
+    assert err["code"] == "no_moves"
+    assert err["message"] == f"{h['spearman']} Spearman has no moves left this turn; board {galley} Galley next turn."
+    b.call("unit_order", unit=settler, order="board", x=x, y=y)
+    b.call("unit_order", unit=warrior, order="board", x=x, y=y)
+    err = b.error("unit_order", unit=h["spearman"], order="board", x=x, y=y)
+    assert err["code"] == "no_transport" and err["message"].startswith(f"Every ship of yours at ({x},{y}) is full.")
+    err = b.error("unit_order", unit=warrior, order="board", x=x, y=y)
+    assert err["code"] == "invalid_order"
+    assert err["message"].startswith(f"{warrior} Warrior is already aboard {galley} Galley.")
+    assert unit(b.call("state"), galley)["cargo"] == [settler, warrior]
+    check_cargo(b.call("world"))
+
+
+def test_cargo_survives_a_save(launch, tmp_path):
+    """Passengers at sea are still aboard after the game is saved and loaded in a new bridge, and the engine AI playing
+    the seat afterwards leaves no unit on the water without a ship."""
+    b, h = harbour(launch, tmp_path)
+    galley, settler, warrior = h["galley"], h["settler"], h["warrior"]
+    for u in (settler, warrior):
+        b.call("unit_order", unit=u, order="board", x=h["sea"][0], y=h["sea"][1])
+    b.call("unit_order", unit=galley, order="goto", x=h["landing"][0], y=h["landing"][1])
+    b.call("end_turn", skip_idle=True)
+    s = b.call("state")
+    out = at(unit(s, galley))
+    assert out != h["sea"] and h["geo"].water(out) and unit(s, galley)["cargo"] == [settler, warrior]
+
+    r = launch()
+    r.call("load", path=str(tmp_path / "b" / "autosave.json"))
+    s = r.call("state")
+    assert unit(s, galley)["cargo"] == [settler, warrior] and at(unit(s, galley)) == out
+    assert all(unit(s, u)["aboard"] == galley and unit(s, u)["status"] == "aboard" for u in (settler, warrior))
+    check_cargo(r.call("world"))
+    r.call("autoplay", turns=5, policy="engine_ai")
+    check_cargo(r.call("world"))
+
+
+def with_units(launch, tmp_path, *added: tuple[str, str]) -> Bridge:
+    """Archipelago seed 1 a turn after the capital is founded, the save edited to add units (type, "capital") there."""
+    b = launch("--autosave", str(tmp_path / "a"))
+    b.call("new_game", seed=SEED, size="Small", landform="Archipelago", turn_limit=300)
+    capital = found_capital(b)
+    b.call("end_turn", skip_idle=True)
+    save = json.loads((tmp_path / "a" / "autosave.json").read_text())
+    g = save["game"]
+    me = next(p for p in g["players"] if p["human"])["id"]
+    template = next(u for u in g["units"] if u["owner"] == me)
+    for n, (kind, _) in enumerate(added):
+        g["units"].append({**template, "id": f"{kind}-{900 + n}", "name": kind, "prototype": kind,
+                           "currentLocation": {"x": capital["x"], "y": capital["y"]},
+                           "previousLocation": {"x": capital["x"], "y": capital["y"]}, "hitPointsRemaining": 3,
+                           "movePointsRemaining": 2, "isAutomated": False, "workerProgressTowardsJob": 0})
+    edited = tmp_path / "edited.json"
+    edited.write_text(json.dumps(save))
+    r = launch()
+    r.call("load", path=str(edited))
+    return r
+
+
+def test_a_boat_on_a_lake_has_nothing_to_explore(launch, tmp_path):
+    """patches/0021: Rome, on seed 1's Archipelago, sits on a lake of a few tiles with no way to the ocean. A Curragh
+    built there has nothing it can reach to explore; it used to accept explore and never leave the lake."""
+    b = with_units(launch, tmp_path, ("Curragh", "capital"))
+    s = b.call("state")
+    boat = next(u for u in s["units"] if u["type"] == "Curragh")
+    assert "explore" in boat["orders"]
+    err = b.error("unit_order", unit=boat["id"], order="explore")
+    assert err["code"] == "invalid_order"
+    assert err["message"].startswith(f"There is nothing left that {boat['id']} Curragh can reach and explore.")
+
+
+def known_water(world: dict, seat: int = 0) -> int:
+    return sum(1 for t in world["tiles"] if t[2] in WATER and t[6] >> seat & 1)
+
+
+def test_the_ai_explores_the_sea(launch):
+    """patches/0021: the AI builds a few boats and explores the ocean with them. On Archipelago seed 1 the engine AI in
+    the seat knew 245 water tiles at T100 when no AI built a boat; now it knows the oceans around its islands."""
+    b = launch()
+    b.call("new_game", seed=SEED, size="Small", landform="Archipelago", turn_limit=300)
+    boats: dict[int, set[str]] = {}
+    for _ in range(10):
+        b.call("autoplay", turns=10, policy="engine_ai", timeout=300)
+        world = b.call("world")
+        ai = {p["index"] for p in world["players"] if p["civ"] != "Barbarians"}
+        for u in world["units"]:
+            if u["owner"] in ai and u["type"] in SHIPS:
+                boats.setdefault(u["owner"], set()).add(u["id"])
+        check_cargo(world)
+    assert known_water(world) > 500, known_water(world)
+    assert len(boats) >= 2, boats
+    assert all(len(v) <= 8 for v in boats.values()), boats
+
+
+def landmasses(save: dict) -> dict[str, list[int]]:
+    """Each civ's cities' landmasses (engine continent ids), its oldest city first."""
+    g = save["game"]
+    geo = Geo(save)
+    civ = {p["id"]: p["civilization"] for p in g["players"]}
+    out: dict[str, list[int]] = {}
+    for c in sorted(g["cities"], key=lambda c: int(c["id"].split("-")[1])):
+        out.setdefault(civ[c["owner"]], []).append(geo.part[at(c)])
+    return out
+
+
+def test_the_ai_settles_another_island(launch, tmp_path):
+    """patches/0022: on Archipelago seed 1 every civ's cities stayed on the island of its first city (0 overseas by T300
+    when nothing crossed water). The engine AI now ferries settlers to other islands, and leaves no unit on the water
+    without a ship."""
+    b = launch("--autosave", str(tmp_path / "a"))
+    b.call("new_game", seed=SEED, size="Small", landform="Archipelago", turn_limit=300)
+    for _ in range(15):
+        b.call("autoplay", turns=10, policy="engine_ai", timeout=300)
+        check_cargo(b.call("world"))
+    b.call("end_turn", skip_idle=True)
+    by_civ = landmasses(json.loads((tmp_path / "a" / "autosave.json").read_text()))
+    overseas = {civ: sum(x != lands[0] for x in lands) for civ, lands in by_civ.items()}
+    assert sum(overseas.values()) >= 3 and sum(n > 0 for n in overseas.values()) >= 2, overseas
+
+
+def test_the_same_seed_ferries_the_same_way(launch):
+    """The ferry and sea exploration AI draw nothing from the game's RNG and go through units in a fixed order, so an
+    Archipelago game replays identically."""
+    worlds = []
+    for _ in range(2):
+        b = launch()
+        b.call("new_game", seed=SEED, size="Small", landform="Archipelago", turn_limit=300)
+        b.call("autoplay", turns=150, policy="engine_ai", timeout=600)
+        worlds.append((b.call("world"), b.call("state")))
+    assert worlds[0] == worlds[1]

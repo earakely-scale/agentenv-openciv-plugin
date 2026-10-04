@@ -72,6 +72,9 @@ def footer(state: dict) -> str:
 
 def status_text(u: dict) -> str:
     status = u.get("status") or "idle"
+    if u.get("aboard"):
+        on = f"aboard {u['aboard']}"
+        return on if status == "aboard" else f"{on}, " + status_text({**u, "aboard": None})
     if status in ("goto", "settle") and u.get("target"):
         return f"{status}→{pos(u['target'])} {rel(u['target'])}"
     if status.startswith("working:"):
@@ -91,6 +94,9 @@ def unit_line(u: dict, detail: bool = False) -> str:
              status_text(u)]
     if u.get("hp") is not None and u.get("hp_max") and u["hp"] < u["hp_max"]:
         parts.append(f"hp {u['hp']}/{u['hp_max']}")
+    if u.get("capacity"):
+        cargo = u.get("cargo") or []
+        parts.append(f"cargo {len(cargo)}/{u['capacity']}" + (": " + " ".join(cargo) if cargo else ""))
     if detail and u.get("orders"):
         parts.append("orders: " + " ".join(u["orders"]))
     if found := found_text(u):

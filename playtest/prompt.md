@@ -22,7 +22,8 @@ Goal: the highest score at turn {turn_limit}. Score = 10 per city + 3 per citize
 sizes) + 1 per tile inside your borders + 4 per known technology, counting the ones you start with.
 
 The tools: get_turn_brief (your whole situation, including what is waiting for a decision),
-list_units, view_map, find_city_sites, unit_order (including attack and bombard), city_info,
+list_units, view_map, find_city_sites, unit_order (including attack and bombard, and board and unload
+to carry land units by ship), city_info,
 set_production, research, set_rates (science and luxury rates), buy (rush production with gold),
 revolution (change government), diplomacy (the civilizations you know, war and peace), end_turn and
 plan (notes that every brief shows back).
