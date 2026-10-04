@@ -323,10 +323,19 @@ async function artForeign() {
   });
   // the panel's body: by tab
   const war = civs.filter(r => r.at_war), peace = civs.filter(r => !r.at_war);
-  const body = tab === 0 ? [...peace.map(r => `Peace with ${r.civ}`), ...war.map(r => `War with ${r.civ}`)].join("\n") || "No treaties."
-    : tab === 1 ? war.filter(r => r.peace_price != null).map(r => `${r.civ} asks ${r.peace_price} gold for peace`).join("\n") || "No offers."
-    : `${civs.length} civilization${civs.length === 1 ? "" : "s"} met${d.unmet ? `, ${d.unmet} not yet` : ""}\nYour government: ${me.government}`;
-  h += `<div class="cs-lb cs-panel" style="left:750px;top:326px">${esc(body)}</div>`;
+  if (tab === 1) {   // trades: the offers standing for you, with Accept and Decline; then a Trade button per civ at peace
+    const offers = civs.filter(r => r.trade_offered), lines = [];
+    // the panel lets clicks through to the civ rows' orbs under it (cs-lb); only its buttons take them
+    const tb = "position:static;pointer-events:auto";
+    for (const r of offers) lines.push(`<div style="margin-bottom:4px">${esc(offerText(r.civ, r.trade_offered))}<br><button class="cs-tbtn" style="${tb}" data-accept="${esc(r.civ)}">Accept</button> · <button class="cs-tbtn" style="${tb}" data-decline="${esc(r.civ)}">Decline</button></div>`);
+    for (const r of war.filter(r => r.peace_price != null)) lines.push(`<div>${esc(`${r.civ} asks ${r.peace_price} gold for peace`)}</div>`);
+    for (const r of peace.filter(r => r.talks !== false)) lines.push(`<div><button class="cs-tbtn" style="${tb}" data-trade="${esc(r.civ)}">Trade with ${esc(r.civ)}…</button></div>`);
+    h += `<div class="cs-lb cs-panel" style="left:750px;top:326px;max-height:200px;overflow:auto">${lines.join("") || "No offers."}</div>`;
+  } else {
+    const body = tab === 0 ? [...peace.map(r => `Peace with ${r.civ}`), ...war.map(r => `War with ${r.civ}`)].join("\n") || "No treaties."
+      : `${civs.length} civilization${civs.length === 1 ? "" : "s"} met${d.unmet ? `, ${d.unmet} not yet` : ""}\nYour government: ${me.government}`;
+    h += `<div class="cs-lb cs-panel" style="left:750px;top:326px">${esc(body)}</div>`;
+  }
   scrOpen("foreign", h);
   for (const b of $$("#dialog [data-tab]")) b.onclick = () => { SCR.foreignTab = +b.dataset.tab; artForeign(); };
   for (const b of $$("#dialog [data-war]")) b.onclick = async () => {
@@ -345,6 +354,7 @@ async function artForeign() {
     await act("diplomacy", {action: "propose_peace", civ: b.dataset.peace, gold});
     if (S.dialog?.kind === "foreign") artForeign();
   };
+  tradeButtons(() => artForeign());
 }
 
 // ======================================================================== the science advisor (ScienceAdvisor.cs, TechBox.cs)
@@ -482,6 +492,7 @@ async function artCity(id, {keepProd = false} = {}) {
   h += lab(5, 4, "STRATEGIC RESOURCES") + lab(714, 4, "CULTURE") + lab(7, 514, "IMPROVEMENTS") + lab(162, 514, "LUXURIES");
   // culture: per turn, and the total against the next border growth
   if (c.culture) h += lab(790, 4, `${c.culture.per_turn | 0}/turn`) + lab(714, 60, `Total: ${c.culture.total | 0}/${c.culture.next_border | 0}`);
+  if (bonusText(c)) h += `<div class="cs-lb cs-clip" style="left:714px;top:78px;width:300px;font-size:11px;pointer-events:auto" title="${esc(bonusText(c))}">${esc(bonusText(c))}</div>`;
   // strategic resources: resources.png's icon at 45x45, the count centred under it
   if (c.strategic) h += `<div class="cs-list cs-strat" style="left:4px;top:24px;width:290px;height:65px">${c.strategic.map(r =>
     `<div class="cs-res" title="${esc(r.name)}">${sprAt("resources", [50 * (r.icon % 6), 50 * Math.floor(r.icon / 6), 50, 50], 0, 0, 45, 45)}` +
@@ -506,7 +517,7 @@ async function artCity(id, {keepProd = false} = {}) {
   }
   h += `<div class="cs-lb cs-center" style="left:904px;top:608px;width:117px;font-size:10px">${c.turns_to_complete != null ? `Complete in ${c.turns_to_complete} turns` : "--"}</div>`;
   const prodItem = c.producing || "";
-  h += btn("prod_button", [1, 0, 114, 95], [116, 0], [231, 0], 906, 515, `data-prodbtn title="What to build"`,
+  h += btn("prod_button", [1, 0, 114, 95], [116, 0], [231, 0], 906, 515, `data-prodbtn title="What to build${(c.queue || []).length ? esc(`; then ${c.queue.join(", ")}`) : ""}"`,
     `<canvas class="cs-produnit" width="240" height="240"></canvas>${(c.options || []).find(o => o.name === prodItem)?.kind !== "unit" && S.art.m.building_icons?.[prodItem] != null
       ? spr("buildings_large", [33, 33 + 41 * S.art.m.building_icons[prodItem], 50, 40], 32, 15) : ""}
       <span class="cs-lb cs-prodlb">${esc(prodItem)}</span>`);
@@ -533,9 +544,12 @@ async function artCity(id, {keepProd = false} = {}) {
   // the citizens, at y 433 over the map
   h += c.citizens ? citizenHeads(c, era, 433) : headRow(c, era, null, 433);
   // the production list
-  h += `<div class="cs-pq${prodOpen ? "" : " closed"}" style="background-image:url('${scrUrl("prod_queue")}')"><ul>${(c.options || []).map(o => {
+  // the queue (set_production's then) heads the list, a click clears it
+  const queued = (c.queue || []).length ? `<li tabindex="0" data-clearq title="${keepsCurrent(c) ? "Click to clear the queue" : esc(`${prodItem} is no longer an option, so the queue can't be changed`)}">
+    <i class="cs-pqi"></i><span>Then: ${esc(c.queue.join(", "))}</span><span>${keepsCurrent(c) ? "clear" : ""}</span></li>` : "";
+  h += `<div class="cs-pq${prodOpen ? "" : " closed"}" style="background-image:url('${scrUrl("prod_queue")}')"><ul>${queued}${(c.options || []).map(o => {
     const a = optionArt(o, era);
-    return `<li tabindex="0" data-item="${esc(o.name)}" class="${o.name === prodItem ? "cur" : ""}" title="${esc(o.name)}${o.cost ? `: ${o.cost} shields` : ""}">
+    return `<li tabindex="0" data-item="${esc(o.name)}" class="${o.name === prodItem ? "cur" : ""}" title="${esc(o.name)}${o.cost ? `: ${o.cost} shields` : ""}${(o.effects || []).length ? `\n${esc(o.effects.join("\n"))}` : ""}${queuesAfter(c) ? `\nShift+click: queue it after ${esc(prodItem)}` : ""}">
       <i class="cs-pqi">${a.icon}</i><span>${esc(a.text)}</span><span>${o.turns != null ? `${o.turns} turns` : ""}</span></li>`;
   }).join("")}</ul></div>`;
   scrOpen("city", h, {city: c, saved, prodOpen, onClose: () => { Object.assign(S.cam, saved); draw(); }, onKey: e => {
@@ -549,7 +563,13 @@ async function artCity(id, {keepProd = false} = {}) {
   for (const b of $$("#dialog [data-step]")) b.onclick = () => cityStep(c.id, +b.dataset.step);
   for (const li of $$("#dialog li[data-item]")) li.onclick = li.onkeydown = async ev => {
     if (ev.type === "keydown" && ev.key !== "Enter") return;
-    const r = await act("set_production", {city: c.id, item: li.dataset.item});
+    const r = await chooseProduction(c, li.dataset.item, ev.shiftKey);
+    if (r && S.dialog?.kind === "city") artCity(c.id, {keepProd: true});
+  };
+  const clearq = $("#dialog li[data-clearq]");
+  if (clearq && keepsCurrent(c)) clearq.onclick = clearq.onkeydown = async ev => {
+    if (ev.type === "keydown" && ev.key !== "Enter") return;
+    const r = await act("set_production", {city: c.id, item: prodItem, then: []});
     if (r && S.dialog?.kind === "city") artCity(c.id, {keepProd: true});
   };
   $("#buy").onclick = async () => {

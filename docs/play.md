@@ -165,9 +165,12 @@ a malformed request (`bad_request`, `unknown_tool`, `bad_args`) and 200 for what
                                                             // a message from an agent adds "from", "label", "to_all")
 ```
 
-`POST /play/api/act` tools and args are the MCP tools': `unit_order` (`unit`, `order`, `x`, `y`), `set_production`
-(`city`, `item`), `research` (`tech`), `set_rates` (`science`, `luxury`), `buy` (`city`), `revolution`
-(`government`), `diplomacy` (`action`: `declare_war`|`propose_peace`, `civ`, `gold`) and `end_turn` (no args).
+`POST /play/api/act` tools and args are the MCP tools': `unit_order` (`unit`, `order`, `x`, `y`; the orders include
+`upgrade`, `board` and `unload`), `set_production` (`city`, `item`, `then`: the queue), `research` (`tech`),
+`set_rates` (`science`, `luxury`), `buy` (`city`), `revolution` (`government`), `diplomacy` (`action`:
+`declare_war`|`propose_peace`|`quote_trade`|`propose_trade`|`accept_trade`|`decline_trade`, `civ`, `gold`,
+`give_techs`, `get_techs`, `give_gold`, `get_gold`; docs/protocol.md, Trades) and `end_turn` (no args).
+`quote_trade` changes nothing.
 Each runs through the env's tool wrapper: the action log (the viewer's actions and calls), notices, the stall clock,
 and advancing the turn once every seat has ended it. The answer is `{"ok": true, "message", "result"}` with the
 bridge's result. `end_turn` never waits: it ends the turn with `skip_idle` (as pressing Enter does in the game) and
@@ -183,16 +186,53 @@ with an agent's.
 
 `/play` is the game's own flow, drawn from the seat's `known_map`: the active unit blinks and the command bar lists
 its orders with the game's keys (B build city, G go to, X explore, A automate, R road, M mine, I irrigate, ⇧C clear
-forest, F fortify, ⇧W wake, Space skip, ⇧B bombard, ⇧D disband, W wait, C centre, Tab next unit); the arrow keys and
-the number pad move it a tile, attacking what stands there; right-click goes to a tile (or settles a suggested
-site, or attacks). Clicking a city opens the city screen (food, production, buy, what to build, its units); F1, F4
-and F6 open the domestic (rates, government), foreign (war, peace) and science advisors. Enter ends the turn (again
-to confirm while units still have moves); the start of a turn shows its report (the events, the env's notices and
-the agents' messages to you, `✉ Greece (sonnet) to you: "…"`), and the science advisor when nothing is being
-researched. While the others play, a banner names who the turn waits for.
+forest, F fortify, ⇧W wake, Space skip, ⇧B bombard, U upgrade, O board a ship, L unload, ⇧D disband, W wait, C
+centre, Tab next unit); the arrow keys and the number pad move it a tile, attacking what stands there; right-click
+goes to a tile (or settles a suggested site, or attacks). The orders are the ones the bridge lists for the unit, the
+agents' too:
+
+- **Upgrade (U)**, for a unit in one of your cities whose type has a better one you can build: the button's tooltip
+  and the unit's panel give the price ("Can upgrade to Pikeman for 30 gold", or why not now: no moves left, not
+  enough gold), and it asks before spending it.
+- **Board (O)** puts a land unit on a ship of yours with room: in port, or on the water next to it (with several
+  ships next to it, click the one). A ship's panel lists its passengers ("Carrying 1/2: Archer u16"), a passenger's
+  says "Aboard Galley u45", and the tile's tooltip marks who is aboard. **Unload (L)** sets them ashore in a city; at
+  sea a passenger lands by going to the land next to its ship.
+
+Clicking a city opens the city screen: food, production, buy, its units, what to build with what each building adds
+there (the bridge's `effects`: "+50% science (+4 here)"), and what its buildings add ("Buildings: +50% science, +50%
+tax (6 commerce this turn)"). A click builds an item now; **Shift+click queues it** after the current one, as
+`set_production`'s `then`, and the queue shows under the production with a Clear button (after Wealth, which never
+completes, Shift+click builds the item now). (An item the engine's AI
+picked that the city can no longer be given, such as a wonder another city builds, can't be kept with a queue: the
+city screen then offers no queue until something else is picked.)
+
+F1, F4 and F6 open the domestic (rates, government), foreign and science advisors. The foreign advisor lists the
+offers the AIs made you this turn (what you get and give, each worth to you, until when) with Accept and Decline,
+the offers you made, and each civ with Propose peace or Declare war, and **Trade…** for a civ at peace. The trade
+dialog lists the techs each side can give with what each is worth to you and to them, and the gold each side has;
+as you pick, it quotes the trade (`quote_trade`: whether the AI takes it, or the gold that would balance it). Balance
+with gold asks for less of their gold first, then gives more of yours (only when you can pay it); Propose makes the
+trade with an AI, or offers it to another player's seat.
+
+The bar shows the turn and its year ("T216 / 400 · AD 1010"), the score with the rank ("726 4th of 5"), the seat's
+share of the land and the people against domination's two thirds, and its culture once culture counts (a civ at a
+tenth of the cultural victory, or a city at a tenth of the city's); hovering them shows the race (`state.race`): who
+leads, who is nearest domination and culture, and what each victory needs.
+
+Enter ends the turn (again to confirm while units still have moves; ⇧Enter at once); the start of a turn shows its
+report (the events, the env's notices and the agents' messages to you, `✉ Greece (sonnet) to you: "…"`, and "See
+the offers" when an AI made one), and the science advisor when nothing is being researched. While the others play, a
+banner names who the turn waits for. At the end the game-over dialog says who won and how ("Arabia wins on score on
+turn 220", "You win by domination on turn 180!") and where you finished by score.
 
 `playtest/bots.py --humans Rome=you` starts a local match with a human seat against scripted bots, and
 `playtest/play_e2e.mjs` plays that seat in a headless browser through this UI, end to end.
+`playtest/serve_midgame.py` serves a game well under way (the engine's AI plays the seat first, then with
+`--gold-turns` it saves gold),
+and `playtest/play_features_e2e.mjs` checks the rest in it: the bar's race, an upgrade, boarding and unloading a ship
+it buys, a queue, an AI's offer, a trade quoted, balanced and proposed, and the game-over dialog, with the art on or
+off (`ART=on`).
 
 ## 6. The game's art
 
@@ -236,7 +276,9 @@ the map with the OpenCiv3 client's own art, the way the client draws it. **T** s
     its screen.
   - **Foreign (F4):** the client's screen, whose tab panel (Treaties, Trades, Details) is otherwise empty, with the
     seat's `diplomacy` on its parchment: a row per civ met (war or peace, the gold asked for peace, score,
-    government) with Declare war or Propose peace, and the treaties, the peace offers and the civs met in the panel.
+    government) with Declare war or Propose peace, and in the panel the treaties, the civs met, and on Trades the
+    AIs' offers with Accept and Decline, the peace offers, and a Trade button per civ at peace (the trade dialog
+    above).
   - **Science (F6):** the client's tech tree, an era a page (Previous Era, Next Era), each tech's box where the
     ruleset places it, sized by what it brings, coloured by its state: known, being researched or queued (with its
     place in the queue), researchable now (with its turns), or blocked; a tech not needed for the next era is in
@@ -247,8 +289,9 @@ the map with the OpenCiv3 client's own art, the way the client draws it. **T** s
     outlined and each worked tile's food, shields and commerce on it (`city` `worked`, `workable`); its culture
     (per turn, and the total against the next border growth), strategic resources (with their counts) and luxuries;
     the citizens' heads, laborers by mood and specialists with what each adds (`city` `citizens`, `specialists`); the
-    improvements; the production button (the unit or building being built) and its list
-    (`set_production`), the shield box and row (useful shields, and the waste from the left); the food box (with
+    improvements; the production button (the unit or building being built, its queue in its tooltip) and its list
+    (`set_production`; each item's tooltip has what it adds; Shift+click queues it, and the queue heads the list,
+    "Then: …", a click clearing it); what the buildings add, under the culture; the shield box and row (useful shields, and the waste from the left); the food box (with
     the granary's half), the food line and row (the food eaten and the surplus); the growth and completion; where the
     commerce goes (gold to taxes, to science with the corruption, to happiness); and Hurry, which buys the production (`buy`). The arrow
     buttons, or ← and →, go to the previous and next city.
