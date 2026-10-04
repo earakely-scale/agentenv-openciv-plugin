@@ -176,11 +176,12 @@ sealed partial class Session {
 	}
 
 	/// <summary>Tells another seat what the active seat did to it; it reads the event with its events of this turn.</summary>
-	void Notify(Player p, string kind, string text, Tile at = null) {
-		if (SeatOf(p) is not Seat other || other == seat) return;
+	JsonObject Notify(Player p, string kind, string text, Tile at = null) {
+		if (SeatOf(p) is not Seat other || other == seat) return null;
 		JsonObject e = Event(kind, text, at);
 		e["turn"] = gd.turn;
 		other.Incoming.Add(e);
+		return e;
 	}
 
 	sealed record Victory(string Kind, Player Player, int Turn);

@@ -161,12 +161,18 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 		var events = new List<JsonObject>();
 		int advanced = 0;
 		bool attention;
-		do {
-			List<JsonObject> turn = await AdvanceTurn(engineAi: false);
-			events.AddRange(turn);
-			advanced++;
-			attention = turn.Any(e => AttentionEvents.Contains((string)e["kind"]));
-		} while (untilAttention && advanced < maxTurns && !GameOver && !attention && Blockers().Count == 0);
+		holdingSince = gd.turn;
+		try {
+			do {
+				List<JsonObject> turn = await AdvanceTurn(engineAi: false);
+				events.AddRange(turn);
+				advanced++;
+				attention = turn.Any(e => AttentionEvents.Contains((string)e["kind"]));
+			} while (untilAttention && advanced < maxTurns && !GameOver && !attention && Blockers().Count == 0);
+		} finally {
+			holdingSince = int.MaxValue;
+		}
+		events = Fresh(events);
 		lastEvents = events;
 
 		return new JsonObject {
@@ -278,6 +284,7 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 			advancing = false;
 		}
 		watchdog.Kick();
+		HoldOffers();
 		PruneTrades();
 
 		var raised = uiMessages.ToList();
@@ -304,7 +311,7 @@ sealed partial class Session(string luaDir, Watchdog watchdog, string autosaveDi
 			DrainUi();
 			ids.Sync(gd, human);
 			PruneOrders();
-			turnEvents = events;
+			turnEvents = Fresh(events);
 			s.Ready = false;
 		});
 		if (victory == null && CheckVictory() is Victory won) {

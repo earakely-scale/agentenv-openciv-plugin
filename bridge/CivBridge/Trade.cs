@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using C7Engine;
 using C7GameData;
@@ -11,6 +12,9 @@ namespace CivBridge;
 /// </summary>
 sealed record StandingTrade(TradeOffer Gives, TradeOffer Wants, int Until);
 
+/// <summary>A trade_offered event's offer: who made it and what it was, to tell it only while that offer stands.</summary>
+sealed record OfferTold(Player From, TradeOffer Gives, TradeOffer Wants);
+
 // Trading techs and gold (docs/protocol.md): with an AI through the engine's own deal path, as the client's deal screen
 // does it (DealScreen.AttemptDeal: the AI's WouldAcceptDealFrom judges, ExecuteDeal moves the gold and the techs); an AI
 // offer made during its turn stands for the seat's next turn; between two seats a proposal stands until the other
@@ -19,6 +23,15 @@ sealed partial class Session {
 	/// <summary>True while autoplay plays the seat: AI offers are declined then, as the env always did, so baselines stay put.</summary>
 	bool autoplaying;
 	int tradesDeclined;
+
+	/// <summary>
+	/// The turn an end_turn of several turns (until_attention) started on, while it plays them: an AI offer made since
+	/// stands until the turn it stops on, when the agent can answer it (HoldOffers).
+	/// </summary>
+	int holdingSince = int.MaxValue;
+
+	/// <summary>The trade_offered events, with the offers they tell of (Fresh).</summary>
+	readonly ConditionalWeakTable<JsonObject, OfferTold> offerEvents = new();
 
 	/// <summary>Techs `from` knows and `to` does not: what `from` can give `to`, most valuable to `to` first.</summary>
 	List<Tech> Tradeable(Player from, Player to) => [.. gd.techs.Where(t => from.knownTechs.Contains(t.id) && !to.knownTechs.Contains(t.id))
@@ -75,6 +88,16 @@ sealed partial class Session {
 			throw Fail("bad_args", $"{civ} trades gold only along with a tech; name give_techs or get_techs.");
 	}
 
+	/// <summary>Why the trade cannot be made now (CheckDeal's message), or null when it can.</summary>
+	string DealProblem(Player p, TradeOffer give, TradeOffer get) {
+		try {
+			CheckDeal(p, give, get);
+			return null;
+		} catch (BridgeError e) {
+			return e.Message;
+		}
+	}
+
 	void CheckPeace(Player p) {
 		string civ = Owner(p);
 		if (PlayerRelationship.AtWar(human, p))
@@ -105,7 +128,9 @@ sealed partial class Session {
 		bool ai = SeatOf(p) == null;
 		int theyYours = give.GoldEquivalentFor(gd, p), theyTheirs = get.GoldEquivalentFor(gd, p);
 		int shortfall = Math.Max(0, theyTheirs - theyYours);
-		TradeOffer balanced = Offer(give.techs, (give.gold ?? 0) + shortfall);
+		// Balanced by asking less gold first, then by giving more.
+		int less = Math.Min(get.gold ?? 0, shortfall);
+		TradeOffer balancedGive = Offer(give.techs, (give.gold ?? 0) + shortfall - less), balancedGet = Offer(get.techs, (get.gold ?? 0) - less);
 		return new JsonObject {
 			["civ"] = Owner(p),
 			["agent"] = !ai,
@@ -118,7 +143,7 @@ sealed partial class Session {
 			["accepts"] = ai ? p.WouldAcceptDealFrom(gd, human, give, get) : null,
 			["gold_to_balance"] = ai ? shortfall : null,
 			["gold_they_would_add"] = ai ? Math.Min(p.gold - (get.gold ?? 0), Math.Max(0, theyYours - theyTheirs)) : null,
-			["suggest"] = ai && shortfall > 0 && balanced.gold <= human.gold ? TradeCall("propose_trade", p, balanced, get) : null,
+			["suggest"] = ai && shortfall > 0 && (balancedGive.gold ?? 0) <= human.gold ? TradeCall("propose_trade", p, balancedGive, balancedGet) : null,
 		};
 	}
 
@@ -139,8 +164,8 @@ sealed partial class Session {
 			if (Standing(seat, p) is StandingTrade theirs && SameOffer(theirs.Gives, get) && SameOffer(theirs.Wants, give))
 				return Sign(p, theirs);
 			other.TradeOffers[human] = new StandingTrade(give, get, gd.turn + 1);
-			Notify(p, "trade_offered", $"{Owner(human)} offers {Describe(give)} for {Describe(get)}. Accept before turn {gd.turn + 2}: "
-				+ $"diplomacy(action=\"accept_trade\", civ=\"{Owner(human)}\").");
+			// Told in p's terms when it is delivered (Fresh), if it still stands then.
+			if (Notify(p, "trade_offered", "") is JsonObject e) offerEvents.AddOrUpdate(e, new OfferTold(human, give, get));
 			return new JsonObject {
 				["message"] = $"Offered {civ} {Describe(give)} for {Describe(get)}; the trade is made if {civ} accepts it before turn {gd.turn + 2}.",
 				["civ"] = CivJson(p),
@@ -163,6 +188,16 @@ sealed partial class Session {
 	StandingTrade Standing(Seat s, Player from) =>
 		s != null && s.TradeOffers.TryGetValue(from, out StandingTrade t) && gd.turn <= t.Until && !from.defeated && !s.Player.defeated
 			&& !PlayerRelationship.AtWar(s.Player, from) ? t : null;
+
+	/// <summary>
+	/// The trade `from` offers `s`'s civ (s the seat, or `from` the seat) while it stands and can be made as it is: the views
+	/// list only these. One a trade or research has made impossible still stands for accept_trade to say why (offer_changed).
+	/// </summary>
+	StandingTrade OpenTrade(Seat s, Player from) {
+		StandingTrade t = Standing(s, from);
+		bool open = t != null && (s == seat ? DealProblem(from, t.Wants, t.Gives) : DealProblem(s.Player, t.Gives, t.Wants)) == null;
+		return open ? t : null;
+	}
 
 	JsonObject AcceptTrade(Args a) {
 		EnsurePlaying();
@@ -196,9 +231,11 @@ sealed partial class Session {
 		EnsurePlaying();
 		Player p = CivArg(a.Str("civ"));
 		StandingTrade t = Standing(seat, p) ?? throw NoOffer(p);
+		string why = DealProblem(p, t.Wants, t.Gives);
 		seat.TradeOffers.Remove(p);
 		Notify(p, "trade_declined", $"{Owner(human)} declined your offer of {Describe(t.Gives)} for {Describe(t.Wants)}.");
-		return new JsonObject { ["message"] = $"Declined {Owner(p)}'s offer.", ["civ"] = CivJson(p) };
+		string message = why == null ? $"Declined {Owner(p)}'s offer." : $"Declined {Owner(p)}'s offer, which could no longer be made: {why}";
+		return new JsonObject { ["message"] = message, ["civ"] = CivJson(p) };
 	}
 
 	/// <summary>
@@ -228,10 +265,43 @@ sealed partial class Session {
 	}
 
 	JsonObject TradeOfferedEvent(MsgShowTradeOffer o) {
-		string civ = Owner(o.aiPlayer);
-		return Event("trade_offered", $"{civ} offers {Describe(o.aiGive)} (worth {o.aiGive.GoldEquivalentFor(gd, human)} to you) for "
-			+ $"{Describe(o.aiWant)} (worth {o.aiWant.GoldEquivalentFor(gd, human)} to you), until the end of turn {gd.turn}. "
-			+ $"Accept with diplomacy(action=\"accept_trade\", civ=\"{civ}\").");
+		JsonObject e = Event("trade_offered", OfferText(o.aiPlayer, new StandingTrade(o.aiGive, o.aiWant, gd.turn)));
+		offerEvents.AddOrUpdate(e, new OfferTold(o.aiPlayer, o.aiGive, o.aiWant));
+		return e;
+	}
+
+	string OfferText(Player from, StandingTrade t) {
+		string civ = Owner(from);
+		return $"{civ} offers {Describe(t.Gives)} (worth {t.Gives.GoldEquivalentFor(gd, human)} to you) for {Describe(t.Wants)} "
+			+ $"(worth {t.Wants.GoldEquivalentFor(gd, human)} to you), until the end of turn {t.Until}. "
+			+ $"Accept with diplomacy(action=\"accept_trade\", civ=\"{civ}\").";
+	}
+
+	/// <summary>
+	/// The seat's events as delivered: a trade_offered event is kept only while its offer stands and can be made (the last
+	/// one from each civ: a newer offer replaces the older), told with the turn it stands until now.
+	/// </summary>
+	List<JsonObject> Fresh(List<JsonObject> events) {
+		var told = new HashSet<Player>();
+		var kept = new List<JsonObject>();
+		for (int i = events.Count - 1; i >= 0; i--) {
+			JsonObject e = events[i];
+			if (offerEvents.TryGetValue(e, out OfferTold o)) {
+				if (!told.Add(o.From) || OpenTrade(seat, o.From) is not StandingTrade t || !SameOffer(t.Gives, o.Gives) || !SameOffer(t.Wants, o.Wants))
+					continue;
+				e["text"] = OfferText(o.From, t);
+			}
+			kept.Add(e);
+		}
+		kept.Reverse();
+		return kept;
+	}
+
+	/// <summary>While an end_turn plays several turns, the AI offers made during it stand until the turn it is on.</summary>
+	void HoldOffers() {
+		foreach (Seat s in seats)
+			foreach (var (from, t) in s.TradeOffers.Where(kv => kv.Value.Until > holdingSince && kv.Value.Until < gd.turn).ToList())
+				s.TradeOffers[from] = t with { Until = gd.turn };
 	}
 
 	/// <summary>A standing offer as the seat sees it: what it gets and gives, and what each is worth to it.</summary>

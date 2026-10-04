@@ -119,8 +119,8 @@ The human player's full situation. Result:
 - `governments` lists the governments a revolution can change to now, as in `revolution`'s result;
   `tile_penalty` is true when the current government takes 1 from any tile yield above 2 (Despotism);
   `revolution_target` is the one a revolution under way ends in. `rivals[].peace_price` is the gold that civ asks for peace while at war (null at peace, or
-  while it refuses to talk). `rivals[].trade_offered` is the trade that civ offers the seat while it stands (as in
-  `diplomacy`), else null.
+  while it refuses to talk). `rivals[].trade_offered` is the trade that civ offers the seat while it stands and can
+  still be made (as in `diplomacy`), else null.
 - `needs_orders` is true when the unit can move, is not under a standing order, and is not fortified.
 - `blockers` lists what stops `end_turn`: `no_research` (has a city, nothing being researched),
   `no_production` (a city producing nothing), `idle_unit` (one per unit with `needs_orders`). A `disorder` blocker
@@ -450,7 +450,9 @@ shows it), "techs_for_you" and "techs_for_them", "trade_offered", "you_offered_t
   civs it knows have it, and less the beakers already spent when it is the one being researched).
 - `trade_offered` is the trade the civ offers you while it stands, `you_offered_trade` the one you offered another
   seat: `{"you_get": {"techs", "gold"}, "you_give": {"techs", "gold"}, "you_value_get", "you_value_give",
-  "until_turn"}` (the last turn it stands), else null.
+  "until_turn"}` (the last turn it stands), else null. An offer that can no longer be made as it is (a side lacks
+  the gold, or knows a tech it would get, after another trade or research) is not shown; `accept_trade` on it fails
+  with `offer_changed` and the reason.
 
 ### `declare_war`
 Args: `civ`. The engine's `DeclareWarOn`; the civ refuses to talk for 5 to 16 turns (longer after a sneak attack
@@ -478,12 +480,14 @@ mood. Gold per turn, maps, luxuries and embassies are not traded (the engine has
 - `quote_trade` and `propose_trade` take `civ`, `give_techs` and `get_techs` (lists of names; default none),
   `give_gold` and `get_gold` (default 0). Each tech given must be one you know and the civ does not (one of its
   `techs_for_them`), each tech got the reverse; each side must have the gold it gives; a trade with an AI carries at
-  least one tech, as the engine's own trades do. Errors: `unknown_civ` (alternatives = the civs you have met),
+  least one tech, as the engine's own trades do. Tech prerequisites are not checked: a tech can be got without the
+  ones it needs, as the engine's AIs trade among themselves and as the client's deal screen lists them. Errors: `unknown_civ` (alternatives = the civs you have met),
   `not_at_peace`, `unknown_tech` (alternatives = the techs that side can give), `not_enough_gold`, `bad_args`.
 - `quote_trade` changes nothing. Result: `{"civ", "agent", "you_give", "you_get" (each `{"techs", "gold"}`),
   "you_value_give", "you_value_get", "they_value_give", "they_value_get", "accepts", "gold_to_balance" (the gold you
   would add for the AI to accept), "gold_they_would_add" (the most gold you could ask on top and still have it
-  accepted), "suggest" (the balanced `propose_trade` call, when you can pay it)}`. With another seat `accepts`,
+  accepted), "suggest" (the balanced `propose_trade` call, when you can pay it: it asks for less of the gold you get
+  first, then gives more gold)}`. With another seat `accepts`,
   `gold_to_balance` and `gold_they_would_add` are null: the other agent decides.
 - `propose_trade` with an AI makes the trade or fails with `refused` (the AI's two values; suggest = the balanced
   call, when you can pay it). Result: `{"message", "civ": <civ>, "gold", "research"}`, `research` as in `state`.
@@ -491,12 +495,17 @@ mood. Gold per turn, maps, luxuries and embassies are not traded (the engine has
 - An AI offers trades itself during its turn (`PlayerAI.AttemptTrading`, on about a quarter of its turns). The AI's
   turn cannot wait for the agent, so the bridge keeps the offer for the seat until the end of its next turn
   (`trade_offered` in `diplomacy` and `state.rivals`, and a `trade_offered` event with what each side is worth to
-  you) and lets the AI's turn go on. The AI values its offers at least even for itself; by your own values they are
+  you) and lets the AI's turn go on. An `end_turn` that plays several turns (`until_attention`) holds every offer
+  made on any of them until the end of the turn it stops on. A `trade_offered` event is delivered only while its
+  offer stands and can be made, and says the turn it stands until: `"<civ> offers <goods> (worth N to you) for
+  <goods> (worth M to you), until the end of turn T. Accept with diplomacy(action=\"accept_trade\", civ=\"<civ>\")."`;
+  one answered, replaced by a newer offer, lapsed or made impossible before it is delivered is dropped. The AI values its offers at least even for itself; by your own values they are
   often bad, so compare `you_value_get` with `you_value_give`. A newer offer from the same AI replaces the older one.
 - `accept_trade {civ}` makes the standing offer, checked again first: each side must still have what it gives and
   an AI must still accept it by its values (both drift a little in a turn). Result as `propose_trade`'s. Errors:
   `no_offer` (none stands: it lapsed, was answered, or a war ended it), `offer_changed` (with why it can no longer
-  be made). `decline_trade {civ}` drops it (`no_offer` likewise); letting it lapse does the same.
+  be made). `decline_trade {civ}` drops it (`no_offer` likewise), also one not shown because it can no longer be made
+  (its message then says why); letting it lapse does the same.
 - A tech got in a trade is known at once. If it was the one being researched, its beakers go with it and the research
   moves on as when a tech is learned (the seat's queue goes on, else the engine picks and `choose_research` asks);
   any other research keeps its progress (patch 0017). `declare_war` drops the trades standing between the two.
@@ -521,7 +530,8 @@ events, decisions and plan state are its own. An unknown seat fails with `unknow
   reaches the other as a `peace_offered` event; a `propose_peace` from the other meanwhile signs it, each side paying
   the gold it offered. Talks are never refused between seats.
 - **Trades between seats** need both: `propose_trade` from one seat changes nothing yet; the offer stands until the
-  end of the next turn, shows in the other's `diplomacy` (`trade_offered`) and reaches it as a `trade_offered` event.
+  end of the next turn, shows in the other's `diplomacy` (`trade_offered`) and reaches it as a `trade_offered` event
+  when the turn ends, in its own values, unless it was answered or replaced meanwhile.
   The other makes it with `accept_trade`, or by proposing the same trade back, once (both seats' offers between the
   two go); the proposer then gets a `trade_signed` event, or `trade_declined` after `decline_trade`. Gold alone may
   change hands between seats.

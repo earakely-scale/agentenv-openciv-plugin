@@ -93,6 +93,42 @@ def test_ai_trade_offers_stand_for_a_turn(launch, tmp_path):  # noqa: F811
     assert err["code"] == "no_offer" and f"lapsed at the end of turn {turn}" in err["message"]
     assert civ_named(lapsed, civ)["trade_offered"] is None
 
+    # An offer a trade has made impossible is not shown, and accepting it says why.
+    sold = launch()
+    sold.call("load", path=str(tmp_path / "a" / "autosave.json"))
+    wanted = offer["you_give"]["techs"]
+    assert wanted
+    sold.call("propose_trade", civ=civ, give_techs=wanted)
+    assert civ_named(sold, civ)["trade_offered"] is None
+    assert next(r for r in sold.call("state")["rivals"] if r["civ"] == civ)["trade_offered"] is None
+    err = sold.error("accept_trade", civ=civ)
+    assert err == {"code": "offer_changed", "message": f"{civ} already knows {wanted[0]}."}
+    assert sold.call("decline_trade", civ=civ)["message"] == (
+        f"Declined {civ}'s offer, which could no longer be made: {civ} already knows {wanted[0]}.")
+
+
+def test_an_offer_made_while_end_turn_plays_on_stands_until_the_agent_can_answer(launch):  # noqa: F811
+    """An end_turn(until_attention) of several turns: an AI offer made on one of its earlier turns stands until the turn
+    it stops on, as its event says."""
+    b = launch()
+    start(b)
+    found_capital(b)
+    b.call("set_production", city="c1", item="Warrior", then=["Warrior"] * 9)
+    for _ in range(30):
+        for u in b.call("state")["units"]:
+            if u.get("needs_orders") and not b.send("unit_order", unit=u["id"], order="fortify")["ok"]:
+                b.call("unit_order", unit=u["id"], order="sentry")
+        res = b.call("end_turn", skip_idle=True, until_attention=True, max_turns=20)
+        early = [e for e in res["events"] if e["kind"] == "trade_offered" and e["turn"] < res["turn"] - 1]
+        if early:
+            break
+    else:
+        pytest.fail("no AI offered a trade on an earlier turn of an end_turn")
+    civ = early[0]["text"].split(" offers ", 1)[0]
+    assert f"until the end of turn {res['turn']}. Accept" in early[0]["text"]
+    assert civ_named(b, civ)["trade_offered"]["until_turn"] == res["turn"]
+    assert b.call("accept_trade", civ=civ)["message"].startswith(f"Traded with {civ}:")
+
 
 def test_quote_then_propose_trade_with_an_ai(launch):  # noqa: F811
     b = launch()
@@ -104,6 +140,9 @@ def test_quote_then_propose_trade_with_an_ai(launch):  # noqa: F811
     assert not quote["accepts"] and need == quote["they_value_get"] > 0 and quote["they_value_give"] == 0
     assert quote["suggest"] == f'diplomacy(action="propose_trade", civ="{civ}", give_gold={need}, get_techs=["{tech}"])'
     assert b.call("quote_trade", civ=civ, get_techs=[tech], give_gold=need)["accepts"]
+    # Gold asked as well: the balanced call asks for less of it before it gives more.
+    asked = b.call("quote_trade", civ=civ, get_techs=[tech], get_gold=min(10, them["gold"]))
+    assert asked["gold_to_balance"] == need + min(10, them["gold"]) and asked["suggest"] == quote["suggest"]
 
     refused = b.error("propose_trade", civ=civ, get_techs=[tech], give_gold=need - 1)
     assert refused["code"] == "refused" and refused["suggest"] == quote["suggest"]
@@ -208,7 +247,10 @@ def test_seats_trade_when_both_agree(launch, tmp_path):  # noqa: F811
     assert r.error("accept_trade", seat="Rome", civ="Greece")["code"] == "no_offer"
 
     events = end_round(r)
-    assert [k for k, _ in kinds(events["Greece"])].count("trade_offered") == 1
+    [told] = [t for k, t in kinds(events["Greece"]) if k == "trade_offered"]
+    assert told.startswith(f"Rome offers {tech} (worth ") and told.endswith(
+        f" to you) for 10 gold (worth 10 to you), until the end of turn {turn + 1}. "
+        'Accept with diplomacy(action="accept_trade", civ="Rome").')
     assert not any(k.startswith("trade") for k, _ in kinds(events["Rome"]) + kinds(events["Egypt"]))
     # The autosave keeps the seat's offer.
     restored = launch()
@@ -234,10 +276,18 @@ def test_seats_trade_when_both_agree(launch, tmp_path):  # noqa: F811
         "Rome": gold["Rome"] - 5, "Greece": gold["Greece"] + 5}
     for seat, civ in (("Rome", "Greece"), ("Greece", "Rome")):
         assert r.error("accept_trade", seat=seat, civ=civ)["code"] == "no_offer"
+    # An offer answered in the turn it was made is not told when the turn ends; one replaced is told as it is now.
+    r.call("propose_trade", seat="Greece", civ="Rome", give_gold=2)
+    r.call("accept_trade", seat="Rome", civ="Greece")
+    r.call("propose_trade", seat="Rome", civ="Greece", give_gold=2)
+    r.call("propose_trade", seat="Rome", civ="Greece", give_gold=1)
+    events = end_round(r)
+    assert not any(k == "trade_offered" for k, _ in kinds(events["Rome"]))
+    assert [t for k, t in kinds(events["Greece"]) if k == "trade_offered"] == [
+        f"Rome offers 1 gold (worth 1 to you) for nothing (worth 0 to you), until the end of turn {turn + 3}. "
+        'Accept with diplomacy(action="accept_trade", civ="Rome").']
 
     # Not accepted by the end of the next turn, an offer lapses; a declined one goes at once.
-    r.call("propose_trade", seat="Rome", civ="Greece", give_gold=1)
-    end_round(r)
     end_round(r)
     assert "lapsed" in r.error("accept_trade", seat="Greece", civ="Rome")["message"]
     r.call("propose_trade", seat="Rome", civ="Greece", give_gold=1)

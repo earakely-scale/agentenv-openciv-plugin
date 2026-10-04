@@ -44,16 +44,18 @@ the valid alternatives and the exact call to make instead.
 ## Trades
 
 - **What can be traded:** techs and gold, with a civ you have met and are at peace with. A tech you give must be one
-  the civ lacks, a tech you get one you lack; a trade with an AI carries at least one tech. Misspelt tech names are
-  read as the tradeable tech they plainly mean.
+  the civ lacks, a tech you get one you lack; a trade with an AI carries at least one tech. A tech can be got without
+  its prerequisites, as the AIs trade among themselves. Misspelt tech names are read as the tradeable tech they
+  plainly mean.
 - **Values:** a tech is worth its research cost to the civ that gets it (less to a civ that knows more civs that have
   it, and less the beakers already spent on it), gold its face value. The status lists each tradeable tech as
   `name you/them`.
 - **An AI** takes a trade worth at least as much to it as what it gives. `quote_trade` tells you before you propose
-  it, and how much gold balances it.
-- **An AI's offers:** an AI makes offers during its turn. Each one stands until the end of your next turn: a
-  `trade_offered` event, a `TRADE` line in the brief and `OFFERS` in the status, with what each side is worth to
-  you. Most are good for the AI only, so compare the two values before `accept_trade`.
+  it, and how much gold balances it (its suggested call asks for less gold first, then gives more).
+- **An AI's offers:** an AI makes offers during its turn. Each one stands until the end of your next turn (after an
+  `end_turn` of several turns, the turn it stops on): a `trade_offered` event, a `TRADE` line in the brief and
+  `OFFERS` in the status, with what each side is worth to you. An offer that can no longer be made (after another
+  trade, say) is not shown. Most are good for the AI only, so compare the two values before `accept_trade`.
 - **Another agent's civ:** `propose_trade` offers the trade; it stands until the end of the next turn and is made
   when the other agent accepts it (or proposes the same trade back).
 - **Research:** a tech you get is known at once. If it was the one being researched, the research moves on (your
