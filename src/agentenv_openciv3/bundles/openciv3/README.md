@@ -44,7 +44,8 @@ in parallel: the outcome verifier and `save_env_recording`.
     same prompt; edit one to give that agent its own strategy. The brief states the match's rules, so a prompt
     need not.
   - **Victor:** `artifacts/victor-verifier/verify.py` names the winner. A conquest (one agent's civilization is
-    the last an agent still plays) or a domination (one holds two thirds of the world's land and population) ends
+    the last an agent still plays), a domination (one holds two thirds of the world's land and population) or a
+    cultural victory (a city with 20,000 culture points, or 100,000 in all and twice the next civilization's) ends
     the game early and wins it; otherwise the top score at the turn limit wins, and a tie has no victor. The grade
     is 1 for a valid match with one victor, 0.5 for a tie, and 0 when the match was not played to its end, the
     engine failed, or the env ended more than a tenth of any agent's turns. Each agent's rank, score, metrics and

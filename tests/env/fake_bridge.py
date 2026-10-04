@@ -386,10 +386,14 @@ class Game:
         return self.turn >= self.turn_limit
 
     def race(self) -> dict:
-        you = {"civ": self.civ, "you": True, "score": self.score()["total"], "land": 0.04, "pop": 0.05}
-        greece = {"civ": "Greece", "you": False, "score": you["score"] + 5, "land": 0.05, "pop": 0.06}
+        you = {"civ": self.civ, "you": True, "score": self.score()["total"], "land": 0.04, "pop": 0.05,
+               "culture": self.turn}
+        greece = {"civ": "Greece", "you": False, "score": you["score"] + 5, "land": 0.05, "pop": 0.06,
+                  "culture": 2 * self.turn}
         return {"civs_left": 4, "rank": 2, "domination": 0.667, "you": you, "leader": greece,
-                "nearest_domination": greece}
+                "nearest_domination": greece, "nearest_culture": greece, "culture_runner_up": you,
+                "best_city": {"civ": "Greece", "you": False, "name": "Athens", "culture": self.turn},
+                "culture_goal": 100_000, "city_culture_goal": 20_000}
 
     def state(self) -> dict:
         r = self.research

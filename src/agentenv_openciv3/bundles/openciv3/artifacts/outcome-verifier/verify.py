@@ -35,7 +35,7 @@ def grade(s: dict) -> list[dict]:
         {"criterion": "played to its end: the turn limit, or a victory",
          "result": s["turn"] >= s["turn_limit"] or victory is not None,
          "turn": s["turn"], "turn_limit": s["turn_limit"], "victory": victory},
-        {"criterion": "not defeated, and no other civilization won by conquest or domination",
+        {"criterion": "not defeated, and no other civilization won by conquest, domination or culture",
          "result": not s["defeated"] and not beaten},
         {"criterion": "founded at least one city", "result": s["metrics"]["cities"] >= 1,
          "cities": s["metrics"]["cities"]},
