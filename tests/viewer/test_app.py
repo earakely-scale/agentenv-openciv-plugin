@@ -226,6 +226,117 @@ def test_the_stream_casts_a_live_game(broadcast, tmp_path):
     assert all(f["markup"] == 0 for f in frames)
 
 
+@pytest.fixture(scope="module")
+def later(tmp_path_factory):
+    """The two-seat game with the later game's stories and the broadcast's names (Opus 5.5 for opus) on a local live
+    server: T1-T3 first, then T4 (opus and sol meet; Rome enters the Middle Ages), T5 (the Pyramids in Veii), T6 (a
+    trade between the two seats)."""
+    record = tmp_path_factory.mktemp("record")
+    lines = [{"id": 1, "cmd": "new_game", "args": {"seed": 3, "turn_limit": 8}},
+             {"id": 2, "cmd": "autoplay", "args": {"turns": 5, "policy": "settler_bot"}}]
+    subprocess.run([sys.executable, str(FAKE), "--record", str(record)], check=True, capture_output=True, text=True,
+                   timeout=60, input="".join(json.dumps(x) + "\n" for x in lines))
+    snaps = recording.load_snapshots(record)
+    for s in snaps:
+        t = s["turn"]
+        s.update(schema=2, date=f"{4000 - 50 * t} BC", seats=[{"index": 0, "civ": "Rome", "label": "opus"},
+                                                               {"index": 1, "civ": "Greece", "label": "sol"}])
+        for p in s["players"]:
+            p["label"] = {"Rome": "opus", "Greece": "sol"}.get(p["civ"])
+            if p["index"] < 2:
+                p["contacts"] = [1 - p["index"]] if t >= 4 else []
+            p.update(culture=100 * t, era=int(p["index"] == 0 and t >= 4), land=0.1 + 0.02 * t, pop=0.2)
+        for c in s["cities"]:
+            c["wonders"] = ["The Pyramids"] if c["name"] == "Veii" and t >= 5 else []
+        s["trades"] = [{"seq": 9, "turn": 6, "a": 0, "b": 1, "a_gave": "Bronze Working", "b_gave": "60 gold"}] \
+            if t == 6 else []
+    d = MatchData.from_snapshots(snaps, names={"opus": "Opus 5.5"}).document()
+    asked = []
+
+    def data(since: int) -> dict:
+        n = sum(p == "/live/data.json" for p in asked)
+        last = 3 if n <= 3 else 4 if n <= 8 else 5 if n <= 16 else 6
+        live = {"turn": last, "game_over": False, "victory": None, "client": False, "recording": True,
+                "min_turn_seconds": 15, "messages": [], "broadcast": {"title": "Sol <i>vs</i> Opus", "casters": None,
+                                                                      "names": {"opus": "Opus 5.5"}},
+                "seats": [{"civ": "Rome", "label": "opus", "human": False, "ended": False, "seconds": 42.0,
+                           "calls": {"ok": 7, "failed": 1}, "note": None, "plan": None, "plan_turn": None,
+                           "actions": [{"text": "c1 builds <b>Settler</b>", "ok": True}]},
+                          {"civ": "Greece", "label": "sol", "human": False, "ended": True, "seconds": 31.0,
+                           "calls": {"ok": 4, "failed": 0}, "actions": [], "note": None, "plan": None,
+                           "plan_turn": None}]}
+        out = {k: d[k] for k in ("schema", "game", "meta", "players")}
+        out["turns"] = [t for t in d["turns"] if since < t["turn"] <= last]
+        if since < 0:
+            out["static"] = d["static"]
+        return {**out, "live": live}
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            url = urllib.parse.urlparse(self.path)
+            asked.append(url.path)
+            if url.path == "/live":
+                body, ctype = probed(viewer.page(), PROBE_LATER).encode(), "text/html; charset=utf-8"
+            elif url.path == "/live/data.json":
+                since = int(dict(urllib.parse.parse_qsl(url.query)).get("since", -1))
+                body, ctype = json.dumps(data(since)).encode(), "application/json"
+            else:
+                return self.send_error(404)
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}"
+    server.shutdown()
+
+
+PROBE_LATER = TEXT + """
+  const frames = [], shown = sel => { const e = $(sel); return e && !e.hidden ? text(e) : null; };
+  setInterval(() => {
+    if (!$("#moment") || !M.ready) return;
+    const div = document.createElement("div");
+    div.innerHTML = raceCard();
+    const race = text(div);
+    div.innerHTML = recapCard(M.events.filter(e => e.kind !== "city_founded").slice(-3));
+    frames.push({t: Math.round(performance.now()), card: shown("#moment"), chyron: shown("#chyron"),
+      duel: shown("#duel"), brand: text($(".brand")), turnbig: text($("#turnbig")), race, recap: text(div),
+      markup: $$("#duel .act *, .brand i, .moment .big *").length});
+    $("#probe").textContent = JSON.stringify(frames);
+  }, 250);"""
+
+
+def test_the_stream_tells_the_later_games_stories(later, tmp_path):
+    frames = run(f"{later}/live?stream", 100000, tmp_path)
+
+    def first(key, *words):
+        return next((f for f in frames if f[key] and all(w.lower() in f[key].lower() for w in words)), None)
+
+    # the broadcast's title and the seats' names; the year by the turn
+    assert first("brand", "Sol <i>vs</i> Opus") and first("turnbig", "3800 BC", "T4")
+    # the score bug: both seats head to head, with the race and their turns as they go
+    bug = first("duel", "Opus 5.5", "Rome", "sol", "Greece", "3800 BC", "turn 4 of 8", "Land", "People")
+    assert bug and "thinking · 0:42 · 8 calls" in bug["duel"] and "c1 builds <b>Settler</b>" in bug["duel"]
+    assert "turn ended · 0:31" in bug["duel"]
+    # the stories: the two seats meet, Rome's new era, its wonder, and their trade, each a card
+    meet = first("card", "Opus 5.5", "Meet", "sol", "First contact: Opus 5.5 meets sol")
+    era = first("card", "Opus 5.5 enters", "Middle Ages")
+    wonder = first("card", "Opus 5.5 completes a wonder", "The Pyramids", "Opus 5.5 completed The Pyramids in Veii")
+    trade = first("card", "Trade", "gives Bronze Working", "gives 60 gold")
+    assert meet and era and wonder and trade, [f["card"] for f in frames if f["card"]]
+    assert meet["t"] < wonder["t"] < trade["t"]
+    assert first("chyron", "wonder", "The Pyramids in Veii")   # then the camera on the city
+    # the loop's cards: the race against each victory, and the story so far
+    assert first("race", "The race", "Opus 5.5", "Rome", "sol", "Greece", "Land", "People", "two thirds")
+    assert first("recap", "The story so far", "trade")
+    assert all(f["markup"] == 0 for f in frames)
+
+
 def test_the_director_holds_shots_by_priority_and_skips_the_backlog(doc, tmp_path):
     probe = """
       const loop = () => ({key: "loop", prio: 9, ms: 15000});

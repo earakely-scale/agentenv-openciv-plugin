@@ -1559,7 +1559,7 @@ class Director {
     const wish = this.wish?.until > now ? this.wish.focus : null;
     if (done) {
       let shot = this.loop(this.step++, wish);
-      while (starved && shot.focus != null) shot = this.loop(this.step++, wish);
+      while (starved && (shot.focus != null || shot.card)) shot = this.loop(this.step++, wish);   // the map or the panels
       return this.cut({...shot, loop: true, ...(starved && {prio: MINOR})}, now);
     }
     if (on.loop && on.focus != null && wish != null && wish !== on.focus && held >= DWELL && on.ms - held >= DWELL) {
@@ -1838,12 +1838,13 @@ function seatNow(p) {
 }
 function duelSide(p, ti, rk) {
   const s = M.series[p.index][ti], st = M.stats(ti, p.index), now = seatNow(p), wonders = st.wonders || 0;
-  const bits = [`${s[1]} cities`, `${s[2]} pop`, `${s[4]} techs`, st.military != null ? `${st.military} army` : "",
+  const n = (k, one, many = one + "s") => `${k} ${k === 1 ? one : many}`;
+  const bits = [n(s[1], "city", "cities"), `${s[2]} pop`, n(s[4], "tech"), st.military != null ? `${st.military} army` : "",
     st.gold != null ? `${st.gold} gold` : "", wonders ? `${wonders} wonder${wonders > 1 ? "s" : ""}` : ""].filter(Boolean);
   return `<div class="side ${now.cls}" style="--a:${p.color}">
     <div class="hd"><span class="nm">${lab(p)}</span><span class="cv">${esc(p.civ)}</span><span class="grow"></span>
       <span class="rk">${ordinal(rk[p.index])}</span><span class="sc">${s[0]}</span></div>
-    <div class="bits">${bits.map(esc).join(" · ")}</div>
+    <div class="bits"><span class="cvb">${esc(p.civ)} · </span>${bits.map(esc).join(" · ")}</div>
     ${"land" in st ? `<div class="meters">${meter("Land", st.land)}${meter("People", st.pop)}
       ${cultureCounts(ti) ? `<div class="cult" title="the cultural victory: ${CULTURE_GOAL.toLocaleString()}">Culture <b>${(st.culture || 0).toLocaleString()}</b></div>` : ""}</div>` : ""}
     <div class="now"><span class="st">${esc(now.state)}</span>${now.act ? `<span class="act">${esc(now.act)}</span>` : ""}</div></div>`;

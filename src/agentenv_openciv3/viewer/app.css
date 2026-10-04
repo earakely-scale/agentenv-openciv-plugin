@@ -417,6 +417,11 @@ body.stream .agentsview.dense .acard .mind .tx { -webkit-line-clamp: 1; }
 .meter .track i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--a, var(--focus)); border-radius: 4px; }
 .meter .track b { position: absolute; left: 66.7%; top: -3px; bottom: -3px; width: 2px; background: #fff; opacity: .8; }
 .meter .mv { font-variant-numeric: tabular-nums; color: var(--text); min-width: 34px; text-align: right; }
+/* three seats or more: the civ moves to the stats line and the shares are numbers */
+.duel .cvb { display: none; }
+.duel:not(.n1):not(.n2) .cv { display: none; } .duel:not(.n1):not(.n2) .cvb { display: inline; color: var(--text); }
+.duel:not(.n1):not(.n2) .meter .track { display: none; } .duel:not(.n1):not(.n2) .meter { flex: none; }
+.duel:not(.n1):not(.n2) .meter .mv { min-width: 0; }
 body.stream.has-duel .chyron { top: 168px; }
 body.stream.has-duel .bubble { top: 170px; }
 body.stream.has-duel .clientpane:not(.big) { top: 170px; }

@@ -165,6 +165,12 @@ def test_quote_then_propose_trade_with_an_ai(launch):  # noqa: F811
     assert res["message"] == f"Traded with {civ}: you gave {need} gold and got {tech}."
     assert res["gold"] == gold - need and res["civ"]["gold"] == them["gold"] + need
     assert tech in b.call("state")["known_techs"] and tech not in [t["name"] for t in res["civ"]["techs_for_you"]]
+    # The world snapshot has it for the viewer, once: who gave what, in the snapshot's player indices.
+    world = b.call("world")
+    index = {p["civ"]: p["index"] for p in world["players"]}
+    [made] = world["trades"]
+    assert {k: made[k] for k in ("turn", "a", "b", "a_gave", "b_gave")} == {
+        "turn": world["turn"], "a": index["Rome"], "b": index[civ], "a_gave": f"{need} gold", "b_gave": tech}
 
     b.call("declare_war", civ=civ)
     assert civ_named(b, civ)["techs_for_you"] is None

@@ -69,12 +69,15 @@ TINT_LAND, TINT_WATER = 0.35, 0.18
 # Key moments: a moment's rank is its turn minus an age handicap by kind, so an elimination stays on the board
 # ~40 turns longer than a city founding, and techs only fill the list when nothing else happened.
 PRIORITY = {"victory": 0, "civ_destroyed": 0, "city_captured": 1, "city_destroyed": 2, "war_declared": 2,
-            "peace_signed": 3, "lead_change": 3, "government_changed": 4, "city_founded": 5, "tech_learned": 6}
+            "wonder_built": 2, "landing": 3, "peace_signed": 3, "lead_change": 3, "trade": 4, "era_entered": 4,
+            "government_changed": 4, "contact": 5, "city_founded": 5, "tech_learned": 6}
 HANDICAP = {"victory": 0, "civ_destroyed": 0, "city_captured": 4, "city_destroyed": 6, "war_declared": 4,
-            "peace_signed": 10, "lead_change": 8, "government_changed": 14, "city_founded": 20, "tech_learned": 70}
+            "wonder_built": 6, "landing": 10, "peace_signed": 10, "lead_change": 8, "trade": 14, "era_entered": 12,
+            "government_changed": 14, "contact": 18, "city_founded": 20, "tech_learned": 70}
 TAG = {"victory": "VICTORY", "civ_destroyed": "OUT", "city_captured": "CAPTURED", "city_destroyed": "RAZED",
        "war_declared": "WAR", "peace_signed": "PEACE", "lead_change": "LEAD", "government_changed": "GOV'T",
-       "city_founded": "FOUNDED", "tech_learned": "TECH"}
+       "city_founded": "FOUNDED", "tech_learned": "TECH", "wonder_built": "WONDER", "landing": "LANDING",
+       "trade": "TRADE", "era_entered": "NEW ERA", "contact": "CONTACT"}
 STRONG = {"victory", "civ_destroyed", "city_captured", "city_destroyed", "war_declared"}
 MOMENT_WINDOW, MAX_MOMENTS = 80, 11
 MARK_TURNS = 4              # a capture or a razing is ringed on the map for this many turns

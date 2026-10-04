@@ -1343,6 +1343,14 @@ def test_world_snapshot_schema_2(launch, tmp_path):
     assert (city["era"], city["walls"]) == (0, False)
     assert all(0 < u["hp"] <= u["hp_max"] and isinstance(u["fortified"], bool) for u in world["units"])
 
+    # The race, for the viewer: the year, each civ's culture, era and shares of land and people (as state.race has
+    # them), each city's great wonders, and the seats' trades (none yet).
+    race = state["race"]["you"]
+    assert world["date"] == state["date"] and world["trades"] == [] and city["wonders"] == []
+    assert (rome["culture"], rome["era"]) == (race["culture"], state["era"])
+    assert (round(rome["land"], 3), round(rome["pop"], 3)) == (race["land"], race["pop"])
+    assert all(0 <= p["land"] <= 1 and 0 <= p["pop"] <= 1 for p in world["players"])
+
     # Each snapshot says how the worker went from where the last one had it (patches/0012): its runs of steps, in order.
     for before, now in pairwise(snaps):
         runs = sorted((m for m in now["moves"] if m["unit"] == worker["id"]), key=lambda m: m["seq"])
