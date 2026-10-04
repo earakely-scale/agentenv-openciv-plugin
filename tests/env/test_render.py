@@ -49,7 +49,12 @@ def state(n_cities, idle, standing, n_events, turn=34):
               ][:n_events]
     blockers = [{"kind": "idle_unit", "id": u["id"], "message": f"{u['id']} {u['type']} has moves and no orders"}
                 for u in units if u["needs_orders"]]
-    return {"turn": turn, "turn_limit": 60, "game_over": False, "defeated": False, "civ": "Rome",
+    race = {"civs_left": 5, "rank": 2, "domination": 0.667,
+            "you": {"civ": "Rome", "you": True, "score": 60, "land": 0.08, "pop": 0.12},
+            "leader": {"civ": "Greece", "you": False, "score": 71, "land": 0.11, "pop": 0.15},
+            "nearest_domination": {"civ": None, "you": False, "score": 50, "land": 0.14, "pop": 0.18}}
+    return {"turn": turn, "turn_limit": 60, "date": "2650 BC", "race": race, "game_over": False, "defeated": False,
+            "civ": "Rome",
             "government": "Despotism", "anarchy_until": None, "gold": 34, "gold_per_turn": 3,
             "rates": {"tax": 4, "science": 6, "luxury": 0},
             "research": {"current": "Bronze Working", "turns_left": 3, "beakers": 8, "cost": 20,
@@ -95,10 +100,12 @@ def test_crowded_brief_stays_bounded():
 def test_brief_sections():
     text = brief_of(state(2, idle=1, standing=5, n_events=2), plan_chars=40)
     lines = text.splitlines()
-    assert lines[0] == "T34/60 · Rome · Despotism · gold 34 (+3/t) · tax 40% sci 60% lux 0%"
+    assert lines[0] == "T34/60 (2650 BC) · Rome · Despotism · gold 34 (+3/t) · tax 40% sci 60% lux 0%"
     assert lines[1] == "RESEARCH Bronze Working 8/20 → 3t (then Currency)"
-    assert lines[2] == "SCORE 97 (cities 2, pop 9, tiles 30, techs 5) · explored 18.5%"
-    assert lines[3] == "PACE cities 2 BEHIND (3 by T30) · techs 5 ok (next: 6 by T40)"
+    assert lines[2] == "SCORE 97 (cities 2, pop 9, tiles 30, techs 5) · 2nd of 5 civs (Greece leads, 71) · " \
+                       "explored 18.5%"
+    assert lines[3] == "PACE cities 2 BEHIND (3 by T30) · techs 5 ok (next: 6 by T40) · land/pop 8%/12%, top an " \
+                       "unmet civ 14%/18%"
     assert ('  u1 Settler (14,10) 1/1mv · idle · found here: no — adjacent to Rome (12,10); cities need one empty '
             'tile between them · best site (17,7) 2 NE score 41 → unit_order(unit="u1", order="settle", x=17, y=7)'
             in lines)
@@ -297,6 +304,44 @@ def test_disorder_events_leave_the_fixes_to_needs_orders():
     assert "EVENTS T33: !! Rome fell into civil disorder and produces nothing (12,10)" in text
     assert fixes not in text
     assert fixes in render.events_lines(s["last_events"])[0]   # the turn report keeps them
+
+
+def test_the_brief_dates_the_turn_and_shows_the_race():
+    s = state(3, idle=0, standing=0, n_events=0)
+    text = render.brief(s, start_techs=2)
+    assert text.startswith("T34/60 (2650 BC) · Rome · Despotism")
+    assert "techs 5) · 2nd of 5 civs (Greece leads, 71) · explored 18.5%" in text
+    assert "· land/pop 8%/12%, top an unmet civ 14%/18%\n" in text
+    s["race"].update(rank=1, leader=s["race"]["you"], nearest_domination=s["race"]["you"])
+    text = render.brief(s, start_techs=2)
+    assert "· 1st of 5 civs · explored" in text and "· land/pop 8%/12%\n" in text
+    s["race"]["leader"] = {"civ": "Greece", "score": 60, "land": 0, "pop": 0}
+    assert "· tied 1st of 5 civs ·" in render.brief(s, start_techs=2)
+    assert "land/pop" not in render.brief({**s, "race": None}, start_techs=2)
+    assert [render.ordinal(n) for n in (1, 2, 3, 4, 11, 12, 13, 21, 22)] == [
+        "1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd"]
+
+
+def test_several_riots_fold_into_one_line_with_the_rate_that_calms_them_all():
+    s = state(5, idle=0, standing=0, n_events=0)
+    s["blockers"] = [{"kind": "disorder", "id": f"c{i}", "now": i != 3, "unhappy": 2 + i % 2, "happy": 1,
+                      "luxury": {1: 2, 2: 4, 3: 1, 4: None}[i], "message": f"c{i} riots: a long fix text."}
+                     for i in (1, 2, 3, 4)]
+    text = render.brief(s, start_techs=2)
+    assert ("  !! 4 cities riot, producing nothing (unhappy:happy citizens): c1 Rome 3:1, c2 Veii 2:1, "
+            "c3 Antium 3:1 at turn end, c4 Cumae 2:1 → set_rates(science=6, luxury=4) calms all but c4; each "
+            "military unit fortified in a city calms one unhappy citizen; end_turn(skip_idle=true) accepts it") in text
+    assert "a long fix text" not in text
+    s["blockers"] = s["blockers"][:2]
+    assert render.brief(s, start_techs=2).count("a long fix text") == 2   # two still get their own lines
+
+
+def test_game_over_names_the_victory():
+    over = {**state(1, idle=0, standing=0, n_events=0), "game_over": True, "turn": 60}
+    score = {"kind": "score", "civ": "Greece", "label": None, "turn": 60}
+    assert render.game_over({**over, "victory": score}, None).startswith("GAME OVER — Greece won on score on T60.")
+    assert render.game_over({**over, "victory": {**score, "civ": "Rome"}}, None).startswith(
+        "GAME OVER — you won on score on T60.")
 
 
 def test_attention_lists_risks_bare_cities_full_production_and_gold():

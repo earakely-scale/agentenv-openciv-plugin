@@ -29,10 +29,14 @@ def grade(s: dict) -> list[dict]:
     baselines = {policy: (b.get("at_turn") or {}).get("total") for policy, b in s["baselines"].items()}
     reference = baselines.get(REFERENCE)
     agent_calls = s["actions"]["ok"] + s["actions"]["invalid"]
+    victory = s.get("victory")
+    beaten = victory is not None and victory["civ"] != s["civ"] and victory["kind"] != "score"
     return [
-        {"criterion": "reached the turn limit", "result": s["turn"] >= s["turn_limit"],
-         "turn": s["turn"], "turn_limit": s["turn_limit"]},
-        {"criterion": "not defeated", "result": not s["defeated"]},
+        {"criterion": "played to its end: the turn limit, or a victory",
+         "result": s["turn"] >= s["turn_limit"] or victory is not None,
+         "turn": s["turn"], "turn_limit": s["turn_limit"], "victory": victory},
+        {"criterion": "not defeated, and no other civilization won by conquest or domination",
+         "result": not s["defeated"] and not beaten},
         {"criterion": "founded at least one city", "result": s["metrics"]["cities"] >= 1,
          "cities": s["metrics"]["cities"]},
         {"criterion": f"score as a fraction of the {REFERENCE} baseline's at the same turn", "weight": 2,

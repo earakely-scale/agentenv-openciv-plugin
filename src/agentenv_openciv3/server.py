@@ -766,11 +766,13 @@ class OpenCiv3Env(AgentEnvEnvironment):
 
     @tool()
     async def get_turn_brief(self):
-        """Your whole situation in one page: turn, gold and tax/science/luxury rates, research, score (10·cities +
-        3·pop + tiles + 4·techs), pace against targets and against reference players on the same seed, what needs
-        orders (with the call that resolves it), what needs attention (disorder and riot risk, cities without a
-        defender, full production, unspent gold), standing orders, cities, last turn's events, and your plan.
-        Lost context? Call get_turn_brief."""
+        """Your whole situation in one page: turn and year, gold and tax/science/luxury rates, research, score
+        (10·cities + 3·pop + tiles + 4·techs) and your rank, pace against targets and against reference players on
+        the same seed, your share of the world's land and population, what needs orders (with the call that resolves
+        it), what needs attention (disorder and riot risk, cities without a defender, full production, unspent gold),
+        standing orders, cities, last turn's events, and your plan. A civilization wins, and the game ends, by
+        conquest (the last one left), domination (2/3 of the land and 2/3 of the population) or, at the turn limit,
+        the top score. Lost context? Call get_turn_brief."""
         return await self._run("get_turn_brief", {}, self._brief)
 
     @tool()

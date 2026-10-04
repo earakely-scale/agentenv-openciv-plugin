@@ -1,8 +1,9 @@
 """Decide which seat won a game several agents played, one seat each, from the env's data/get summary; people may
 play seats too (data/get marks them `human`), and are ranked like the agents.
 
-The victor is the seat that won by conquest or domination, else, at the turn limit, the seat with the highest score;
-a tie on top is no victor and half the grade. The match counts only if it was played to its end, the engine kept
+The victor is the seat that won by conquest or domination, else, at the turn limit, the seat with the highest score
+(whatever an AI civilization scored); a tie on top is no victor and half the grade. When an AI civilization wins by
+conquest or domination, no seat is the victor. The match counts only if it was played to its end, the engine kept
 running and every agent played its own turns (the env ends a silent seat's turn so the others can go on; past a tenth
 of an agent's turns the match does not count; a human seat's ended turns are reported, not gated). Each seat's rank
 among the seats is reported, not graded: the victor first, then undefeated seats before defeated ones, then by score.
@@ -22,22 +23,26 @@ def _name(seat: dict) -> str:
 
 def grade(s: dict) -> list[dict]:
     seats = s.get("seats") or []
-    victory = s.get("victory")
-    ended = victory is not None or s["turn"] >= s["turn_limit"]
+    ended = s.get("victory") is not None or s["turn"] >= s["turn_limit"]
+    # the seats' match: a victory on score is the top seat's, whatever an AI civ scored
+    victory = s.get("victory") if (s.get("victory") or {}).get("kind") != "score" else None
+    ai_won = victory is not None and victory["civ"] not in {seat["civ"] for seat in seats}
     standing = {seat["civ"]: (seat["civ"] != (victory or {}).get("civ"), seat["defeated"], -seat["score"]["total"])
                 for seat in seats}
     order = sorted(standing.values())
     rank = {civ: order.index(key) + 1 for civ, key in standing.items()}
     ranked = sorted(seats, key=lambda seat: rank[seat["civ"]])
     leaders = [seat for seat in ranked if rank[seat["civ"]] == 1]
-    match = {"criterion": "the match has a victor", "result": ended and len(leaders) == 1}
-    if match["result"]:
+    match = {"criterion": "the match has a victor", "result": ended and len(leaders) == 1 and not ai_won}
+    if ai_won:
+        match["won_by_ai"] = victory
+    elif match["result"]:
         victor, runner_up = ranked[:2]
         how, turn, margin = (victory["kind"], victory["turn"], None) if victory else (
             "score", s["turn"], victor["score"]["total"] - runner_up["score"]["total"])
         match |= {"victor": victor.get("label") or victor["civ"], "civ": victor["civ"], "how": how, "turn": turn,
                   "margin": margin}
-    elif ended and leaders:
+    elif ended and leaders and not ai_won:
         match |= {"score": TIE, "tied": [_name(seat) for seat in leaders]}
     match["standings"] = [{"civ": seat["civ"], "label": seat.get("label"), "rank": rank[seat["civ"]],
                            "score": seat["score"]["total"], "defeated": seat["defeated"],

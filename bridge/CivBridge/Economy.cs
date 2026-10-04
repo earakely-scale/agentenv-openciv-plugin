@@ -103,12 +103,18 @@ sealed partial class Session {
 	bool RiotRisk(City c) => !Moods(c).Riots && Moods(c, extraCitizens: 1).Riots;
 
 	/// <summary>Why the city riots and the moves that would end it, as one sentence fragment.</summary>
+	/// <summary>The lowest luxury rate (tenths) above the current one that ends the city's riot; 0 if none does.</summary>
+	int CalmingLuxury(City c) {
+		Player p = c.owner;
+		return Enumerable.Range(p.luxuryRate + 1, Math.Max(0, p.maxLuxuryRate - p.luxuryRate)).FirstOrDefault(l => !Moods(c, luxury: l).Riots);
+	}
+
 	string DisorderFixes(City c) {
 		Mood m = Moods(c);
 		Player p = c.owner;
 		int limit = p.government.militaryPoliceLimit, defenders = Defenders(c);
 		var fixes = new List<string>();
-		int luxury = Enumerable.Range(p.luxuryRate + 1, Math.Max(0, p.maxLuxuryRate - p.luxuryRate)).FirstOrDefault(l => !Moods(c, luxury: l).Riots);
+		int luxury = CalmingLuxury(c);
 		if (luxury > 0)
 			fixes.Add($"raise luxury to {luxury * 10}% with set_rates(science={Math.Min(p.scienceRate, 10 - luxury)}, luxury={luxury})");
 		if (defenders < limit) {

@@ -93,6 +93,18 @@ def test_a_full_game_behind_the_engine_ai_and_third_scores_partially():
     assert rows[3]["rank"] == 3 and not rows[3]["result"]
 
 
+def test_a_victory_ends_the_game_and_another_civs_conquest_or_domination_is_a_defeat():
+    won = verifier.grade(summary() | {"turn": 20, "victory": {"kind": "domination", "civ": "Rome", "turn": 20}})
+    assert (won[0]["result"], won[1]["result"]) == (True, True) and score(won) == 1.0
+    lost = full_game.grade(full_summary() | {"turn": 300, "victory": {"kind": "conquest", "civ": "AI 0", "turn": 300}})
+    assert (lost[0]["result"], lost[1]["result"]) == (True, False)
+    assert lost[0]["victory"]["civ"] == "AI 0"
+    on_score = verifier.grade(summary() | {"victory": {"kind": "score", "civ": "Greece", "turn": 30}})
+    assert (on_score[0]["result"], on_score[1]["result"]) == (True, True)   # the score is graded on its own
+    unfinished = verifier.grade(summary() | {"turn": 20})
+    assert unfinished[0]["result"] is False
+
+
 def match_summary(turn=300, totals=(700, 900, 400), defeated=(False, False, False), auto_ended=(0, 2, 0),
                   victory=None, engine_failed=False) -> dict:
     def seat(civ, label, total, lost, idle):
@@ -137,6 +149,17 @@ def test_a_domination_victory_wins_over_a_higher_score():
     assert (rows[0]["civ"], rows[0]["how"]) == ("Egypt", "domination")
     assert [(r["rank"], r["result"]) for r in rows[1:4]] == [(3, False), (2, False), (1, True)]
     assert score(rows) == 1.0
+
+
+def test_an_ai_conquest_or_domination_leaves_no_victor_and_a_score_victory_is_the_top_seats():
+    ai = {"kind": "domination", "civ": "Babylon", "label": None, "turn": 200}
+    rows = victor_verifier.grade(match_summary(turn=200, victory=ai))
+    assert (rows[0]["result"], rows[0]["won_by_ai"]) == (False, ai) and "tied" not in rows[0]
+    assert rows[4]["result"] is True   # the match did end
+    assert score(rows) == 0.0
+    on_score = {"kind": "score", "civ": "Babylon", "label": None, "turn": 300}
+    rows = victor_verifier.grade(match_summary(victory=on_score))
+    assert (rows[0]["civ"], rows[0]["how"], rows[0]["margin"]) == ("Greece", "score", 200)
 
 
 def test_a_tie_on_top_score_is_no_victor_and_half_the_grade():

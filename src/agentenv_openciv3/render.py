@@ -287,6 +287,23 @@ def garrison_fix(state: dict, city: dict) -> str | None:
     return call("unit_order", unit=u["id"], order="goto", x=city["x"], y=city["y"]) + " then fortify"
 
 
+def riots_line(riots: list[dict], state: dict) -> str:
+    """Several cities in civil disorder (or about to be) as one line: the luxury rate that calms them all at once."""
+    named = [f"{b['id']} {_city(state, b['id']).get('name', '?')} {b.get('unhappy', '?')}:{b.get('happy', '?')}"
+             + ("" if b.get("now", True) else " at turn end") for b in riots[:MAX_PICKS]]
+    more = f", +{len(riots) - MAX_PICKS} more" if len(riots) > MAX_PICKS else ""
+    fixes = []
+    if needed := [b["luxury"] for b in riots if b.get("luxury")]:
+        luxury = max(needed)
+        science = min((state.get("rates") or {}).get("science", 0), 10 - luxury)
+        stubborn = [b["id"] for b in riots if not b.get("luxury")]
+        fixes.append(call("set_rates", science=science, luxury=luxury) + " calms "
+                     + (f"all but {', '.join(stubborn)}" if stubborn else "them all"))
+    fixes.append("each military unit fortified in a city calms one unhappy citizen")
+    return (f"!! {len(riots)} cities riot, producing nothing (unhappy:happy citizens): {', '.join(named)}{more} → "
+            + "; ".join(fixes) + "; end_turn(skip_idle=true) accepts it")
+
+
 def disorder_fix(state: dict, city: dict) -> str:
     fixes = [f for f in (rates_fix(state), garrison_fix(state, city)) if f]
     if fixes:
@@ -302,6 +319,38 @@ def _milestone(targets: Iterable[tuple[int, int]], turn: int, have: int, base: i
         return f"BEHIND ({done[-1][1]} by T{done[-1][0]})"
     upcoming = [(t, n + base) for t, n in targets if t > turn]
     return f"ok (next: {upcoming[0][1]} by T{upcoming[0][0]})" if upcoming else "ok"
+
+
+def ordinal(n: int) -> str:
+    return f"{n}{'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
+
+
+def _race_name(c: dict) -> str:
+    return "you" if c.get("you") else c.get("civ") or "an unmet civ"
+
+
+def _shares(c: dict) -> str:
+    return f"{round(100 * c['land'])}%/{round(100 * c['pop'])}%"
+
+
+def score_race(state: dict) -> str | None:
+    """Where the seat stands in the score race (the top score wins at the turn limit)."""
+    r = state.get("race")
+    if not r or not r.get("you"):
+        return None
+    lead = r["leader"]
+    if r["rank"] == 1:
+        return f"{'1st' if lead.get('you') else 'tied 1st'} of {r['civs_left']} civs"
+    return f"{ordinal(r['rank'])} of {r['civs_left']} civs ({_race_name(lead)} leads, {lead['score']})"
+
+
+def domination_race(state: dict) -> str | None:
+    """The seat's shares of the land and population, and the nearest civ's, against domination's two thirds."""
+    r = state.get("race")
+    if not r or not r.get("you"):
+        return None
+    near = r["nearest_domination"]
+    return f"land/pop {_shares(r['you'])}" + ("" if near.get("you") else f", top {_race_name(near)} {_shares(near)}")
 
 
 def pace_line(state: dict, start_techs: int) -> str:
@@ -447,7 +496,8 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
           baselines: dict[str, dict | str | None] | None = None, sites: dict[str, dict] | None = None,
           events: bool = True, notices: list[dict] | None = None, messages: list[str] | None = None) -> str:
     s = state
-    head = [f"T{s['turn']}/{s['turn_limit']}", s.get("civ", "?"), s.get("government", "?")]
+    head = [f"T{s['turn']}/{s['turn_limit']}" + (f" ({s['date']})" if s.get("date") else ""), s.get("civ", "?"),
+            s.get("government", "?")]
     if s.get("anarchy_until"):
         head.append(f"anarchy until T{s['anarchy_until']}")
     head.append(f"gold {s.get('gold', 0)} ({s.get('gold_per_turn', 0):+d}/t)")
@@ -482,8 +532,10 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
         better = next((g for g in s["governments"] if not g.get("tile_penalty")), s["governments"][0])
         lines.append(f"GOVERNMENT {s.get('government')}{penalty} · can choose {options} → "
                      + call("revolution", government=better["name"]) + " after a few turns of anarchy")
-    lines.append(f"SCORE {score_text(s['score'])} · explored {num(s.get('explored_pct', 0))}%")
-    lines.append(pace_line(s, start_techs))
+    rank = score_race(s)
+    lines.append(f"SCORE {score_text(s['score'])}" + (f" · {rank}" if rank else "")
+                 + f" · explored {num(s.get('explored_pct', 0))}%")
+    lines.append(pace_line(s, start_techs) + (f" · {d}" if (d := domination_race(s)) else ""))
     if baselines:
         lines.append(vs_line(s["turn"], baselines))
 
@@ -494,7 +546,12 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
         units = [b for b in blockers if b.get("kind") == "idle_unit"]
         picks = [b for b in blockers if b.get("kind") == "choose_production"]
         grouped = picks if len(picks) > 2 else []
-        for b in [b for b in blockers if b.get("kind") != "idle_unit" and b not in grouped] + units[:MAX_UNIT_LINES]:
+        riots = [b for b in blockers if b.get("kind") == "disorder"]
+        riots = riots if len(riots) > 2 else []
+        if riots:
+            lines.append("  " + riots_line(riots, s))
+        for b in [b for b in blockers if b.get("kind") != "idle_unit" and b not in grouped and b not in riots] \
+                + units[:MAX_UNIT_LINES]:
             lines.append("  " + blocker_line(b, s, (sites or {}).get(b.get("id"))))
         if grouped:
             named = [f"{b['id']} {_city(s, b['id']).get('name', '?')}: {_city(s, b['id']).get('producing', '?')}"
@@ -668,14 +725,16 @@ def match_line(s: dict) -> str | None:
     return (f"MATCH vs agents {', '.join(agents)}" + (f" and the AI's {', '.join(ai)}" if ai else "")
             + " · every agent plays each turn at once; end_turn waits for the others"
             + f" · it ends at T{s['turn_limit']}, or once one agent's civilization is the last an agent plays"
-            + " (conquest) or holds 2/3 of the world's land and population (domination); else the top score wins"
+            + " (conquest) or any civ holds 2/3 of the world's land and population (domination); else the top"
+            + " score wins"
             + " · message() talks to the other agents")
 
 
 def game_over(state: dict, baselines: dict[str, dict | str | None] | None) -> str:
     s = state
     v = s.get("victory")
-    why = (f"{'you' if v['civ'] == s.get('civ') else v['civ']} won by {v['kind']} on T{v['turn']}" if v
+    why = (f"{'you' if v['civ'] == s.get('civ') else v['civ']} won "
+           f"{'on score' if v['kind'] == 'score' else 'by ' + v['kind']} on T{v['turn']}" if v
            else f"your civilization was destroyed (T{s['turn']})" if s.get("defeated")
            else f"turn {s['turn']}/{s['turn_limit']} reached")
     lines = [f"GAME OVER — {why}.",

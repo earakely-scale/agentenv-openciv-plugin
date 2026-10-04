@@ -464,6 +464,84 @@ def test_a_tech_got_out_of_order_leaves_the_research_queue(launch, tmp_path):
     assert queue[1] not in research["queue"] and research["current"] not in r.call("techs")["known"]
 
 
+def score_victory(b: Bridge, turn: int) -> dict | None:
+    """The victory the score race gives at `turn`: the top score's, or no one's on a tie."""
+    totals = sorted((p["score"]["total"], p["civ"]) for p in b.call("score")["players"] if not p["defeated"])
+    if totals[-1][0] == totals[-2][0]:
+        return None
+    return {"kind": "score", "civ": totals[-1][1], "label": None, "turn": turn}
+
+
+def test_the_top_score_wins_at_the_turn_limit(launch):
+    """Civ III's score victory: at the turn limit the highest score (of every civilization, the AI's included)
+    wins, and a tie on top is no one's; the state dates each turn, and its race says where the seat stands."""
+    b = launch()
+    b.call("new_game", seed=SEED, turn_limit=3)
+    s = b.call("state")
+    assert s["date"] == "4000 BC" and s["victory"] is None
+    race = s["race"]
+    assert race["civs_left"] == len([p for p in b.call("score")["players"] if not p["defeated"]])
+    assert race["you"]["you"] and race["you"]["civ"] == "Rome" and race["domination"] == 0.667
+    assert {"civ", "you", "score", "land", "pop"} == set(race["leader"]) == set(race["nearest_domination"])
+    found_capital(b)
+    while not (res := b.call("end_turn", skip_idle=True))["game_over"]:
+        pass
+    assert b.call("state")["date"] == "3850 BC"
+    assert score_victory(b, 3) is None and b.call("state")["victory"] is None   # everyone founded a capital: a tie
+    assert "victory" not in [e["kind"] for e in res["events"]]
+
+    b = launch()
+    b.call("new_game", seed=SEED, turn_limit=50)
+    b.call("autoplay", turns=49, policy="engine_ai")
+    res = b.call("end_turn", skip_idle=True)
+    victory = score_victory(b, 50)
+    assert victory and victory["civ"] != "Rome" and res["game_over"]   # an AI's victory ends the game too and b.call("state")["victory"] == b.call("score")["victory"] == victory
+    top = next(p for p in b.call("score")["players"] if p["civ"] == victory["civ"])
+    assert res["events"][-1]["kind"] == "victory" and res["events"][-1]["text"].startswith(
+        f"{victory['civ']} won on score at the turn limit: {top['score']['total']} to ")
+    assert f"{victory['civ']} won on score on turn 50" in b.error("end_turn", skip_idle=True)["message"]
+
+
+def test_the_last_civilization_left_wins_by_conquest(launch, tmp_path):
+    """Civ III's conquest victory in a one-seat game: every other civilization is gone (the save edited so)."""
+    b = launch("--autosave", str(tmp_path / "a"))
+    b.call("new_game", seed=SEED, turn_limit=50)
+    found_capital(b)
+    b.call("end_turn", skip_idle=True)
+    path = tmp_path / "a" / "autosave.json"
+    save = json.loads(path.read_text())
+    g = save["game"]
+    me = next(p for p in g["players"] if p["human"])["id"]
+    others = {p["id"] for p in g["players"] if not p["human"] and "Barbarian" not in p["civilization"]}
+    g["cities"] = [c for c in g["cities"] if c["owner"] not in others]
+    g["units"] = [u for u in g["units"] if u["owner"] not in others]
+    for p in g["players"]:
+        p["defeated"] = p["defeated"] or p["id"] in others
+    path.write_text(json.dumps(save))
+    r = launch()
+    r.call("load", path=str(path))
+    assert r.call("state")["race"]["civs_left"] == 1 and r.call("state")["victory"] is None
+    res = r.call("end_turn", skip_idle=True)
+    assert me and res["game_over"] and r.call("state")["victory"] == {
+        "kind": "conquest", "civ": "Rome", "label": None, "turn": 2}
+    won = "Rome won by conquest: it is the last civilization left."
+    assert res["events"][-1] == {"turn": 1, "kind": "victory", "text": won}
+
+
+def test_a_riot_says_which_luxury_rate_ends_it(launch):
+    """A disorder blocker carries the moods and the lowest luxury rate that calms the city (the brief folds several
+    riots into one line with the rate that calms them all)."""
+    b = launch()
+    b.call("new_game", seed=SEED, turn_limit=200)
+    b.call("autoplay", turns=80, policy="engine_ai")
+    b.call("set_rates", science=6, luxury=0)
+    [riot] = [x for x in b.call("state")["blockers"] if x["kind"] == "disorder"]
+    assert riot["unhappy"] > riot["happy"] and riot["now"] is False and riot["luxury"] > 0
+    assert f"raise luxury to {riot['luxury'] * 10}%" in riot["message"]
+    b.call("set_rates", science=6, luxury=riot["luxury"])
+    assert not [x for x in b.call("state")["blockers"] if x["kind"] == "disorder"]
+
+
 def test_game_over_at_turn_limit(launch):
     b = launch()
     b.call("new_game", seed=SEED, turn_limit=2)
@@ -1740,7 +1818,7 @@ def test_the_last_seat_standing_wins_by_conquest(launch, tmp_path):
     assert b.call("state", seat="Greece")["defeated"]
     res = b.call("end_turn", seat="Rome", skip_idle=True)["seats"]["Rome"]
     victory = {"kind": "conquest", "civ": "Rome", "label": "A", "turn": 1}
-    won = "Rome (A) won by conquest: it is the last civilization an agent still plays."
+    won = "Rome (A) won by conquest: it is the last civilization left."
     assert res["game_over"] and res["events"][-1] == {"turn": 0, "kind": "victory", "text": won}
     assert b.call("state")["victory"] == victory and b.call("score")["victory"] == victory
     assert "Rome (A) won by conquest on turn 1" in b.error("end_turn", seat="Rome", skip_idle=True)["message"]
