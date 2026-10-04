@@ -25,9 +25,12 @@ CMD = shlex.split(os.environ.get("CIVBRIDGE_CMD", str(ROOT / "build" / "bridge" 
 pytestmark = pytest.mark.skipif(not Path(CMD[0]).exists(), reason="CivBridge is not built; run scripts/build-bridge.sh")
 
 SEED = 1
-# With Raging barbarians the do-nothing player on seed 15 loses its settler mid-game (checked when written,
-# before and after patches 0005-0009, which shift the random stream).
-DEFEAT_SEED = 15
+# With Raging barbarians the do-nothing player on seed 21 loses its settler mid-game (checked when written, after
+# patches 0018-0019 shifted the random stream; seed 15 did before them).
+DEFEAT_SEED = 21
+# With the engine AI in every seat and Raging barbarians, the seat takes a city by T240 on this seed (seed 1 did
+# before patches 0018-0019 changed what the AIs build).
+CAPTURE_SEED = 14
 SCORE_KEYS = {"total", "cities", "pop", "tiles", "techs"}
 DIRS = {"N", "NE", "E", "SE", "S", "SW", "W", "NW", "here"}
 
@@ -872,7 +875,7 @@ def test_cities_change_hands(launch, tmp_path):
     citizen fewer, its capital status and palace gone, its borders its new owner's, and the seats are told; one of
     size 1 is destroyed instead. Checked each turn, until the seat has taken a city."""
     b = launch("--autosave", str(tmp_path / "a"))
-    b.call("new_game", seed=SEED, opponents=5, barbarians="Raging", turn_limit=400)
+    b.call("new_game", seed=CAPTURE_SEED, opponents=5, barbarians="Raging", turn_limit=400)
     prev = b.call("world")
     taken = []
     for _ in range(240):

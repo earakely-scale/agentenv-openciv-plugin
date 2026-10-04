@@ -33,7 +33,8 @@ function abbrev(type) {
   const words = String(type || "?").split(/\s+/);
   return words.length > 1 ? (words[0][0] + words[1][0]).toUpperCase() : words[0].slice(0, 2);
 }
-const CIVILIAN = new Set(["Settler", "Worker", "Explorer", "Galley", "Caravel", "Curragh", "Galleon", "Transport", "Leader"]);
+const CIVILIAN = new Set(["Settler", "Worker", "Explorer", "Galley", "Caravel", "Curragh", "Galleon", "Transport", "Leader",
+  "Dromon", "Carrack"]);
 
 // The seat's world: tiles it knows, by position, plus cities and units, from the bridge's known_map.
 class World {
