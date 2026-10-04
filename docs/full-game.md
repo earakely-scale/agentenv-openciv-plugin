@@ -96,7 +96,8 @@ rotated at a 100K context cap.
    - It built no boat (a Curragh never won its city's production choice), settled only its own landmass and moved
      nothing across water; a ship lost at sea left its passengers stranded on the water.
    - Now the AI builds a few ships to explore the ocean (at most min(4, 1 + cities / 6) at a time), ferries a
-     settler and its escort to sites on other landmasses, and a ship lost at sea takes its passengers with it.
+     settler and its escort to sites on other landmasses, and a ship lost at sea takes its passengers with it (a
+     broke AI disbands a loaded ship at sea only after its settlers and workers).
      The agent boards ships (`board`, `unload`) and sees who is aboard what.
    - Measured, 300 turns, Small, 3 AIs, Regent, the engine AI in the seat, seeds 1-3, before and after: on
      Archipelago, 0 → 14-17 boats built per game, 0 → 6-36 cities on another landmass, the seat's known tiles

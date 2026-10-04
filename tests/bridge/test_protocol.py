@@ -873,10 +873,11 @@ def test_cities_change_hands(launch, tmp_path):
     size 1 is destroyed instead. Checked each turn, until the seat has taken a city."""
     b = launch("--autosave", str(tmp_path / "a"))
     # Seed 3: the seat takes a city at T232 (on seed 1 it no longer does by T240 since the AI builds boats, patch 0021).
+    # The window runs to near the turn limit, so that a change to the AI that delays the capture does not fail this.
     b.call("new_game", seed=3, opponents=5, barbarians="Raging", turn_limit=400)
     prev = b.call("world")
     taken = []
-    for _ in range(240):
+    for _ in range(390):
         b.call("autoplay", turns=1, policy="engine_ai")
         world, state = b.call("world"), b.call("state")
         check_cities_and_borders(world)

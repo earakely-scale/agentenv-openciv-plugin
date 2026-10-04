@@ -409,3 +409,135 @@ def test_the_same_seed_ferries_the_same_way(launch):
         b.call("autoplay", turns=150, policy="engine_ai", timeout=600)
         worlds.append((b.call("world"), b.call("state")))
     assert worlds[0] == worlds[1]
+
+
+def edited(launch, tmp_path, found: bool = True, turns: int = 2) -> tuple[dict, Geo, str, list[dict]]:
+    """Archipelago seed 1 after `turns` turns (the capital founded or not), saved: the save, its map, the seat's player
+    id and the AI's cities, to edit and load with `reload`."""
+    b = launch("--autosave", str(tmp_path / "a"))
+    b.call("new_game", seed=SEED, size="Small", landform="Archipelago", turn_limit=300)
+    if found:
+        found_capital(b)
+    for _ in range(turns):
+        b.call("end_turn", skip_idle=True)
+    save = json.loads((tmp_path / "a" / "autosave.json").read_text())
+    g = save["game"]
+    me = next(p for p in g["players"] if p["human"])["id"]
+    return save, Geo(save), me, [c for c in g["cities"] if c["owner"] != me]
+
+
+def reload(launch, tmp_path, save: dict) -> Bridge:
+    path = tmp_path / "edited.json"
+    path.write_text(json.dumps(save))
+    b = launch()
+    b.call("load", path=str(path))
+    return b
+
+
+def new_unit(template: dict, uid: str, kind: str, owner: dict, p: tuple[int, int], moves: float,
+             on: str | None = None) -> dict:
+    """A unit of `owner` (a player of the save) and of its nationality, at `p`; `on` loads it on that ship."""
+    u = {**template, "id": uid, "name": kind, "prototype": kind, "owner": owner["id"],
+         "nationality": owner["civilization"], "currentLocation": {"x": p[0], "y": p[1]},
+         "previousLocation": {"x": p[0], "y": p[1]}, "hitPointsRemaining": 3, "movePointsRemaining": moves,
+         "isAutomated": False, "workerProgressTowardsJob": 0}
+    if on:
+        u["loadedOnUnitId"], u["action"] = on, "fortified"
+    return u
+
+
+def open_sea(geo: Geo, taken: set[tuple[int, int]], far: int = 3) -> tuple[int, int]:
+    """An ocean tile with nothing but water `far` steps around it (no land unit can step ashore in one turn)."""
+    def ring(p: tuple[int, int], n: int) -> set[tuple[int, int]]:
+        seen = {p}
+        for _ in range(n):
+            seen |= {q for s in seen for q in geo.neighbours(s)}
+        return seen
+    return next(p for p in sorted(geo.tiles) if geo.tiles[p]["baseTerrain"] == "ocean" and p not in taken
+                and all(geo.water(q) for q in ring(p, far)))
+
+
+def test_the_seat_is_defeated_with_a_passenger_at_sea(launch, tmp_path):
+    """patches/0020: the seat disbands its last land unit while a Warrior rides a Galley at sea, the Warrior listed
+    before its ship. The civilization is destroyed and every unit goes, the passenger with its ship (removing the units
+    one by one by index ran past the end of the list once a ship took its passenger with it)."""
+    save, geo, me, _ = edited(launch, tmp_path, found=False, turns=1)
+    g = save["game"]
+    g["units"] = [u for u in g["units"] if not (u["owner"] == me and u["prototype"] == "Settler")]
+    template = next(u for u in g["units"] if u["owner"] == me)
+    seat = next(p for p in g["players"] if p["id"] == me)
+    sea = next(p for p in geo.neighbours(at(template)) if geo.water(p))
+    g["units"] += [new_unit(template, "Warrior-900", "Warrior", seat, sea, 1, on="Galley-901"),
+                   new_unit(template, "Galley-901", "Galley", seat, sea, 3)]
+    b = reload(launch, tmp_path, save)
+    s = b.call("state")
+    [worker] = [u["id"] for u in s["units"] if u["type"] == "Worker"]
+    [galley] = [u["id"] for u in s["units"] if u["type"] == "Galley"]
+    assert len(unit(s, galley)["cargo"]) == 1
+    res = b.call("unit_order", unit=worker, order="disband")
+    assert res["message"].endswith("your civilization is defeated and the game is over."), res["message"]
+    s, world = b.call("state"), b.call("world")
+    seat = next(p["index"] for p in world["players"] if p["is_human"])
+    assert s["defeated"] and s["units"] == [] and not [u for u in world["units"] if u["owner"] == seat]
+
+
+def test_a_civ_destroyed_with_a_passenger_at_sea(launch, tmp_path):
+    """patches/0020: the seat takes an AI's only city while a Warrior of that AI rides a Galley far out at sea, the
+    Warrior listed before its ship. The city falls, the civ is destroyed with every unit it had, and the city is gone
+    from the map (the engine used to throw while removing the civ's units, leaving the city on its tile)."""
+    save, geo, me, theirs = edited(launch, tmp_path)
+    g = save["game"]
+    taken = {at(u) for u in g["units"]} | {at(c) for c in g["cities"]}
+    city = next(c for c in theirs if any(not geo.water(p) and p not in taken for p in geo.neighbours(at(c))))
+    them = city["owner"]
+    spot = next(p for p in geo.neighbours(at(city)) if not geo.water(p) and p not in taken)
+    sea = open_sea(geo, taken)
+    template = next(u for u in g["units"] if u["owner"] == me)
+    players = {p["id"]: p for p in g["players"]}
+    g["units"] = [u for u in g["units"] if u["owner"] != them]
+    g["units"] += [new_unit(template, "Warrior-900", "Warrior", players[them], sea, 1, on="Galley-901"),
+                   new_unit(template, "Galley-901", "Galley", players[them], sea, 3),
+                   new_unit(template, "Horseman-902", "Horseman", players[me], spot, 2)]
+    players[me].setdefault("playerRelationships", {})[them] = {}
+    players[them].setdefault("playerRelationships", {})[me] = {}
+    b = reload(launch, tmp_path, save)
+    world = b.call("world")
+    loser = next(c["owner"] for c in world["cities"] if at(c) == at(city))
+    assert {u["type"] for u in world["units"] if u["owner"] == loser} == {"Warrior", "Galley"}
+    war = b.send("declare_war", civ=world["players"][loser]["civ"])
+    assert war["ok"] or war["error"]["code"] == "already_at_war", war
+    horseman = next(u["id"] for u in b.call("state")["units"] if u["type"] == "Horseman")
+    res = b.call("unit_order", unit=horseman, order="attack", x=at(city)[0], y=at(city)[1])
+    assert f"{city['name']} fell" in res["message"], res["message"]
+    world = b.call("world")
+    assert world["players"][loser]["defeated"]
+    assert not [u for u in world["units"] if u["owner"] == loser]
+    assert not [c for c in world["cities"] if at(c) == at(city)]
+    [tile] = [t for t in b.call("map", x=at(city)[0], y=at(city)[1], radius=0)["tiles"]]
+    assert tile["city"] is None and tile["city_site"]["ok"], tile
+    b.call("end_turn", skip_idle=True)
+    check_cargo(b.call("world"))
+
+
+def test_a_broke_ai_spares_the_ship_carrying_its_settler(launch, tmp_path):
+    """patches/0020: an AI out of gold disbands its least useful units, settlers and workers last. A Galley at sea is
+    as weak as a Warrior, but it carries a Settler: the AI disbands Warriors and keeps the Galley and the Settler."""
+    save, geo, me, theirs = edited(launch, tmp_path)
+    g = save["game"]
+    taken = {at(u) for u in g["units"]} | {at(c) for c in g["cities"]}
+    city = theirs[0]
+    them = city["owner"]
+    sea = open_sea(geo, taken)
+    template = next(u for u in g["units"] if u["owner"] == me)
+    ai = next(p for p in g["players"] if p["id"] == them)
+    soldiers = [new_unit(template, f"Warrior-{910 + n}", "Warrior", ai, at(city), 1) for n in range(12)]
+    g["units"] = [new_unit(template, "Galley-901", "Galley", ai, sea, 3),
+                  new_unit(template, "Settler-900", "Settler", ai, sea, 1, on="Galley-901"), *g["units"], *soldiers]
+    ai["gold"] = 0
+    b = reload(launch, tmp_path, save)
+    b.call("end_turn", skip_idle=True)
+    world = b.call("world")
+    ids = {u["id"] for u in world["units"]}
+    assert len({s["id"] for s in soldiers} - ids) >= 3, "the AI is broke and disbands Warriors"
+    assert {"Galley-901", "Settler-900"} <= ids
+    check_cargo(world)

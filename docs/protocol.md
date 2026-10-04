@@ -557,7 +557,11 @@ submodule itself stays untouched):
    completed tech now leaves the queue wherever it is, and a known tech at the head is skipped.
 20. `0020-cargo-goes-down-with-its-ship.patch`: `GameData.RemoveUnit` left a lost ship's passengers on the water,
    still aboard a ship that no longer existed. A ship lost at sea (sunk, disbanded, or disbanded by patch 0007's
-   broke AI) now takes its passengers with it, as in Civ III; one lost in a city puts them ashore, awake.
+   broke AI) now takes its passengers with it, as in Civ III; one lost in a city puts them ashore, awake. As one
+   removal can now take several units, a destroyed civ's units are removed from a copy of its list (by index, the
+   engine threw once a passenger listed before its ship had gone with it, and a captured last city stayed on its
+   tile), a broke human seat stops disbanding when it has no units left, and the broke AI spares a loaded ship at sea
+   as it spares settlers and workers.
 21. `0021-the-ai-explores-by-sea.patch`: the AI builds a few ships to explore the ocean. A coastal city builds one
    while unknown tiles border what its civ knows of the ocean next to it (`ExplorerAI.HasOceanToExplore`, which,
    unlike the check it replaces, changes nothing), the civ is at peace and its ships, built or being built, number
