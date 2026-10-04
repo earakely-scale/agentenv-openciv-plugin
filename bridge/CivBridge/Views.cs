@@ -143,6 +143,7 @@ sealed partial class Session {
 			["shields_per_turn"] = c.CurrentProductionYield().useful,
 			["producing"] = item?.name,
 			["producing_source"] = item == null ? null : ProducingSource(c),
+			["queue"] = QueueJson(c),
 			["production_stored"] = c.shieldsStored,
 			["production_cost"] = item == null ? null : (JsonNode)human.ShieldCost(item),
 			["turns_to_complete"] = ProductionEta(c),
@@ -486,10 +487,39 @@ sealed partial class Session {
 		return null;
 	}
 
+	/// <summary>Sets what a city builds now, and with `then` what it builds after; `city` may name several (Batch.cs).</summary>
 	JsonObject SetProduction(Args a) {
 		EnsurePlaying();
-		City c = CityArg(a);
 		string wanted = a.Str("item");
+		List<IProducible> queue = a.Has("then") ? QueueArg(a.Strings("then")) : null;
+		List<City> cities = CitiesNamed(a.Has("city") ? a.Str("city") : "", out bool many);
+		if (!many) return SetProductionOf(cities[0], wanted, queue);
+		if (cities.Count == 0)
+			throw new BridgeError("no_cities", $"No city of yours matches '{a.Str("city")}' now.", BridgeError.Names(HumanCities().Select(ids.Of)));
+		var results = new JsonArray();
+		var done = new JsonArray();
+		BridgeError first = null;
+		foreach (City c in cities) {
+			try {
+				JsonObject r = SetProductionOf(c, wanted, queue);
+				results.Add(new JsonObject { ["city"] = ids.Of(c), ["ok"] = true, ["message"] = (string)r["message"] });
+				done.Add(r["city"]!.DeepClone());
+			} catch (BridgeError e) {
+				first ??= e;
+				results.Add(new JsonObject { ["city"] = ids.Of(c), ["ok"] = false, ["code"] = e.Code, ["message"] = e.Message });
+			}
+		}
+		if (done.Count == 0) throw first;
+		int failed = cities.Count - done.Count;
+		return new JsonObject {
+			["message"] = $"{done.Count} cit{(done.Count == 1 ? "y" : "ies")} now build{(done.Count == 1 ? "s" : "")} {(string)done[0]!["producing"]}"
+				+ (queue is { Count: > 0 } ? $", then {string.Join(", ", queue.Select(p => p.name))}" : "")
+				+ (failed > 0 ? $"; {failed} could not" : "") + ".",
+			["ok"] = done.Count, ["failed"] = failed, ["results"] = results, ["cities"] = done,
+		};
+	}
+
+	JsonObject SetProductionOf(City c, string wanted, List<IProducible> queue) {
 		var options = c.ListProductionOptions(gd).ToList();
 		IProducible p = options.FirstOrDefault(o => Same(o.name, wanted));
 		if (p == null) {
@@ -506,9 +536,13 @@ sealed partial class Session {
 		}
 		c.SetItemBeingProduced(p);
 		AgentPickedProduction(c);
+		if (queue != null) {
+			if (queue.Count == 0) queues.Remove(c); else queues[c] = [.. queue];
+		}
 		string message = p is Inflow
 			? $"{c.name} now converts its shields into {p.name}."
 			: $"{c.name} now builds {p.name} ({human.ShieldCost(p)} shields, {Eta(ProductionEta(c))}).";
+		if (queues.TryGetValue(c, out var then)) message += $" Then: {string.Join(", ", then.Select(x => x.name))}.";
 		if (p.populationCost > 0 && c.residents.Count <= p.populationCost)
 			message += $" A {p.name} costs {p.populationCost} population, so it completes only once {c.name} reaches size {p.populationCost + 1} (now {c.residents.Count}).";
 		return new JsonObject { ["message"] = message, ["city"] = CityJson(c) };

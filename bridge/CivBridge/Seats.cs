@@ -27,6 +27,9 @@ sealed class Seat(Player player, string label) {
 	public readonly Dictionary<Player, (int Gold, int Turn)> PeaceOffers = [];
 
 	public readonly Dictionary<City, string> ProducingSource = [];
+
+	/// <summary>What each city builds next, after its current item (set_production's `then`), first first.</summary>
+	public readonly Dictionary<City, List<IProducible>> Queues = [];
 	public readonly HashSet<City> PendingProduction = [];
 	public string ResearchSource = Source.Engine;
 	public bool ResearchPending;

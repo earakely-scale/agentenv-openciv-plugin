@@ -1,4 +1,4 @@
-"""OpenCiv3 as an AgentEnv environment: fifteen MCP tools over one CivBridge game (docs/tools.md).
+"""OpenCiv3 as an AgentEnv environment: sixteen MCP tools over one CivBridge game (docs/tools.md).
 
 A game may have several seats, one per agent (new-game `seats`): each MCP request plays the seat its
 X-OpenCiv3-Seat header names, and the turn advances once every seat has ended it. A person may play a seat
@@ -79,6 +79,15 @@ TOKEN_HEADER = "x-openciv3-token"
 
 UnitId = Annotated[str, Field(description='Unit id, e.g. "u7".')]
 CityId = Annotated[str, Field(description='City id, e.g. "c1".')]
+
+
+class UnitOrderSpec(BaseModel):
+    """One order of unit_orders."""
+    unit: str = Field(description='A unit id ("u7"), or a group: "idle" (every unit waiting for orders), "idle:Worker" '
+                                  '(those of a type) or "all:Warrior" (every unit of a type).')
+    order: str = Field(description="As unit_order takes it: fortify, auto_work, explore, goto, settle, hold, ...")
+    x: int | None = Field(default=None, description="Target x, for goto, settle, attack and bombard.")
+    y: int | None = Field(default=None, description="Target y.")
 Coord = Annotated[int | None, Field(description="Map coordinate; x+y is always even.")]
 Rate = Annotated[int | None, Field(ge=0, le=10, description="Tenths of commerce, 0-10; omit to keep the current one.")]
 
@@ -713,8 +722,9 @@ class OpenCiv3Env(AgentEnvEnvironment):
         path = res.get("path")
         return res, res.get("message", "done") + (f" (path {path['length']} tiles, {path['turns']}t)" if path else "")
 
-    async def _set_production(self, city: str, item: str) -> tuple[dict, str]:
-        res, read_as = await self._call_resolving("set_production", "unknown_item", "item", item, city=city)
+    async def _set_production(self, city: str, item: str, then: list[str] | None = None) -> tuple[dict, str]:
+        res, read_as = await self._call_resolving("set_production", "unknown_item", "item", item, city=city,
+                                                  **({"then": then} if then is not None else {}))
         return res, read_as + res.get("message", "done")
 
     async def _research(self, tech: str) -> tuple[dict, str]:
@@ -765,12 +775,14 @@ class OpenCiv3Env(AgentEnvEnvironment):
 
     @tool()
     async def list_units(self, filter: Annotated[Literal["needs_orders", "all"], Field(
-            description="needs_orders (default): only units waiting for orders; all: every unit.")] = "needs_orders"):
+            description="needs_orders (default): only units waiting for orders; all: every unit.")] = "needs_orders",
+                         type: Annotated[str | None, Field(
+                             description='Only units of this type, e.g. "Worker".')] = None):
         """One line per unit: id, type, (x,y), moves, status or standing order, the orders it accepts now, and
-        whether it can found a city on its tile (and why not)."""
+        whether it can found a city on its tile (and why not). Many units at once: unit_orders."""
         async def body():
-            return render.units_list(await self._state(), everything=filter == "all")
-        return await self._run("list_units", {"filter": filter}, body)
+            return render.units_list(await self._state(), everything=filter == "all", kind=type)
+        return await self._run("list_units", {"filter": filter, "type": type}, body)
 
     @tool()
     async def view_map(self, x: Coord = None, y: Coord = None,
@@ -860,16 +872,35 @@ class OpenCiv3Env(AgentEnvEnvironment):
         return await self._run("unit_order", args, body, mutating=True)
 
     @tool()
+    async def unit_orders(self, orders: Annotated[list[UnitOrderSpec], Field(
+            min_length=1, max_length=100, description="The orders, in order; each names a unit or a group.")]):
+        """Order many units in one call: each order is what unit_order takes, for one unit ("u7") or a group:
+        "idle" (every unit waiting for orders), "idle:Worker" or "all:Warrior". E.g. [{"unit": "idle:Worker",
+        "order": "auto_work"}, {"unit": "idle:Warrior", "order": "fortify"}]. One that fails doesn't stop the rest;
+        the reply lists each result."""
+        spec = [o.model_dump(exclude_none=True) for o in orders]
+
+        async def body():
+            res = await self._call("unit_orders", orders=spec)
+            return "\n".join([res.get("message", "done"), *render.batch_lines(res["results"], "unit"),
+                              await self._footer()])
+        return await self._run("unit_orders", {"orders": spec}, body, mutating=True)
+
+    @tool()
     async def city_info(self, city: Annotated[str | None, Field(
             description='City id, e.g. "c1"; omit for all your cities.')] = None):
         """City details: size, food and growth ETA, mood (happy, content, unhappy, defenders), production and ETA,
-        buildings, and everything it can build now with shield cost and turns."""
+        buildings, and everything it can build now with shield cost and turns. With more than 4 cities and none named:
+        one line per city, those waiting on you first."""
         async def body():
-            ids = [city] if city else [c["id"] for c in (await self._state()).get("cities", [])]
+            cities = (await self._state()).get("cities", [])
+            ids = [city] if city else [c["id"] for c in cities]
             if not ids:
                 return "No cities yet — find_city_sites(), then unit_order(unit=..., order=\"settle\", x=..., y=...)."
+            if not city and len(cities) > render.MAX_DETAILED_CITIES:
+                return render.cities_table(await self._state())
             details = [render.city_detail(await self._call("city", city=cid)) for cid in ids]
-            return "\n".join(details) + '\nChange production: set_production(city="...", item="...")'
+            return "\n".join(details) + '\nChange production: set_production(city="...", item="...", then=[...])'
         return await self._run("city_info", {"city": city}, body)
 
     async def _call_resolving(self, cmd: str, code: str, key: str, value: str, **args) -> tuple[dict, str]:
@@ -885,16 +916,30 @@ class OpenCiv3Env(AgentEnvEnvironment):
             return await self._call(cmd, **{key: match}, **args), f"(read {value!r} as {match!r}) "
 
     @tool()
-    async def set_production(self, city: CityId, item: Annotated[str, Field(
-            description='What to build, as named by city_info, e.g. "Settler".')]):
+    async def set_production(
+            self, city: Annotated[str, Field(description=(
+                'City id, e.g. "c1"; several, "c1,c3"; "all"; or "pending" (every city whose next item waits on '
+                'you).'))],
+            item: Annotated[str, Field(description='What to build, as named by city_info, e.g. "Settler".')],
+            then: Annotated[list[str] | None, Field(
+                max_length=10, description='What to build after it, in order (a queue); [] clears the queue; omit '
+                                           'to keep it.')] = None):
         """Set what a city builds; it keeps the shields already stored. A Settler costs 2 population and is delivered
         when the city reaches size 3 (a Worker: size 2): shields build up while the city grows, so start it early,
-        but shields beyond the cost are lost while it waits. After each completion the engine picks the next item;
-        the brief asks you to keep or change it."""
+        but shields beyond the cost are lost while it waits. With `then`, each completion starts the next queued item
+        the city can build; once the queue is empty the engine picks the next item and the brief asks you to keep or
+        change it."""
+        args = {"city": city, "item": item, **({"then": then} if then is not None else {})}
+
         async def body():
-            res, message = await self._set_production(city, item)
-            return "\n".join([message, render.city_line(res["city"]), await self._footer()])
-        return await self._run("set_production", {"city": city, "item": item}, body, mutating=True)
+            res, message = await self._set_production(city, item, then)
+            if "results" not in res:
+                return "\n".join([message, render.city_line(res["city"]), await self._footer()])
+            failed = [r for r in res["results"] if not r["ok"]]
+            return "\n".join([message, *render.batch_lines(failed, "city"),
+                              *(render.city_line(c) for c in res["cities"][:render.MAX_CITY_LINES]),
+                              await self._footer()])
+        return await self._run("set_production", args, body, mutating=True)
 
     @tool()
     async def research(self, tech: Annotated[str | None, Field(

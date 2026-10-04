@@ -93,6 +93,8 @@ sealed partial class Session {
 			["producing_source"] = new JsonObject(producingSource.Where(kv => ids.Of(kv.Key) != null)
 				.Select(kv => KeyValuePair.Create(ids.Of(kv.Key), (JsonNode)kv.Value))),
 			["pending_production"] = Cities(pendingProduction),
+			["queues"] = new JsonObject(queues.Where(kv => ids.Of(kv.Key) != null && human.cities.Contains(kv.Key))
+				.Select(kv => KeyValuePair.Create(ids.Of(kv.Key), (JsonNode)Json.Strings(kv.Value.Select(p => p.name))))),
 			["research_source"] = researchSource,
 			["research_pending"] = researchPending,
 			["agent_research"] = Json.Strings(agentResearch.Select(t => t.Name)),
@@ -192,6 +194,11 @@ sealed partial class Session {
 		foreach (var (id, source) in s["producing_source"]!.AsObject())
 			if (CityOf(id) is City c) producingSource[c] = (string)source;
 		pendingProduction.UnionWith(Cities("pending_production"));
+		var producibles = Producibles(gd).ToList();
+		if (s["queues"] is JsonObject qs)   // saves from before production queues have none
+			foreach (var (id, names) in qs)
+				if (CityOf(id) is City c)
+					queues[c] = [.. names!.AsArray().Select(n => producibles.FirstOrDefault(p => p.name == (string)n)).Where(p => p != null)];
 		researchSource = (string)s["research_source"];
 		researchPending = (bool)s["research_pending"];
 		agentResearch = s["agent_research"]!.AsArray().Select(n => gd.techs.FirstOrDefault(t => t.Name == (string)n)).Where(t => t != null).ToHashSet();

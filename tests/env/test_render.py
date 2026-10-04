@@ -84,7 +84,8 @@ def test_crowded_brief_stays_bounded():
     text = brief_of(s, plan_chars=1000)
     assert len(text) / 4 < 800, len(text) / 4
     assert len(brief_of(s, plan_chars=0)) / 4 < 600
-    assert "+4 more idle units → list_units()" in text
+    assert ('+4 more idle units (3 Settler, 3 Warrior, 3 Worker in all) → list_units() · unit_orders(orders=['
+            '{"unit": "idle:Warrior", "order": "fortify"}, {"unit": "idle:Worker", "order": "auto_work"}])') in text
     assert "+6 more" in text and "+3 more → city_info()" in text
     events = next(line for line in text.splitlines() if line.startswith("EVENTS"))
     assert "learned Pottery" in events and events.endswith("+3 more")
@@ -418,3 +419,40 @@ def test_a_match_brief_states_its_rules_and_game_over_names_the_victor():
     assert text.startswith("GAME OVER — Greece won by domination on T120.")
     assert render.game_over({**over, "victory": {**victory, "civ": "Rome"}}, None).startswith("GAME OVER — you won by")
 
+
+
+def test_a_large_empire_fits_the_brief():
+    """Thirteen cities whose next item the engine picked: one line names them with the call that sets them all, the
+    cities that need a look come first, and city_info's table lists every city with its queue."""
+    s = state(9, idle=0, standing=0, n_events=0)
+    s["cities"] += [city(10 + i, f"Town{i}", 50 + 4 * i, 20, 2, "Warrior") for i in range(4)]
+    for c in s["cities"][4:]:
+        c["producing_source"] = "engine"
+    s["cities"][0]["queue"] = ["Granary", "Library"]
+    s["blockers"] = [{"kind": "choose_production", "id": c["id"], "message": f"The engine picked {c['producing']}"}
+                     for c in s["cities"][4:]]
+    text = brief_of(s, plan_chars=300)
+    assert len(text) / 4 < 600, len(text) / 4
+    picks = next(line for line in text.splitlines() if "cities: the engine picked" in line)
+    assert picks.startswith("  9 cities: the engine picked their next item (c5 Neapolis: Warrior, c6 Ravenna: ")
+    assert ', +1 more) → set_production(city="pending", item="...", then=[...]) sets them all' in picks
+    shown = [line for line in text.splitlines() if line.startswith("  c")]
+    assert len(shown) == render.MAX_CITY_LINES and all("(engine pick)" in line for line in shown)
+    assert "+7 more → city_info()" in text
+    table = render.cities_table(s).splitlines()
+    assert table[0] == "CITIES (13, 9 waiting on a production choice) T34" and len(table) == 15
+    assert any(line.startswith("  c1 Rome") and line.endswith("then Granary, Library") for line in table)
+    assert 'set_production(city="pending", item=..., then=[...]) sets every waiting city at once' in table[-1]
+
+
+def test_batch_results_and_unit_filters():
+    lines = render.batch_lines([{"unit": "u1", "ok": True, "message": "u1 Warrior is fortified."},
+                                {"unit": "u9", "ok": False, "code": "unknown_unit", "message": "There is no unit."}],
+                               "unit")
+    assert lines == ["  u1: u1 Warrior is fortified.", "  u9: ✗ There is no unit."]
+    s = state(0, idle=6, standing=0, n_events=0)
+    workers = render.units_list(s, everything=False, kind="worker")
+    assert workers.splitlines()[0] == "UNITS worker needing orders (2 of 2) T34"
+    assert render.units_list(s, everything=False).splitlines()[-1] == (
+        'many at once → unit_orders(orders=[{"unit": "idle:Warrior", "order": "fortify"}, '
+        '{"unit": "idle:Worker", "order": "auto_work"}])')

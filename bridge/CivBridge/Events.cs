@@ -44,10 +44,18 @@ sealed partial class Session {
 			bool completed = built.Any(b => b.Item2);
 			if (completed) Decided("production", ProducingSource(c));
 			bool repicked = completed || c.itemBeingProduced != s.Item;
-			if (repicked) EnginePickedProduction(c);
+			// The city's queue (set_production's `then`) goes before the engine's pick.
+			var skipped = new List<string>();
+			IProducible queued = repicked ? NextQueued(c, skipped) : null;
+			if (queued != null) {
+				c.SetItemBeingProduced(queued);
+				AgentPickedProduction(c);
+			} else if (repicked) EnginePickedProduction(c);
+			string dropped = skipped.Count == 0 ? ""
+				: $" ({string.Join(", ", skipped)} left the queue: {c.name} cannot build {(skipped.Count == 1 ? "it" : "them")} now)";
 			for (int i = 0; i < built.Count; i++) {
 				string next = repicked && i == built.Count - 1 && c.itemBeingProduced != null
-					? $"; the engine picked {c.itemBeingProduced.name} next"
+					? (queued != null ? $"; next from your queue: {queued.name}" : $"; the engine picked {c.itemBeingProduced.name} next") + dropped
 					: "";
 				events.Add(Event("built", $"{c.name} built {built[i].Item1}{next}.", c.location));
 			}
