@@ -516,6 +516,11 @@ submodule itself stays untouched):
    in one of its civ's cities now adds `ShieldRateForDisbanding` (a quarter) of its cost to what the city builds,
    unless that is a great wonder or wealth (`City.TakesDisbandShields`); `unit_order`'s `disband` message says how
    many.
+15. `0015-a-tech-got-out-of-order-leaves-the-research-queue.patch`: `Player.CompleteResearchingTech` dropped the
+   research queue's head whatever tech was completed, so a tech got in a trade dropped the one being researched,
+   and a traded tech further down the queue stayed in it; at the head, `PlayerAI.MaybePickTechToResearch` picked it
+   again forever and the turn hung (a seat with a `set_research` queue, played by `autoplay`'s `engine_ai`). The
+   completed tech now leaves the queue wherever it is, and a known tech at the head is skipped.
 
 Measured over full 540-turn Standard games with 7 AIs at Regent (seeds 1-3), patches 0005-0009 take:
 - mean AI techs at T540 from 32 to 43-45, and civs with an Industrial-era tech from 0 to 3-7;

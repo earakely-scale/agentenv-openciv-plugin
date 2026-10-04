@@ -616,8 +616,8 @@ This repository is licensed under the Apache License 2.0 ([LICENSE](LICENSE), [N
   game's seeded RNG, budget and AI-turn errors are contained, buildings that need another building and small wonders
   become buildable, the AI funds its science, supports its units, changes government and makes peace, research
   cost follows the difficulty, battles tell an observer each round as they are fought, a city taken changes hands,
-  units tell an observer each step they take, the palace moves when the capital falls, and a unit disbanded in a
-  city adds its shields.
+  units tell an observer each step they take, the palace moves when the capital falls, a unit disbanded in a city
+  adds its shields, and a tech got in a trade leaves the research queue without hanging the turn.
 - The image also contains Blast (Apache-2.0), Serilog (Apache-2.0), MoonSharp (BSD-3-Clause), ini-parser (MIT), the
   .NET runtime (MIT) and a static FFmpeg build (GPL-3.0-or-later); it carries their licences in
   `/opt/civbridge/licenses/`. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

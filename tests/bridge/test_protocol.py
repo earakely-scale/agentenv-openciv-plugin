@@ -442,6 +442,28 @@ def test_unit_order_errors(game):
     assert [e["kind"] for e in r["events"]].count("city_founded") == 1
 
 
+def test_a_tech_got_out_of_order_leaves_the_research_queue(launch, tmp_path):
+    """patches/0015: a tech further down the research queue that the seat got another way (a trade) stayed in it;
+    once it came to the head the engine picked it again and again, and the turn hung."""
+    b = launch("--autosave", str(tmp_path / "a"))
+    b.call("new_game", seed=SEED, turn_limit=200)
+    found_capital(b)
+    queue = b.call("set_research", tech="Monarchy")["queue"]
+    assert len(queue) >= 3
+    b.call("end_turn", skip_idle=True)
+    path = tmp_path / "a" / "autosave.json"
+    save = json.loads(path.read_text())
+    me = next(p for p in save["game"]["players"] if p["human"])
+    me["knownTechs"].append(me["researchQueue"][1])   # as if traded for
+    path.write_text(json.dumps(save))
+    r = launch("--timeout", "15")
+    r.call("load", path=str(path))
+    res = r.call("autoplay", turns=60, policy="null")
+    research = r.call("state")["research"]
+    assert res["turn"] > 30 and queue[0] in r.call("techs")["known"]
+    assert queue[1] not in research["queue"] and research["current"] not in r.call("techs")["known"]
+
+
 def test_game_over_at_turn_limit(launch):
     b = launch()
     b.call("new_game", seed=SEED, turn_limit=2)

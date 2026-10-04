@@ -1,0 +1,30 @@
+A tech a civ gets out of order leaves its research queue, and the queue's head stays. Player.CompleteResearchingTech dropped the queue's head whatever the tech was, so a tech got in a trade (Player.ExecuteDeal) dropped the one being researched instead, and when the traded tech was further down the queue it stayed there; once it came to the head, PlayerAI.MaybePickTechToResearch set it as the research, saw it known, and picked it again forever, hanging the turn. A queue of several techs comes from asking for a tech with prerequisites (the bridge's set_research), and the engine's AI trades techs when it plays that seat (autoplay's engine_ai policy). The completed tech now leaves the queue wherever it is, and MaybePickTechToResearch skips a known tech at the head (as a save from before this can hold).
+
+--- a/C7Engine/C7GameData/Player.cs
++++ b/C7Engine/C7GameData/Player.cs
+@@ -977,9 +977,10 @@
+ 
+ 			SetCurrentlyResearchedTech(null);
+ 
+-			// remove completed tech from the current research queue
++			// remove the completed tech from the research queue, wherever it is: a tech got in a trade need not be
++			// at its head, and the head is still to research then
+ 			if (ResearchQueue.Count > 0) {
+-				ResearchQueue.Dequeue();
++				ResearchQueue = new Queue<Tech>(ResearchQueue.Where(t => !knownTechs.Contains(t.id)));
+ 			}
+ 
+ 			if (CanAdvanceToNextEra(gameData)) {
+--- a/C7Engine/AI/PlayerAI.cs
++++ b/C7Engine/AI/PlayerAI.cs
+@@ -144,6 +144,10 @@
+ 					break;
+ 				}
+ 
++				// A known tech at the head (an older save can hold one) would be picked again and again.
++				while (player.ResearchQueue.Count > 0 && player.knownTechs.Contains(player.ResearchQueue.Peek().id)) {
++					player.ResearchQueue.Dequeue();
++				}
+ 				if (player.ResearchQueue.Count <= 0) {
+ 					player.AddTechItemToResearchQueue(toResearch);
+ 				}
