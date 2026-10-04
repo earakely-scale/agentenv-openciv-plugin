@@ -300,12 +300,13 @@ PROBE_LATER = TEXT + """
   const frames = [], shown = sel => { const e = $(sel); return e && !e.hidden ? text(e) : null; };
   setInterval(() => {
     if (!$("#moment") || !M.ready) return;
-    const div = document.createElement("div");
+    const recap = loopShot(6), div = document.createElement("div");   // the loop's recap slot, as the director asks
     div.innerHTML = raceCard();
     const race = text(div);
-    div.innerHTML = recapCard(M.events.filter(e => e.kind !== "city_founded").slice(-3));
+    div.innerHTML = recap.key === "recap" ? recapCard(recapEvents()) : "";
     frames.push({t: Math.round(performance.now()), card: shown("#moment"), chyron: shown("#chyron"),
-      duel: shown("#duel"), brand: text($(".brand")), turnbig: text($("#turnbig")), race, recap: text(div),
+      duel: shown("#duel"), brand: text($(".brand")), turnbig: text($("#turnbig")), recap: text(div),
+      recapKey: recap.key, race,
       markup: $$("#duel .act *, .brand i, .moment .big *").length});
     $("#probe").textContent = JSON.stringify(frames);
   }, 250);"""
@@ -331,9 +332,11 @@ def test_the_stream_tells_the_later_games_stories(later, tmp_path):
     assert meet and era and wonder and trade, [f["card"] for f in frames if f["card"]]
     assert meet["t"] < wonder["t"] < trade["t"]
     assert first("chyron", "wonder", "The Pyramids in Veii")   # then the camera on the city
-    # the loop's cards: the race against each victory, and the story so far
+    # the race card (each seat against each victory); and the loop's recap of the story so far, once three stories
+    # have happened (not before)
     assert first("race", "The race", "Opus 5.5", "Rome", "sol", "Greece", "Land", "People", "two thirds")
-    assert first("recap", "The story so far", "trade")
+    assert frames[0]["recapKey"] != "recap"
+    assert first("recap", "The story so far", "Middle Ages", "The Pyramids", "trade")
     assert all(f["markup"] == 0 for f in frames)
 
 

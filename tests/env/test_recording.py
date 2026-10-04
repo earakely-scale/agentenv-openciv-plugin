@@ -138,6 +138,8 @@ def later_game(snaps: list[dict]) -> list[dict]:
     upgrades its Warrior on T4, and lands its Worker from a ship in Greece's land on T6."""
     snaps = at_war(snaps)
     greek = next(r for r in snaps[-1]["tiles"] if r[2] not in ("ocean", "sea", "coast") and r[4] == 1)
+    sea = next(r for r in snaps[-1]["tiles"] if r[2] in ("ocean", "sea", "coast"))
+    wild = next(r for r in snaps[-1]["tiles"] if r[2] not in ("ocean", "sea", "coast") and r[4] == -1)
     for s in snaps:
         t = s["turn"]
         s["date"] = f"{4000 - 50 * t} BC"
@@ -150,10 +152,16 @@ def later_game(snaps: list[dict]) -> list[dict]:
         for u in s["units"]:
             if u["id"] == 4 and t >= 4:
                 u["type"] = "Spearman"
-            if u["id"] == 2:
+            if u["id"] == 2:   # at sea aboard a ship on T5, ashore in Greece on T6: a landing
                 u["aboard"] = "ship-9" if t == 5 else None
+                if t == 5:
+                    u["x"], u["y"] = sea[0], sea[1]
                 if t == 6:
                     u["x"], u["y"] = greek[0], greek[1]
+            if u["id"] == 4 and t in (2, 3):   # aboard in port (a ship that never sailed) then off it: no landing
+                u["aboard"] = "ship-8" if t == 2 else None
+                if t == 3:
+                    u["x"], u["y"] = wild[0], wild[1]
         trade = {"seq": 40, "turn": 5, "a": 0, "b": 1, "a_gave": "Bronze Working", "b_gave": "60 gold"}
         s["trades"] = [trade] if t == 5 else []
     return snaps
@@ -199,6 +207,22 @@ def test_a_city_named_like_one_its_civ_lost_is_a_new_city(game):
     m = MatchData.from_snapshots(snaps)
     athens = [(t["turn"], e["kind"]) for t in m.turns for e in t["events"] if "Athens" in e.get("text", "")]
     assert athens == [(4, "city_captured"), (5, "city_founded")]
+
+
+def test_a_game_from_an_older_bridge_does_not_announce_the_wonders_it_has(game):
+    """Snapshots without `wonders` up to T3 (a game begun on an older bridge), with them from T4: the Pyramids already
+    built aren't news on T4; the Colossus, new on T5, is."""
+    snaps = copy.deepcopy(game)
+    for s in snaps:
+        for c in s["cities"]:
+            c.pop("wonders", None)
+            if s["turn"] >= 4:
+                c["wonders"] = ["The Pyramids"] if c["name"] == "Veii" else []
+            if s["turn"] >= 5 and c["name"] == "Rome":
+                c["wonders"] = ["The Colossus"]
+    m = MatchData.from_snapshots(snaps)
+    assert [(t["turn"], e["wonder"]) for t in m.turns for e in t["events"] if e["kind"] == "wonder_built"] == [
+        (5, "The Colossus")]
 
 
 def test_older_snapshots_keep_the_bridges_contact_events(game):

@@ -29,7 +29,8 @@ BRIDGE_KINDS = {"unit_lost", "unit_promoted", "gold_stolen", "disorder", "disord
 SCORE_KEYS = ("total", "cities", "pop", "tiles", "techs")
 # A player's stats per turn: the snapshot's own, then what the race needs (culture, era, shares of land and people;
 # snapshots from before them have none) and what is counted here (military units, great wonders).
-STAT_KEYS = ("gold", "government", "research", "at_war", "culture", "era", "land", "pop")
+STAT_KEYS = ("gold", "government", "research", "at_war", "culture", "city_culture", "era", "land", "pop")
+NONCOMBAT = set(CIVILIAN) | {"Scout"}   # the army counts the rest
 ERAS = ("Ancient Times", "Middle Ages", "Industrial Age", "Modern Era")
 
 Actions = dict[int, dict[int, list[dict]]]     # turn -> player index -> [{"text", "ok"}]
@@ -265,7 +266,7 @@ class MatchData:
     def _stats(self, p: dict, snap: dict) -> dict:
         i = p["index"]
         out = {k: p[k] for k in STAT_KEYS if k in p}
-        out["military"] = sum(1 for u in snap["units"] if u["owner"] == i and u["type"] not in CIVILIAN)
+        out["military"] = sum(1 for u in snap["units"] if u["owner"] == i and u["type"] not in NONCOMBAT)
         out["wonders"] = sum(len(c.get("wonders") or ()) for c in snap["cities"] if c["owner"] == i)
         return out
 
@@ -346,13 +347,16 @@ class MatchData:
         """What every civ did that the scores don't show: great wonders, new eras, first contacts, the seats' trades,
         units upgraded and units landed from ships (docs/viewer.md, the stream's stories)."""
         prev, name, out = self._prev, self.name, []
-        wonders = {(w, c["name"], c["owner"], c["x"], c["y"]) for c in snap["cities"] for w in c.get("wonders") or ()}
-        if self._wonders is not None:
-            for w, city, owner, x, y in sorted(wonders):
-                if w not in self._wonders:
-                    out.append(_ev("wonder_built", owner, f"{name(owner)} completed {w} in {city}", {"x": x, "y": y},
-                                   wonder=w, city=city))
-        self._wonders = (self._wonders or set()) | {w[0] for w in wonders}
+        # a wonder new in the world; the first snapshot with the field (a game begun on an older bridge) only seeds them
+        if any("wonders" in c for c in snap["cities"]):
+            wonders = {(w, c["name"], c["owner"], c["x"], c["y"])
+                       for c in snap["cities"] for w in c.get("wonders") or ()}
+            if self._wonders is not None:
+                for w, city, owner, x, y in sorted(wonders):
+                    if w not in self._wonders:
+                        out.append(_ev("wonder_built", owner, f"{name(owner)} completed {w} in {city}",
+                                       {"x": x, "y": y}, wonder=w, city=city))
+            self._wonders = (self._wonders or set()) | {w[0] for w in wonders}
         for t in snap.get("trades") or ():
             out.append(_ev("trade", t["a"], f"{name(t['a'])} traded {t['a_gave']} to {name(t['b'])} for {t['b_gave']}",
                            frm=t["b"], gave=t["a_gave"], got=t["b_gave"]))
@@ -374,17 +378,25 @@ class MatchData:
                         out.append(_ev("contact", i, f"First contact: {name(i)} meets {name(j)}", frm=j))
         # units by engine id: one whose type changed was upgraded; one off a ship onto land landed there
         before = {u["id"]: u for u in prev["units"] if u.get("id")}
+        ships = {u["id"]: u for u in snap["units"] if u.get("id")}
         upgraded: dict[int, list[tuple[dict, str]]] = {}
-        landed: dict[int, list[dict]] = {}
+        landed: dict[tuple[int, int], list[dict]] = {}
         for u in snap["units"]:
             was = before.get(u.get("id"))
             if was is None or was["owner"] != u["owner"]:
                 continue
             if was["type"] != u["type"]:
                 upgraded.setdefault(u["owner"], []).append((u, was["type"]))
-            if was.get("aboard") and not u.get("aboard") and not self._water(u["x"], u["y"]) \
-                    and self._owner_at(snap, u["x"], u["y"]) != u["owner"]:   # ashore at home is no story
-                landed.setdefault(u["owner"], []).append(u)
+            if was.get("aboard") and not u.get("aboard") and not self._water(u["x"], u["y"]):
+                # off a ship that was at sea, or that sailed from port since (not one that stayed in port: walking
+                # out of it is no landing), onto land not its own (ashore at home is no story)
+                ship_was, ship = before.get(was["aboard"]), ships.get(was["aboard"])
+                at = (lambda v: (v["x"], v["y"]) if v else None)   # noqa: E731
+                moved = ship is not None and ship_was is not None and at(ship) != at(ship_was)
+                sailed = self._water(was["x"], was["y"]) or moved
+                land_of = self._owner_at(snap, u["x"], u["y"])
+                if sailed and land_of != u["owner"]:
+                    landed.setdefault((u["owner"], land_of), []).append(u)
         for owner, ups in sorted(upgraded.items()):
             pairs: dict[tuple[str, str], int] = {}
             for u, was in ups:
@@ -392,9 +404,8 @@ class MatchData:
             (frm, to), n = max(pairs.items(), key=lambda kv: kv[1])
             what = f"{n} {frm} to {to}" + (f" and {len(ups) - n} more" if len(ups) > n else "")
             out.append(_ev("units_upgraded", owner, f"{name(owner)} upgraded {what}", ups[0][0]))
-        for owner, units in sorted(landed.items()):
+        for (owner, land_of), units in sorted(landed.items()):
             u, n = units[0], len(units)
-            land_of = self._owner_at(snap, u["x"], u["y"])
             where = f" in {name(land_of)}'s land" if land_of >= 0 else " on unclaimed land"
             out.append(_ev("landing", owner, f"{name(owner)} landed {n} unit{'s' if n > 1 else ''} from the sea{where}",
                            u, frm=land_of if land_of >= 0 else None))

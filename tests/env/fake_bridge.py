@@ -925,8 +925,8 @@ class Game:
                      research=self.research if me else None,
                      at_war=sorted(index[c] for c in self.wars) if me else [0] if p["civ"] in self.wars else [],
                      contacts=[index["Greece"]] if me and self.met else [0] if p["civ"] == "Greece" and self.met
-                     else [], culture=self.turn * (3 if me else 2), era=0, land=0.05 if me else 0.02,
-                     pop=0.3 if me else 0.2)
+                     else [], culture=self.turn * (3 if me else 2), city_culture=self.turn, era=0,
+                     land=0.05 if me else 0.02, pop=0.3 if me else 0.2)
         athens = self.foreign_city["pos"]
         tiles = []
         for y in range(HEIGHT):

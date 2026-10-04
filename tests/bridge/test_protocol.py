@@ -1348,6 +1348,7 @@ def test_world_snapshot_schema_2(launch, tmp_path):
     race = state["race"]["you"]
     assert world["date"] == state["date"] and world["trades"] == [] and city["wonders"] == []
     assert (rome["culture"], rome["era"]) == (race["culture"], state["era"])
+    assert 0 <= rome["city_culture"] <= rome["culture"]
     assert (round(rome["land"], 3), round(rome["pop"], 3)) == (race["land"], race["pop"])
     assert all(0 <= p["land"] <= 1 and 0 <= p["pop"] <= 1 for p in world["players"])
 

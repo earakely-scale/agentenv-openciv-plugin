@@ -18,7 +18,7 @@ of any seat. This page is the contract between the bridge, the env and the app.
 | `players[i].contacts` | the player indices this player has met |
 | `cities[i].id`, `.production` | a stable city id, and the name of what the city builds (null if nothing) |
 | `units[i].id` | a stable unit id, unique within the game, so a viewer can follow a unit from turn to turn |
-| `date`, `players[i].culture`, `.era`, `.land`, `.pop`, `cities[i].wonders`, `trades` | the race and the later game's stories ([recording.md](recording.md)) |
+| `date`, `players[i].culture`, `.city_culture`, `.era`, `.land`, `.pop`, `cities[i].wonders`, `trades` | the race and the later game's stories ([recording.md](recording.md)) |
 
 ## 2. The viewer's data (`agentenv_openciv3.matchdata`)
 
@@ -55,8 +55,8 @@ the turns it hasn't seen; a recording embeds the whole document.
     "battles": [[seq, kind, winner, rounds, city, seen, ...attacker, ...defender]],
     "scores": {"1": [total, cities, pop, tiles, techs, defeated]},
     "stats":  {"1": {"gold": 40, "government": "Despotism", "research": "Bronze Working", "at_war": [3],
-                     "culture": 120, "era": 0, "land": 0.04, "pop": 0.15,   // the race, when the snapshot has it
-                     "military": 6, "wonders": 1}},     // units that fight, and great wonders, counted here
+                     "culture": 120, "city_culture": 80, "era": 0, "land": 0.04, "pop": 0.15,   // the race
+                     "military": 6, "wonders": 1}},     // units that fight (not Scouts), great wonders: counted here
     "events": [{"kind": "city_captured", "owner": 1, "from": 3, "x": 10, "y": 12, "text": "...",
                 "source": "derived" | "bridge"}],
     "actions": {"1": [{"text": "u4 settle → (32,28)", "ok": true}]},   // made during turn - 1, by seat civs
@@ -96,7 +96,12 @@ the turns it hasn't seen; a recording embeds the whole document.
   events are kept for the kinds the snapshots can't show (`unit_lost`, `gold_stolen`, `disorder`, …, and `contact`
   in snapshots without `contacts`); per-seat chatter (`city_grew`, `job_done`, `built`, `threat`) is dropped.
 - **Names:** with new-game `broadcast.names` (`{"opus": "Opus 5.5"}`), a seat's player has its `name`, and the events'
-  texts use it; the viewer shows a seat by `name`, else `label`, else civ.
+  texts use it; the viewer (live, and the env's recordings and videos) shows a seat by `name`, else `label`, else civ.
+- **Cities** are told apart by their engine `id` from one snapshot to the next (by name in snapshots without ids): a
+  civ that lost a city may found another of the same name. A great wonder is announced when it first appears in the
+  world; the first snapshot with `wonders` (a game begun on an older bridge) only notes those already built. A
+  landing is a unit off a ship that was at sea, or that sailed from port since, onto land not its own; landings on
+  one owner's land in one turn are one event.
 - **Lead changes** are every change of the top score (a tie keeps the old leader). The viewer and the video show one
   once the new leader has held the lead every turn since, for up to 5 turns, judged with nothing after the turn shown;
   while the top score is tied, no one leads.
@@ -144,7 +149,7 @@ choosing what to show. Parameters, after `stream`:
 |---|---|
 | `client` | Spotlights show the agent's real-client view full size, not in the corner |
 | `cast=URL` | The casters' service (`streamer/caster.py`, e.g. `http://127.0.0.1:8790`): their lines are voiced and captioned |
-| `title=TEXT` | The broadcast's name, in the top bar and on the title card; without it the title card shows the task's (`live.broadcast.title`) |
+| `title=TEXT` | The broadcast's name, in the top bar and on the title card; without it both show the task's (`live.broadcast.title`) |
 
 On screen: the map and the side panel (standings, the spotlit agent's card with its newest note, plan and turn, the
 diplomacy feed, the score chart while no agent is spotlit, and the events), a lower-third caption while a caster
@@ -155,7 +160,7 @@ turn's year.
 **The score bug** sits over the top of the map while the map is shown: each seat (up to six; two face each other
 across the year and the turn) with its name and civ, rank and score, cities, people, techs, army, gold and great
 wonders, its shares of the land and of the people against domination's two thirds (a mark on each bar), its culture
-once a civ has a tenth of the cultural victory's 100,000, and its turn as it goes: thinking (or playing) for how long
+once a civ has a tenth of the cultural victory's 100,000 (or a city a tenth of a city's 20,000), and its turn as it goes: thinking (or playing) for how long
 with how many tool calls, or ended and after how long, and its newest action. In the last 25 turns it counts them down.
 
 **The director** cuts between shots. The data's new turns and new messages queue them; a shot holds the screen for at
@@ -179,11 +184,11 @@ at least 6 s left.
 | A seat's trade (`trade`) | Both sides' colours, "Trade", and what each gave, then their border |
 | A landing by a seat or on a seat's land (`landing`) | The camera on the beach, with a caption |
 | A seat's new era (`era_entered`) | A card ("Opus 5.5 enters the Middle Ages"), then a spotlight on it |
-| A civ near a victory | Once each: half the land and half the people ("closes in on domination"), or half the cultural victory's culture: a card, then a spotlight; with 25, 10 and 3 turns left, the race card |
+| A civ near a victory | Once each: half the land and half the people ("closes in on domination"), or half the cultural victory's culture (50,000, or 10,000 in one city): a card, then a spotlight; with 25, 10 and 3 turns left (in a game at least four times as long), the race card |
 | A seat's upgrades (`units_upgraded`) | A short look, with a caption |
 | A new message | A speech bubble over the map (6.6 s) while the camera flies to the sender; one waits per sender, a newer message taking the older one's place, stale after 30 s (the diplomacy feed has them all) |
 | A civ's second to fourth city | A short look at the new city (6 s), with a caption; stale after 20 s |
-| Nothing queued: the loop | The whole map (20 s), three agents in the spotlight (15 s each), every agent's panel (25 s), the race card (13 s, after turn 10: each seat, and an AI leading the table, with its score over the game and its shares against each victory), and the story so far (13 s: the biggest events since the last one, or the last 40 turns, when there are at least three besides lead changes; else a spotlight); with `client` and the client, the whole map and then each agent's client view (15 s each). While messages flood in, the loop's wide shots are the map and the panels, not its cards |
+| Nothing queued: the loop | The whole map (20 s), three agents in the spotlight (15 s each), every agent's panel (25 s), the race card (13 s, after turn 10: the best four seats by score, or three and an AI that leads the table, each with its score over the game and its shares against each victory), and the story so far (13 s: the biggest events since the last one, or the last 40 turns, when there are at least three besides lead changes; else a spotlight); with `client` and the client, the whole map and then each agent's client view (15 s each). While messages flood in, the loop's wide shots are the map and the panels, not its cards |
 
 **The casters** (`cast`): the page asks `<cast>/cast.json?since=<last id>` every second and plays the lines in order:
 `new Audio(<cast>/<line.audio>)` with the caption up while it plays, or the caption alone for `seconds` when a line has

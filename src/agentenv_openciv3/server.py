@@ -1424,7 +1424,8 @@ class OpenCiv3Env(AgentEnvEnvironment):
             files, rendered_notes = await asyncio.to_thread(
                 recording.render, snapshots, formats=own, view=view, fps=fps, name=name, actions=actions,
                 baselines=baselines, seat_actions=seat_actions, calls=calls, client_videos=client_videos or None,
-                humans=[s.civ for s in self.seats if s.human], seat_notes=seat_notes, plans=plans, messages=messages)
+                humans=[s.civ for s in self.seats if s.human], seat_notes=seat_notes, plans=plans, messages=messages,
+                names=(self.scenario.get("broadcast") or {}).get("names"))
             notes = rendered_notes + notes
         return {"turns": len(snapshots), "notes": notes,
                 "files": [{"name": f.name, "content_type": f.content_type, "bytes": len(f.data),

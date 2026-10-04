@@ -399,8 +399,8 @@ body.stream .agentsview.dense .acard .mind .tx { -webkit-line-clamp: 1; }
 .duel .rk { color: var(--muted); font-size: 15px; } .duel .sc { font: 800 26px/1 var(--display); font-variant-numeric: tabular-nums; }
 .duel .bits { color: var(--text2); font-size: 14px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   font-variant-numeric: tabular-nums; }
-.duel .meters { display: flex; gap: 14px; margin-top: 5px; align-items: center; }
-.duel .cult { font-size: 13px; color: var(--text2); white-space: nowrap; } .duel .cult b { color: var(--gold); }
+.duel .meters { display: flex; gap: 14px; margin-top: 5px; align-items: center; min-width: 0; overflow: hidden; }
+.duel .cult { font-size: 13px; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; } .duel .cult b { color: var(--gold); }
 .duel .now { display: flex; gap: 10px; margin-top: 5px; font-size: 13px; color: var(--muted); min-width: 0; white-space: nowrap; }
 .duel .side.busy .st { color: var(--gold); } .duel .side.busy .st::before { content: "● "; animation: blink 1.4s infinite; }
 .duel .side.done .st { color: var(--good); }
@@ -422,9 +422,9 @@ body.stream .agentsview.dense .acard .mind .tx { -webkit-line-clamp: 1; }
 .duel:not(.n1):not(.n2) .cv { display: none; } .duel:not(.n1):not(.n2) .cvb { display: inline; color: var(--text); }
 .duel:not(.n1):not(.n2) .meter .track { display: none; } .duel:not(.n1):not(.n2) .meter { flex: none; }
 .duel:not(.n1):not(.n2) .meter .mv { min-width: 0; }
-body.stream.has-duel .chyron { top: 168px; }
-body.stream.has-duel .bubble { top: 170px; }
-body.stream.has-duel .clientpane:not(.big) { top: 170px; }
+body.stream.has-duel .chyron { top: calc(var(--duel-h, 130px) + 38px); }
+body.stream.has-duel .bubble { top: calc(var(--duel-h, 130px) + 40px); }
+body.stream.has-duel .clientpane:not(.big) { top: calc(var(--duel-h, 130px) + 40px); }
 @keyframes blink { 50% { opacity: .25; } }
 
 .moment .slab.story .big { font-size: 120px; } .moment .slab.story .big.long { font-size: 84px; }
@@ -433,7 +433,7 @@ body.stream.has-duel .clientpane:not(.big) { top: 170px; }
 .moment.card-trade .pair .civ { font-size: 26px; }
 .moment.card-contact .pair .vs span { color: #8fb4ff; }
 .moment.card-trade .meta, .moment.card-contact .meta { text-align: center; }
-.moment.card-race, .moment.card-recap { background: rgba(7,9,13,.94); padding: 0 120px; }
+.moment.card-race, .moment.card-recap { background: rgba(7,9,13,.94); padding: 0 120px; justify-content: safe center; }
 .race h1, .recap h1 { font: 900 84px/1 var(--display); font-stretch: condensed; text-transform: uppercase; margin: 0 0 8px; }
 .race h1 span, .recap h1 span { font: 600 30px/1 system-ui, sans-serif; color: var(--gold); text-transform: none; margin-left: 18px; }
 .race .how { color: var(--text2); font-size: 22px; margin: 0 0 26px; }

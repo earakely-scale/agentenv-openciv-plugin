@@ -58,7 +58,7 @@ EVENTS = ("civ_destroyed", "city_captured", "city_destroyed", "war_declared", "w
           "peace_signed", "trade", "lead_change", "era_entered", "government_changed", "units_upgraded",
           "city_founded")   # the events worth a call, the biggest first
 SEATS_ONLY = ("contact", "era_entered", "units_upgraded")   # news when a model's civ is in it, not between AIs
-DOMINATION, CULTURE_GOAL = 2 / 3, 100000    # Civ III's victories (docs/protocol.md, state.race)
+DOMINATION, CULTURE_GOAL, CITY_CULTURE_GOAL = 2 / 3, 100000, 20000   # Civ III's victories (docs/protocol.md)
 EARLY_CITIES = 3        # a civ's first cities are news, later ones are not
 # Slurs and strong profanity, whole words: the env's moderation.BLOCKLIST (ROT13, so the repository holds no plaintext
 # slurs), copied because this runs without the env's package. A line that says one gets "bleep" instead.
@@ -84,8 +84,8 @@ TOPICS = {  # what the analysis is about when nothing new happened, each in turn
     "rivals": "a head-to-head between the two players closest in score",
     "victory": "the paths to victory: who is closest to domination (two thirds of the land and of the people), to a "
                "cultural victory, or to the top score at the turn limit, by the numbers",
-    "wonders": "the great wonders and culture: who has built which wonders, and what they say about each player's "
-               "plan",
+    "wonders": "the great wonders and culture: who has built how many wonders, who has the most culture, and what "
+               "that says about each player's plan",
 }
 
 SYSTEM = """\
@@ -479,7 +479,8 @@ class Caster:
         stats = m.turns[-1].get("stats") or {}
         fits = {"wars": any(s.get("at_war") for s in stats.values()), "clock": bool(m.live.get("seats")),
                 "plans": bool(self.plans()), "bottom": len(m.civs) >= 3, "race": len(m.civs) >= 2,
-                "rivals": len(m.civs) >= 2}
+                "rivals": len(m.civs) >= 2, "victory": bool(self.race()),
+                "wonders": any(s.get("wonders") for s in stats.values())}
         topic = min((t for t in TOPICS if fits.get(t, True)), key=lambda t: self.topics_used.get(t, -1))
         pbp, color = self.names
         return Beat("color", f"Nothing new to call this moment, so the desk fills with analysis. The angle: "
@@ -656,9 +657,13 @@ class Caster:
         out = (f"The race: domination needs {DOMINATION:.0%} of the land and of the people; nearest {m.who(near)} with "
                f"{stats[near]['land']:.0%} and {stats[near]['pop']:.0%}")
         top = max(stats, key=lambda i: stats[i].get("culture") or 0)
-        if (stats[top].get("culture") or 0) >= CULTURE_GOAL / 10:
-            out += (f"; a cultural victory needs {CULTURE_GOAL:,} culture, top {m.who(top)} with "
-                    f"{stats[top]['culture']:,}")
+        city = max(stats, key=lambda i: stats[i].get("city_culture") or 0)
+        if (stats[top].get("culture") or 0) >= CULTURE_GOAL / 10 or \
+                (stats[city].get("city_culture") or 0) >= CITY_CULTURE_GOAL / 10:
+            out += (f"; a cultural victory needs {CULTURE_GOAL:,} culture and twice the next civ's, or "
+                    f"{CITY_CULTURE_GOAL:,} in one city: top {m.who(top)} with {stats[top].get('culture') or 0:,}")
+            if stats[city].get("city_culture"):
+                out += f", best city {m.who(city)}'s with {stats[city]['city_culture']:,}"
         if (limit := m.meta.get("turn_limit")) and m.turn:
             out += f"; {limit - m.turn} turns left"
         return out

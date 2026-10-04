@@ -75,6 +75,8 @@ sealed partial class Session {
 					.Where(i => i != index[p] && !gd.players[i].isBarbarians).Order()),
 				// The race (state.race): culture for the cultural victory, the shares of land and people for domination.
 				["culture"] = CultureOf(p),
+				// its best city's culture: a city with 20,000 wins by culture too (Seats.cs)
+				["city_culture"] = p.cities.Count == 0 ? 0 : p.cities.Max(c => c.GetCultureFor(p)),
 				["era"] = Math.Clamp(p.EraIndex(), 0, EraNames.Length - 1),
 				["land"] = shares.TryGetValue(p, out var share) ? Math.Round(share.Land, 4) : 0,
 				["pop"] = shares.TryGetValue(p, out var share2) ? Math.Round(share2.Pop, 4) : 0,

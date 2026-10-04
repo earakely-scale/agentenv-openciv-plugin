@@ -1158,6 +1158,7 @@ function closeClient() { S.client.open = false; clearTimeout(clientTimer); rende
 function renderClient() {
   const el = $("#clientpane");
   el.hidden = !S.client.open;
+  if (STREAM) requestAnimationFrame(renderDuel);   // the score bug stays off the full-size client view
   el.classList.toggle("big", S.client.big);
   if (!S.client.open) return;
   const p = M.byIndex[S.client.seat];
@@ -1583,13 +1584,14 @@ function tick() {
   if (!shot) return;
   for (const t of bc.timers) clearTimeout(t);
   bc.timers = [];
-  for (const el of [$("#bubble"), $("#chyron")]) if (!el.hidden) leave(el);   // they belong to the shot that ends
+  // they belong to the shot that ends; so does a card, unless the new shot puts up its own
+  for (const el of [$("#bubble"), $("#chyron"), ...(shot.card ? [] : [$("#moment")])]) if (!el.hidden) leave(el);
   shot.run();
 }
 function broadcastStart() {
   for (const t of bc.timers) clearTimeout(t);
   Object.assign(bc, {director: new Director(loopShot, performance.now()), timers: [], leader: M.leaders[M.last], leadAt: -Infinity,
-    notes: new Map()});
+    notes: new Map(), recapTi: null});
   for (const m of M.messagesUpTo(M.last)) bc.director.keys.add(msgKey(m));   // only what happens from now on
   bc.director.add({key: "title", prio: 0, card: true, ms: 9000, run: () => { overview(); card("title", titleCard(), 8000); }},
     performance.now());
@@ -1625,6 +1627,9 @@ function onMap({focus = null, box = null, zoom = 1.8} = {}) {
   if (S.view !== "map") setView("map");
   setFocus(focus);
   const r = canvas().getBoundingClientRect();
+  // on the stream the score bug covers the map's top: the box grows upward by as much, so what it frames shows below
+  const bug = STREAM && !$("#duel")?.hidden ? $("#duel").offsetHeight + 12 : 0;
+  if (box && bug && r.height > bug) box = {...box, y0: box.y0 - (box.y1 - box.y0) * bug / (r.height - bug)};
   if (box && r.width) flyTo(box, {maxHw: Math.min(56, fitView(M.landBox, r.width, r.height).hw * zoom)});
 }
 function overview() { onMap({box: M.landBox, zoom: 1}); }
@@ -1646,13 +1651,14 @@ function loopShot(step, wish = null) {
   }
   // a round: the whole map, three spotlights, every agent's panel, then the race card and, when enough has happened
   // since the last one, the recap card (the cards take turns with a spotlight when there is nothing to show)
-  const k = step % 7, p = seats[(Math.floor(step / 7) * 3 + Math.min(k, 4) - 1) % seats.length];
+  // spotlight slots 1-3, 5 and 6 of each round take the seats in turn (5 and 6 when there is no card to show)
+  const k = step % 7, p = seats[(Math.floor(step / 7) * 5 + (k <= 3 ? k - 1 : k - 2)) % seats.length];
   if (k === 5 && M.turns[M.last].turn > 10) return {...shot("race", 13000, () => { overview(); card("race", raceCard(), 12000); }), card: true};
-  const recap = k === 6 ? recapEvents() : null;
-  if (recap?.length >= 3) return {...shot("recap", 13000, () => {
+  const recap = k === 6 ? recapEvents() : [];
+  if (recap.length) return {...shot("recap", 13000, () => {
     overview(); card("recap", recapCard(recap), 12000); bc.recapTi = M.last; }), card: true};
   return k === 0 ? overall() : k === 4 ? shot("agents", 25000, () => { closeClient(); setFocus(null); setView("agents"); })
-    : spot(p || seats[step % seats.length]);
+    : spot(p);
 }
 const near = (x, y, r) => ({x0: x - r, x1: x + r, y0: y - r * 2, y1: y + r * 2});
 function eventShot(e) {
@@ -1821,8 +1827,10 @@ const pct = f => `${Math.round(100 * (f || 0))}%`;
 const clock = s => { s = Math.max(0, Math.round(s || 0)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 const ordinal = n => n + ({1: "st", 2: "nd", 3: "rd"}[n % 100 > 10 && n % 100 < 14 ? 0 : n % 10] || "th");
 const inGame = p => !M.series[p.index][M.last][5];
-// Culture is in the race once a civ has a tenth of the cultural victory's.
-const cultureCounts = ti => M.civs.some(p => (M.stats(ti, p.index).culture || 0) >= CULTURE_GOAL / 10);
+// Culture is in the race once a civ has a tenth of the cultural victory's, or a city a tenth of a city's.
+const CITY_CULTURE_GOAL = 20000;
+const cultureCounts = ti => M.civs.some(p => (M.stats(ti, p.index).culture || 0) >= CULTURE_GOAL / 10
+  || (M.stats(ti, p.index).city_culture || 0) >= CITY_CULTURE_GOAL / 10);
 // A share against domination's two thirds: the bar fills to the share, the mark stands at two thirds.
 const meter = (label, f) => `<div class="meter" title="${esc(label)}: ${pct(f)} (domination needs ${pct(DOMINATION)})">
   <span class="ml">${esc(label)}</span><span class="track"><i style="width:${Math.min(100, 100 * (f || 0)).toFixed(1)}%"></i><b></b></span>
@@ -1846,14 +1854,14 @@ function duelSide(p, ti, rk) {
       <span class="rk">${ordinal(rk[p.index])}</span><span class="sc">${s[0]}</span></div>
     <div class="bits"><span class="cvb">${esc(p.civ)} · </span>${bits.map(esc).join(" · ")}</div>
     ${"land" in st ? `<div class="meters">${meter("Land", st.land)}${meter("People", st.pop)}
-      ${cultureCounts(ti) ? `<div class="cult" title="the cultural victory: ${CULTURE_GOAL.toLocaleString()}">Culture <b>${(st.culture || 0).toLocaleString()}</b></div>` : ""}</div>` : ""}
+      ${cultureCounts(ti) ? `<div class="cult" title="a cultural victory: ${CULTURE_GOAL.toLocaleString()} and twice the next civ's, or ${CITY_CULTURE_GOAL.toLocaleString()} in one city">Culture <b>${(st.culture || 0).toLocaleString()}</b></div>` : ""}</div>` : ""}
     <div class="now"><span class="st">${esc(now.state)}</span>${now.act ? `<span class="act">${esc(now.act)}</span>` : ""}</div></div>`;
 }
 function renderDuel() {
   const el = $("#duel");
   if (!el || !M.ready) return;
   const seats = M.seats, ti = M.last, t = M.turns[ti];
-  const on = seats.length > 0 && S.view === "map" && M.live?.game_over !== true;
+  const on = seats.length > 0 && S.view === "map" && M.live?.game_over !== true && !(S.client.open && S.client.big);
   el.hidden = !on; document.body.classList.toggle("has-duel", on);
   if (!on) return;
   const rk = M.ranks(ti), left = M.limit - t.turn;
@@ -1863,13 +1871,16 @@ function renderDuel() {
   el.className = `duel n${shown.length}`;
   el.innerHTML = shown.length === 2 ? `${duelSide(shown[0], ti, rk)}${mid}${duelSide(shown[1], ti, rk)}`
     : `${mid}${shown.map(p => duelSide(p, ti, rk)).join("")}`;
+  document.body.style.setProperty("--duel-h", `${el.offsetHeight}px`);   // the chyron and bubble go below it
 }
 // The race card: each seat (and an AI that leads the table) against each victory, with its score over the game.
 function raceCard() {
   const ti = M.last, t = M.turns[ti], rk = M.ranks(ti);
-  const leader = M.civs.find(p => rk[p.index] === 1);
-  const who = [...M.seats.filter(inGame), ...(leader && leader.seat == null ? [leader] : [])];
-  const top = Math.max(1, ...who.map(p => M.series[p.index][ti][0]));
+  const leader = M.civs.find(p => rk[p.index] === 1), ai = leader && leader.seat == null ? [leader] : [];
+  // four rows fit the screen: the best seats by score, and an AI that leads the table
+  const seats = M.seats.filter(inGame).sort((a, b) => rk[a.index] - rk[b.index]), more = Math.max(0, seats.length - (4 - ai.length));
+  const who = [...seats.slice(0, 4 - ai.length), ...ai];
+  const top = Math.max(1, ...who.flatMap(p => M.series[p.index].slice(0, ti + 1).map(x => x[0])));
   const culture = cultureCounts(ti), left = M.limit - t.turn;
   const row = p => {
     const s = M.series[p.index][ti], st = M.stats(ti, p.index), line = M.series[p.index].slice(0, ti + 1).map(x => x[0]);
@@ -1882,8 +1893,8 @@ function raceCard() {
       <div class="rx">${s[1]} cities · ${s[4]} techs${st.military != null ? ` · ${st.military} army` : ""}${st.wonders ? ` · ${st.wonders} wonders` : ""}</div></div>`;
   };
   return `<div class="race"><h1>The race <span>${esc(t.date || "")} · turn ${t.turn} of ${M.limit}${left > 0 ? ` · ${left} to go` : ""}</span></h1>
-    <p class="how">Two thirds of the land and of the people win by domination${culture ? `; ${CULTURE_GOAL.toLocaleString()} culture, by culture` : ""}; the last civ standing, by conquest; the top score at turn ${M.limit}, on score.</p>
-    ${who.map(row).join("")}</div>`;
+    <p class="how">Two thirds of the land and of the people win by domination${culture ? `; ${CULTURE_GOAL.toLocaleString()} culture and twice the next civ's, or ${CITY_CULTURE_GOAL.toLocaleString()} in one city, by culture` : ""}; the last civ standing, by conquest; the top score at turn ${M.limit}, on score.</p>
+    ${who.map(row).join("")}${more ? `<p class="how">and ${more} more seat${more > 1 ? "s" : ""}, behind on score</p>` : ""}</div>`;
 }
 // The biggest events since the last recap (or the last 40 turns): wars, captures, wonders, trades, landings, new eras.
 function recapEvents() {
@@ -1892,7 +1903,7 @@ function recapEvents() {
     && !M.byIndex[e.owner]?.barbarian && e.kind !== "city_founded");
   // the lead changing hands is the score chart's story: at most the newest two, and only with something else
   const leads = all.filter(e => e.kind === "lead_change").slice(-2), rest = all.filter(e => e.kind !== "lead_change");
-  if (!rest.length) return [];
+  if (rest.length < 3) return [];   // three stories at least, besides the lead
   return [...rest.sort((a, b) => kindRank(a.kind) - kindRank(b.kind) || b.ti - a.ti).slice(0, 7 - leads.length), ...leads]
     .sort((a, b) => a.ti - b.ti);
 }
@@ -1905,21 +1916,25 @@ function recapCard(events) {
 // of it), and the final turns; each once.
 function raceAlerts(now) {
   const d = bc.director, ti = M.last, t = M.turns[ti], left = M.limit - t.turn;
-  if (!d || t.turn <= 10) return;
-  for (const p of M.civs.filter(inGame)) {
+  if (!d) return;
+  for (const p of t.turn > 10 ? M.civs.filter(inGame) : []) {   // shares mean little in the first turns
     const st = M.stats(ti, p.index);
     if ((st.land || 0) >= 0.5 && (st.pop || 0) >= 0.5)
       d.add({key: `alert:domination:${p.index}`, prio: 2, card: true, ms: 9000, focus: p.index, run: () => {
         onMap(); card("alert", storyCard(p, "closes in on", "domination", `${pct(st.land)} of the land and ${pct(st.pop)} of the people: two thirds of each wins`), 5000);
         later(4600, () => spotlight(p));
       }}, now);
-    if ((st.culture || 0) >= CULTURE_GOAL / 2)
+    const civWay = (st.culture || 0) >= CULTURE_GOAL / 2, cityWay = (st.city_culture || 0) >= CITY_CULTURE_GOAL / 2;
+    if (civWay || cityWay)
       d.add({key: `alert:culture:${p.index}`, prio: 2, card: true, ms: 9000, focus: p.index, run: () => {
-        onMap(); card("alert", storyCard(p, "closes in on", "a cultural victory", `${(st.culture || 0).toLocaleString()} culture of the ${CULTURE_GOAL.toLocaleString()} that wins`), 5000);
+        onMap(); card("alert", storyCard(p, "closes in on", "a cultural victory", cityWay
+          ? `a city with ${(st.city_culture || 0).toLocaleString()} culture of the ${CITY_CULTURE_GOAL.toLocaleString()} that wins`
+          : `${(st.culture || 0).toLocaleString()} culture of the ${CULTURE_GOAL.toLocaleString()} (and twice the next civ's) that wins`), 5000);
         later(4600, () => spotlight(p));
       }}, now);
   }
-  const mark = [3, 10, 25].find(m => left > 0 && left <= m);   // the nearest mark passed, once: 25, 10, then 3 turns left
+  // the nearest mark passed, once: 25, 10, then 3 turns left, in a game at least four times as long as the mark
+  const mark = [3, 10, 25].find(m => left > 0 && left <= m && M.limit >= 4 * m);
   if (mark) d.add({key: `alert:end:${mark}`, prio: 3, card: true, ms: 9000, run: () => { overview(); card("race", raceCard(), 8000); }}, now);
 }
 
