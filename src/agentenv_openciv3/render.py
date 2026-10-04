@@ -25,7 +25,7 @@ TERRAIN_NAMES = {"g": "grassland", "p": "plains", "d": "desert", "t": "tundra", 
                  "m": "mountains", "F": "forest", "j": "jungle", "s": "marsh", "v": "volcano", "~": "water"}
 BASELINE_LABELS = {"engine_ai": "built-in AI", "settler_bot": "settler bot", "null": "do-nothing"}
 MAX_UNIT_LINES, MAX_STANDING, MAX_CITY_LINES, MAX_EVENTS, MAX_MESSAGES = 5, 6, 6, 5, 12
-MAX_DETAILED_CITIES, MAX_PICKS, MAX_BATCH_LINES = 4, 8, 30
+MAX_DETAILED_CITIES, MAX_PICKS, MAX_BATCH_LINES, MAX_OFFERS = 4, 8, 30, 2
 # The characters of messages a brief lists at most (about 300 tokens; the oldest are left out first): every brief
 # repeats them, and the seat has read each one in full once already.
 MESSAGE_CHARS = 1200
@@ -585,6 +585,18 @@ def rates_text(state: dict) -> str | None:
     return f"tax {r.get('tax', 0) * 10}% sci {r.get('science', 0) * 10}% lux {r.get('luxury', 0) * 10}%"
 
 
+def trade_lines(state: dict) -> list[str]:
+    """The AI offers standing for the seat, the best for it first (what it gets less what it gives, to it), at most
+    MAX_OFFERS; diplomacy() lists them all."""
+    offers = sorted((r for r in state.get("rivals", []) if r.get("trade_offered")),
+                    key=lambda r: r["trade_offered"]["you_value_give"] - r["trade_offered"]["you_value_get"])
+    lines = ["TRADE " + trade_offer_text(r["civ"], r["trade_offered"]) for r in offers[:MAX_OFFERS]]
+    if len(offers) > MAX_OFFERS:
+        lines.append(f"TRADE +{len(offers) - MAX_OFFERS} more offers ("
+                     + ", ".join(r["civ"] for r in offers[MAX_OFFERS:]) + ") → diplomacy()")
+    return lines
+
+
 def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: int | None = None,
           baselines: dict[str, dict | str | None] | None = None, sites: dict[str, dict] | None = None,
           events: bool = True, notices: list[dict] | None = None, messages: list[str] | None = None) -> str:
@@ -617,8 +629,7 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
                      + (" (engine pick)" if r.get("source") == "engine" else ""))
     else:
         lines.append("RESEARCH none — research() lists techs")
-    lines += ["TRADE " + trade_offer_text(r["civ"], r["trade_offered"]) for r in s.get("rivals", [])
-              if r.get("trade_offered")]
+    lines += trade_lines(s)
     if s.get("revolution_target"):
         lines.append(f"GOVERNMENT anarchy, then {s['revolution_target']}")
     elif s.get("governments"):

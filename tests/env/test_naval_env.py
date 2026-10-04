@@ -39,3 +39,10 @@ async def test_unit_order_describes_board_and_unload(env):
     assert "At sea a passenger lands with goto or settle to a land tile next to its ship." in order
     spec = listed["unit_orders"].inputSchema["$defs"]["UnitOrderSpec"]["properties"]
     assert "board" in spec["order"]["description"] and "board" in spec["x"]["description"]
+
+
+@pytest.mark.anyio
+async def test_list_units_names_passengers_and_cargo(env):
+    listed = {t.name: t for t in await env.mcp.list_tools()}
+    description = " ".join(listed["list_units"].description.split())
+    assert '("aboard u3" on a ship), a ship\'s cargo ("cargo 1/2: u5")' in description

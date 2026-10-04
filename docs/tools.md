@@ -1,8 +1,10 @@
 # Agent tools
 
 The env (`agentenv_openciv3.server.OpenCiv3Env`, card name `openciv3`) exposes sixteen MCP tools. They
-return compact text, not JSON: briefs are under about 600 tokens (plus up to about 300 for the messages between
-leaders), a radius-3 map under about 700.
+return compact text, not JSON: an early game's brief with a short plan is under about 600 tokens; a late game's
+with every section full (a dozen cities, more idle units than it lists, riots and engine picks folded, governments
+to choose, the culture race, units to upgrade, AI offers) stays under about 1,200 without its plan, which adds up to
+about 250 (1,000 characters). The messages between leaders add up to about 300. A radius-3 map is under about 700.
 Every tool that changes the game ends with a one-line footer: `[T23/60 · needs orders: u7, c1]`.
 
 Invalid actions **raise**, so the agent sees `isError: true`, with a message that gives the reason,
@@ -10,7 +12,7 @@ the valid alternatives and the exact call to make instead.
 
 | Tool | Args | Returns |
 |---|---|---|
-| `get_turn_brief` | — | Turn and limit with the year, gold, research and ETA, score with the seat's rank among the civilizations, a pace line against the targets with its share of the world's land and population against the civ nearest domination, a `CULTURE` line once a civ has 10,000 culture points or a city 2,000 (the seat's culture, the top civ's and its lead over the next as a ratio to one decimal (shown as >99.9x beyond that), and the city with the most, against the cultural victory's 100,000 with twice the next civ's, or 20,000 in one city; numbers rounded down), both baselines (null and built-in AI on the same seed), what needs orders (more than two cities in disorder fold into one line with the luxury rate that calms them all), how many units can upgrade now, for how much gold and how many the treasury pays for, with the `unit_orders` call for those, standing orders, one line per city, the last turn's events, and the agent's plan. Self-contained: "lost context? call get_turn_brief". |
+| `get_turn_brief` | — | Turn and limit with the year, gold, research and ETA, score with the seat's rank among the civilizations, a pace line against the targets with its share of the world's land and population against the civ nearest domination, a `CULTURE` line once a civ has 10,000 culture points or a city 2,000 (the seat's culture, the top civ's and its lead over the next as a ratio to one decimal (shown as >99.9x beyond that), and the city with the most, against the cultural victory's 100,000 with twice the next civ's, or 20,000 in one city; numbers rounded down), both baselines (null and built-in AI on the same seed), a `TRADE` line per AI offer standing for the seat with what each side is worth to it and the `accept_trade` call (the two best for the seat, then `TRADE +N more offers (...) → diplomacy()`), what needs orders (more than two cities in disorder fold into one line with the luxury rate that calms them all), how many units can upgrade now, for how much gold and how many the treasury pays for, with the `unit_orders` call for those, standing orders, one line per city, the last turn's events, and the agent's plan. Self-contained: "lost context? call get_turn_brief". |
 | `list_units` | `filter`: `needs_orders` (default) or `all`; `type` (optional, e.g. `"Worker"`) | One line per unit: id, type, `(x,y)`, moves, status or standing order (`aboard u3` for a unit carried by ship u3), a ship's `cargo 1/2: u5`, valid orders, why `found_city` is or isn't possible here, and in a city the unit's upgrade and its gold (`upgrade → Longbowman 60g`, or why not now); with many idle units, the `unit_orders` call that orders them by type. |
 | `view_map` | `x`, `y`, `radius` (default 3, max 6), or `around` (`"u7"`, `"c1"`) | Staggered ASCII of the explored tiles, a legend, then a "notable" list (resources, rivers, foreign units, cities, good sites) with distance and direction. Unexplored tiles are blank. |
 | `find_city_sites` | `unit` (optional), `top` (default 5) | Ranked sites: `(x,y)`, score, distance and direction, travel turns, yields, river or coast. |
@@ -53,9 +55,10 @@ the valid alternatives and the exact call to make instead.
 - **An AI** takes a trade worth at least as much to it as what it gives. `quote_trade` tells you before you propose
   it, and how much gold balances it (its suggested call asks for less gold first, then gives more).
 - **An AI's offers:** an AI makes offers during its turn. Each one stands until the end of your next turn (after an
-  `end_turn` of several turns, the turn it stops on): a `trade_offered` event, a `TRADE` line in the brief and
-  `OFFERS` in the status, with what each side is worth to you. An offer that can no longer be made (after another
-  trade, say) is not shown. Most are good for the AI only, so compare the two values before `accept_trade`.
+  `end_turn` of several turns, the turn it stops on): a `trade_offered` event, a `TRADE` line in the brief (the two
+  best for you, then a count of the rest) and `OFFERS` in the status, with what each side is worth to you. An offer
+  that can no longer be made (after another trade, say) is not shown. Most are good for the AI only, so compare the
+  two values before `accept_trade`.
 - **Another agent's civ:** `propose_trade` offers the trade; it stands until the end of the next turn and is made
   when the other agent accepts it (or proposes the same trade back).
 - **Research:** a tech you get is known at once. If it was the one being researched, the research moves on (your

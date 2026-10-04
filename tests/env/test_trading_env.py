@@ -1,8 +1,13 @@
 """Trading techs and gold through the diplomacy tool (against the fake bridge), and how trades render."""
 
+from pathlib import Path
+
 import pytest
+from test_render import brief_of, state
 
 from agentenv_openciv3 import render
+
+ROOT = Path(__file__).resolve().parents[2]
 
 pytestmark = pytest.mark.anyio
 
@@ -101,3 +106,25 @@ def test_the_brief_lists_an_offer_event_without_its_call():
 
 def test_trade_events_come_first():
     assert {"trade_offered", "trade_signed"} <= render.FIRST and "trade_offered" not in render.URGENT
+
+
+def test_the_brief_shows_the_two_best_offers_and_counts_the_rest():
+    s = state(3, idle=2, standing=4, n_events=4)
+    worth = {"Greece": (29, 16), "Egypt": (10, 40), "Babylon": (30, 30), "Persia": (50, 20), "Zululand": (5, 90)}
+    s["rivals"] = [{"civ": c, "met": True, "at_war": False, "cities_seen": 1,
+                    "trade_offered": {**OFFER, "you_value_get": get, "you_value_give": give}}
+                   for c, (get, give) in worth.items()]
+    trade = [line for line in brief_of(s, plan_chars=300).splitlines() if line.startswith("TRADE ")]
+    assert [line.split(" offers ")[0] for line in trade[:2]] == ["TRADE Persia", "TRADE Greece"]
+    assert trade[2:] == ["TRADE +3 more offers (Babylon, Egypt, Zululand) → diplomacy()"]
+    s["rivals"] = s["rivals"][:2]
+    assert len([line for line in brief_of(s, plan_chars=300).splitlines() if line.startswith("TRADE")]) == 2
+
+
+async def test_the_brief_tool_and_docs_name_the_trade_line(env):
+    listed = {t.name: t for t in await env.mcp.list_tools()}
+    assert "AI trade offers with their worth to you and the accept_trade call (TRADE)" in \
+        listed["get_turn_brief"].description
+    row = next(line for line in (ROOT / "docs" / "tools.md").read_text().splitlines()
+               if line.startswith("| `get_turn_brief`"))
+    assert "a `TRADE` line per AI offer" in row and "`TRADE +N more offers (...) → diplomacy()`" in row

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from test_render import brief_of, state
 
 from agentenv_openciv3 import render
@@ -67,3 +68,9 @@ def test_rules_text_and_game_over_name_the_cultural_victory():
     assert render.game_over({**over, "victory": victory}, None).startswith("GAME OVER — Greece won by culture on T480.")
     assert render.game_over({**over, "victory": {**victory, "civ": "Rome"}}, None).startswith(
         "GAME OVER — you won by culture on T480.")
+
+
+@pytest.mark.anyio
+async def test_the_brief_tool_names_the_culture_line(env):
+    listed = {t.name: t for t in await env.mcp.list_tools()}
+    assert "the culture race once it matters (CULTURE)" in listed["get_turn_brief"].description

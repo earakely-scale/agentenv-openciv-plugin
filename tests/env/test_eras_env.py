@@ -4,6 +4,7 @@ units the standalone ruleset now keeps."""
 import re
 from pathlib import Path
 
+import pytest
 from test_render import brief_of, state
 
 from agentenv_openciv3 import render, server, webart
@@ -86,3 +87,10 @@ def test_unit_order_documents_the_upgrade():
     assert "upgrade" in doc
     docs = (ROOT / "docs" / "tools.md").read_text()
     assert "upgrade" in docs and "unit_upgraded" in (ROOT / "docs" / "protocol.md").read_text()
+
+
+@pytest.mark.anyio
+async def test_the_brief_and_list_units_name_the_upgrades(env):
+    listed = {t.name: t for t in await env.mcp.list_tools()}
+    assert "units that can upgrade and the call" in listed["get_turn_brief"].description
+    assert "in a city its upgrade and the gold (or why not now)" in listed["list_units"].description

@@ -805,9 +805,11 @@ class OpenCiv3Env(AgentEnvEnvironment):
     async def get_turn_brief(self):
         """Your whole situation in one page: turn and year, gold and tax/science/luxury rates, research, score
         (10·cities + 3·pop + tiles + 4·techs) and your rank, pace against targets and against reference players on
-        the same seed, your share of the world's land and population, what needs orders (with the call that resolves
-        it), what needs attention (disorder and riot risk, cities without a defender, full production, unspent gold),
-        standing orders, cities, last turn's events, and your plan. A civilization wins, and the game ends, by
+        the same seed, your share of the world's land and population, the culture race once it matters (CULTURE),
+        AI trade offers with their worth to you and the accept_trade call (TRADE), what needs orders (with the call
+        that resolves it), what needs attention (disorder and riot risk, cities without a defender, full production,
+        unspent gold, units that can upgrade and the call), standing orders, cities, last turn's events, and your
+        plan. A civilization wins, and the game ends, by
         conquest (the last one left), domination (2/3 of the land and 2/3 of the population), culture (a city with
         20,000 culture points, or 100,000 in all and twice the next civ's) or, at the turn limit, the top score.
         Lost context? Call get_turn_brief."""
@@ -818,8 +820,9 @@ class OpenCiv3Env(AgentEnvEnvironment):
             description="needs_orders (default): only units waiting for orders; all: every unit.")] = "needs_orders",
                          type: Annotated[str | None, Field(
                              description='Only units of this type, e.g. "Worker".')] = None):
-        """One line per unit: id, type, (x,y), moves, status or standing order, the orders it accepts now, and
-        whether it can found a city on its tile (and why not). Many units at once: unit_orders."""
+        """One line per unit: id, type, (x,y), moves, status or standing order ("aboard u3" on a ship), a ship's
+        cargo ("cargo 1/2: u5"), the orders it accepts now, whether it can found a city on its tile (and why not), and
+        in a city its upgrade and the gold (or why not now). Many units at once: unit_orders."""
         async def body():
             return render.units_list(await self._state(), everything=filter == "all", kind=type)
         return await self._run("list_units", {"filter": filter, "type": type}, body)
