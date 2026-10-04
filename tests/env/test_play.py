@@ -5,6 +5,8 @@ import asyncio
 import json
 import logging
 import re
+import shutil
+import subprocess
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
@@ -131,6 +133,18 @@ async def test_the_play_page_is_served():
     assert "class World" in page and "class ArtPainter" in page and "function boot" in page   # map.js, art.js, play.js
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+@pytest.mark.parametrize("which", ["play_page", "page"])
+def test_the_pages_scripts_parse_as_one(which, tmp_path):
+    """Each page's script files run as one script, so a name declared twice (a `const` in two files) is a
+    SyntaxError that keeps the whole page from starting."""
+    from agentenv_openciv3 import viewer
+    scripts = re.findall(r"<script>(.*?)</script>", getattr(viewer, which)(), re.S)
+    (tmp_path / "page.js").write_text("\n".join(scripts))
+    check = subprocess.run(["node", "--check", str(tmp_path / "page.js")], capture_output=True, text=True)
+    assert check.returncode == 0, check.stderr
+
+
 async def test_play_page_route(env):
     r = await env._play_page(request("/play"))
     assert r.status_code == 200 and r.media_type == "text/html" and b"/*__" not in r.body
@@ -191,6 +205,17 @@ async def test_actions_are_logged_like_the_agents_tool_calls(match, action_log):
     assert env.seats[1].last_call > before
     assert [r["tool"] for r in action_log()[5:]] == ["city_info", "research", "diplomacy", "view_map",
                                                      "find_city_sites"]
+
+
+async def test_a_person_queues_production_like_an_agent(match, action_log):
+    env, player = match
+    await player.act("unit_order", unit="u1", order="found_city")
+    res = await player.act("set_production", city="c1", item="Warrior", then=["Settler", "Warrior"])
+    assert res["ok"] and res["result"]["city"]["queue"] == ["Settler", "Warrior"]
+    assert (await player("city", city="c1"))["queue"] == ["Settler", "Warrior"]
+    res = await player.act("set_production", city="c1", item="Warrior", then=[])
+    assert res["ok"] and res["result"]["city"]["queue"] == []
+    assert action_log()[-1]["args"] == {"city": "c1", "item": "Warrior", "then": []}
 
 
 async def test_a_refused_action_answers_the_error(match, action_log):

@@ -1741,7 +1741,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
             if tool_name == "unit_order":
                 res, message = await self._unit_order({k: a[k] for k in ("unit", "order", "x", "y")})
             elif tool_name == "set_production":
-                res, message = await self._set_production(a["city"], a["item"])
+                res, message = await self._set_production(a["city"], a["item"], a.get("then"))
             elif tool_name == "research":
                 if a["tech"] is None:
                     return {"message": "the techs you can research", "result": await self._call("techs")}

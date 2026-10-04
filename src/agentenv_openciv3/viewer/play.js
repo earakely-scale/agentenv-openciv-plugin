@@ -74,14 +74,14 @@ const ORDERS = [
   ["found_city", "Build city", "B"], ["goto", "Go to", "G"], ["explore", "Explore", "X"], ["auto_work", "Automate", "A"],
   ["build_road", "Road", "R"], ["build_mine", "Mine", "M"], ["irrigate", "Irrigate", "I"], ["clear_forest", "Clear", "⇧C"],
   ["fortify", "Fortify", "F"], ["wake", "Wake", "⇧W"], ["hold", "Skip turn", "Space"], ["bombard", "Bombard", "⇧B"],
-  ["disband", "Disband", "⇧D"],
+  ["upgrade", "Upgrade", "U"], ["board", "Board ship", "O"], ["unload", "Unload", "L"], ["disband", "Disband", "⇧D"],
 ];
 // The client's order buttons (NormButtons.png and its hover and pressed sheets): order -> [column, row] of 32x32.
 const BUTTON_CELL = {hold: [0, 0], wait: [1, 0], fortify: [2, 0], disband: [3, 0], goto: [4, 0], explore: [5, 0],
   bombard: [3, 1], found_city: [5, 2], build_road: [6, 2], build_railroad: [7, 2], build_mine: [1, 3], irrigate: [2, 3],
   clear_forest: [3, 3], auto_work: [7, 3]};
 const KEYS = {b: "found_city", g: "goto", x: "explore", a: "auto_work", r: "build_road", m: "build_mine", i: "irrigate",
-  C: "clear_forest", f: "fortify", W: "wake", " ": "hold", B: "bombard", D: "disband"};
+  C: "clear_forest", f: "fortify", W: "wake", " ": "hold", B: "bombard", D: "disband", u: "upgrade", o: "board", l: "unload"};
 // Arrow keys and the number pad move the active unit a tile, as in the game (8 is north).
 const MOVE_KEYS = {ArrowUp: "N", ArrowDown: "S", ArrowLeft: "W", ArrowRight: "E", Numpad8: "N", Numpad2: "S", Numpad4: "W",
   Numpad6: "E", Numpad7: "NW", Numpad9: "NE", Numpad1: "SW", Numpad3: "SE", Home: "NW", PageUp: "NE", End: "SW", PageDown: "SE"};
@@ -234,13 +234,15 @@ function renderBar() {
   const pct = res.cost ? Math.min(100, (res.beakers || 0) / res.cost * 100) : 0;
   $("#bar").innerHTML = `
     <div class="civ"><span class="sw" style="background:${civColor(me.civ, me.color)}"></span>${esc(me.civ)} <small>${esc(me.label || "")}</small></div>
-    <div class="turn">T${g.turn} <small>/ ${g.turn_limit}</small></div>
+    <div class="turn">T${g.turn} <small>/ ${g.turn_limit}${s.date ? ` · ${esc(s.date)}` : ""}</small></div>
     <div class="stat"><span class="l">Government</span><span class="v">${esc(s.government)}${s.anarchy_until ? ` <span class="bad">until T${s.anarchy_until}</span>` : ""}</span></div>
     <div class="stat"><span class="l">Gold</span><span class="v gold">${s.gold} <span class="muted">${s.gold_per_turn >= 0 ? "+" : ""}${s.gold_per_turn}</span></span></div>
     <div class="stat"><span class="l">Tax · Sci · Lux</span><span class="v">${rs.tax ?? "-"} · ${rs.science ?? "-"} · ${rs.luxury ?? "-"}</span></div>
     <div class="stat research"><span class="l">Research</span><span class="v">${res.current ? `${esc(res.current)} <span class="muted">${res.turns_left ?? "?"} t</span>` : '<span class="bad">nothing</span>'}</span>
       <div class="meter"><i style="width:${pct.toFixed(0)}%"></i></div></div>
-    <div class="stat"><span class="l">Score</span><span class="v">${s.score.total}</span></div>
+    <div class="stat" title="${esc(raceTip(s))}"><span class="l">Score</span><span class="v">${s.score.total}${s.race?.rank ? ` <span class="muted">${ordinal(s.race.rank)} of ${s.race.civs_left}</span>` : ""}</span></div>
+    ${s.race?.you ? `<div class="stat" title="${esc(raceTip(s))}"><span class="l">Land · People</span><span class="v">${pct100(s.race.you.land)} · ${pct100(s.race.you.pop)}</span></div>` : ""}
+    ${cultureShown(s) ? `<div class="stat" title="${esc(raceTip(s))}"><span class="l">Culture</span><span class="v">${s.race.you.culture.toLocaleString()}</span></div>` : ""}
     <div class="grow"></div>
     <div class="seats">${g.seats.filter(x => x.civ !== me.civ).map(x => `<span class="seat" title="${esc(x.human ? "a person" : "an agent")}">
       <span class="sw" style="background:${civColor(x.civ, x.color)}"></span>${esc(x.label || x.civ)}${x.human ? " 👤" : ""}
@@ -252,6 +254,28 @@ function renderBar() {
       ${S.art ? `<button data-a="art" title="The game's art, or the plain map (T)">${S.artState === "on" ? "Plain map" : "Game art"} <kbd>T</kbd></button>` : ""}
     </div>`;
   for (const b of $$("#bar .adv button")) b.onclick = () => b.dataset.a === "art" ? useArt(S.artState !== "on") : advisor(b.dataset.a);
+}
+
+// The race to win (state.race): the rank by score, the shares of land and people against domination's two thirds, and
+// the culture race once it matters (a civ with a tenth of the cultural victory's 100,000, or a city with 2,000).
+const ordinal = n => n + ({1: "st", 2: "nd", 3: "rd"}[n % 100 > 10 && n % 100 < 14 ? 0 : n % 10] || "th");
+const pct100 = f => `${Math.round(100 * (f || 0))}%`;
+const raceName = c => !c ? "" : c.you ? "you" : c.civ || "a civ you have not met";
+function cultureShown(s) {
+  const r = s.race;
+  return !!r?.you && ((r.nearest_culture?.culture || 0) >= (r.culture_goal || 100000) / 10
+    || (r.best_city?.culture || 0) >= (r.city_culture_goal || 20000) / 10);
+}
+function raceTip(s) {
+  const r = s.race; if (!r) return "";
+  const lines = [`Score: ${r.rank ? `${ordinal(r.rank)} of ${r.civs_left}` : "out"}${r.leader && !r.leader.you ? `, ${raceName(r.leader)} leads with ${r.leader.score}` : ""}.`,
+    `Domination needs ${pct100(r.domination)} of the land and of the people: you ${pct100(r.you?.land)} and ${pct100(r.you?.pop)}`
+      + (r.nearest_domination && !r.nearest_domination.you ? `; nearest ${raceName(r.nearest_domination)} ${pct100(r.nearest_domination.land)} and ${pct100(r.nearest_domination.pop)}.` : ".")];
+  if (r.nearest_culture) lines.push(`Culture wins at ${(r.culture_goal || 100000).toLocaleString()} with twice the next civ's, or ${(r.city_culture_goal || 20000).toLocaleString()} in one city: `
+    + `you ${(r.you?.culture || 0).toLocaleString()}, top ${raceName(r.nearest_culture)} ${(r.nearest_culture.culture || 0).toLocaleString()}`
+    + (r.best_city ? `, best city ${r.best_city.name || "?"} ${(r.best_city.culture || 0).toLocaleString()}.` : "."));
+  lines.push(`Conquest: be the last civ left. At turn ${S.view.game.turn_limit} the top score wins.`);
+  return lines.join("\n");
 }
 
 function renderStatus() {
@@ -267,6 +291,7 @@ function renderStatus() {
       <div class="hp"><i style="width:${hp}%"></i></div>
       <div class="row"><span>Moves ${fmtMoves(u.moves_left)}/${u.moves_max}</span><span>HP ${u.hp}/${u.hp_max}</span><span>(${u.x},${u.y})</span></div>
       <div class="note">${esc(statusText(u))}</div>
+      ${unitNotes(u).map(n => `<div class="note">${esc(n)}</div>`).join("")}
       ${found && (u.orders || []).includes("found_city") ? `<div class="note">${found.ok ? "Can build a city here (B)" : esc(found.reason)}</div>` : ""}
       ${(u.attack_targets || []).length ? `<div class="note">Can attack: ${u.attack_targets.map(t => `${esc(t.defender || t.city || t.owner)} ${Math.round(t.win_chance * 100)}%`).join(", ")}</div>` : ""}`;
   } else {
@@ -295,9 +320,9 @@ function renderArtStatus() {
       <div class="unitline" style="top:18px">${esc(u.type)} <span class="uid">${esc(u.id)}</span></div>
       <div class="unitline" style="top:32px">HP ${u.hp}/${u.hp_max} · ${fmtMoves(u.moves_left)}/${u.moves_max}</div>
       <div class="unitline" style="top:46px">${esc(where)}</div>
-      <div class="unitline small" style="top:60px">${esc(statusText(u))}</div>` : ""}
+      <div class="unitline small" style="top:60px" title="${esc(unitNotes(u).join("\n"))}">${esc(statusText(u))}${u.capacity ? ` · ${(u.cargo || []).length}/${u.capacity} aboard` : ""}</div>` : ""}
     <div class="mid" style="top:80px">${esc(s.civ)} - ${esc(s.government)}${s.anarchy_until ? ` (until T${s.anarchy_until})` : ""}</div>
-    <div class="mid" style="top:94px">Turn ${g.turn}  ${s.gold} Gold (${s.gold_per_turn >= 0 ? "+" : ""}${s.gold_per_turn} per turn)</div>
+    <div class="mid" style="top:94px">${s.date ? esc(s.date) : `Turn ${g.turn}`}  ${s.gold} Gold (${s.gold_per_turn >= 0 ? "+" : ""}${s.gold_per_turn} per turn)</div>
     <div class="mid" style="top:108px">${res.current ? `${esc(res.current)} (${res.turns_left ?? "--"} turns)` : "Not selected (-- turns)"}</div>`;
   $("#endturn").onclick = () => endTurn(true);
   const thumb = $("#status .thumb");
@@ -310,9 +335,18 @@ function renderArtStatus() {
     }
   }
 }
+// A ship's passengers and a unit's upgrade, as the status panel lists them.
+function unitNotes(u) {
+  const notes = [];
+  if (u.capacity) notes.push(`Carrying ${(u.cargo || []).length}/${u.capacity}${(u.cargo || []).length ? ": " + u.cargo.map(id => `${unit(id)?.type || ""} ${id}`).join(", ") : ""}`);
+  if (u.upgrade) notes.push(u.upgrade.ok ? `Can upgrade to ${u.upgrade.to} for ${u.upgrade.gold} gold (U)`
+    : `Upgrades to ${u.upgrade.to} (${u.upgrade.gold} gold): ${u.upgrade.reason || "not now"}`);
+  return notes;
+}
 const fmtMoves = m => Number.isInteger(m) ? m : (Math.round(m * 3) / 3).toFixed(1);
 function statusText(u) {
   const st = u.status || "idle";
+  if (u.aboard) { const ship = unit(u.aboard); return `Aboard ${ship ? ship.type : "ship"} ${u.aboard}`; }
   if (st === "goto" || st === "settle") return `${st === "settle" ? "Going to found a city at" : "Going to"} (${u.target?.x},${u.target?.y})`;
   if (st.startsWith("working:")) return `Working: ${st.slice(8).replace("_", " ")}`;
   return {idle: "Waiting for orders", fortified: "Fortified", exploring: "Exploring", auto_work: "Automated", done: "No moves left"}[st] || st;
@@ -326,10 +360,11 @@ function renderCommands() {
   const have = new Set(u.orders || []);
   const art = artOn();
   el.classList.toggle("art", art);
+  const title = (o, label) => o === "upgrade" && u.upgrade ? `Upgrade to ${u.upgrade.to} for ${u.upgrade.gold} gold` : label;
   el.innerHTML = ORDERS.filter(([o]) => have.has(o)).map(([o, label, k]) => art && BUTTON_CELL[o]
-    ? `<button class="icon" data-o="${o}" ${S.busy ? "disabled" : ""} title="${esc(label)} (${k})" aria-label="${esc(label)}"
+    ? `<button class="icon" data-o="${o}" ${S.busy ? "disabled" : ""} title="${esc(title(o, label))} (${k})" aria-label="${esc(label)}"
         style="background-position:-${BUTTON_CELL[o][0] * 32}px -${BUTTON_CELL[o][1] * 32}px"><kbd>${esc(k)}</kbd></button>`
-    : `<button data-o="${o}" ${S.busy ? "disabled" : ""} title="${esc(label)} (${k})"><b>${esc(label)}</b><kbd>${esc(k)}</kbd></button>`).join("")
+    : `<button data-o="${o}" ${S.busy ? "disabled" : ""} title="${esc(title(o, label))} (${k})"><b>${esc(label)}</b><kbd>${esc(k)}</kbd></button>`).join("")
     + (art ? `<button class="icon" data-o="wait" title="Wait: come back to this unit later (W)" aria-label="Wait"
         style="background-position:-32px 0"><kbd>W</kbd></button>`
       : `<span class="sep"></span><button data-o="wait" title="Come back to this unit later (W)"><b>Wait</b><kbd>W</kbd></button>
@@ -361,7 +396,10 @@ async function command(order) {
   if (order === "bombard") {
     if (!(u.attack_targets || []).length) { S.mode = "bombard"; $("#map").classList.add("goto"); toast("Click what to bombard"); return; }
   }
-  if (order === "disband" && !confirm(`Disband ${u.type} ${u.id}?`)) return;
+  if (order === "disband" && !confirm(`Disband ${u.type} ${u.id}?${(u.cargo || []).length ? " Its passengers are lost with it at sea." : ""}`)) return;
+  if (order === "upgrade" && u.upgrade && !(await ask("Upgrade", `Upgrade ${esc(u.type)} ${esc(u.id)} to ${esc(u.upgrade.to)} for
+    ${u.upgrade.gold} gold? It keeps its experience and has no moves left this turn.`, "Upgrade"))) return;
+  if (order === "board") return board(u);
   const res = await act("unit_order", {unit: u.id, order});
   if (res) afterOrder(u.id);
 }
@@ -373,11 +411,28 @@ function afterOrder(id) {
 }
 function waitUnit() { if (S.sel) { S.waited.add(S.sel); selectNext(); } }
 
+// Boarding: a ship of yours with room on the unit's tile (in port) or on a water tile next to it; with several next to
+// it, the player clicks the one to board.
+async function board(u) {
+  const room = myUnits().filter(s => s.capacity && (s.cargo || []).length < s.capacity);
+  const at = (x, y) => room.some(s => s.x === x && s.y === y);
+  let order = {unit: u.id, order: "board"};
+  if (!at(u.x, u.y)) {
+    const near = Object.keys(DIRS).map(d => S.world.step(u.x, u.y, d)).filter(([x, y]) => at(x, y));
+    if (!near.length) { toast(`No ship of yours with room is in ${u.type} ${u.id}'s tile or next to it.`, true); return; }
+    if (near.length > 1) { S.mode = "board"; $("#map").classList.add("goto"); toast("Click the ship to board (Esc cancels)"); return; }
+    order = {...order, x: near[0][0], y: near[0][1]};
+  }
+  const res = await act("unit_order", order);
+  if (res) afterOrder(u.id);
+}
+
 async function moveTo(x, y) {
   const u = unit(S.sel); if (!u || ended()) return;
   const target = (u.attack_targets || []).find(t => t.x === x && t.y === y);
   let order = target ? "attack" : "goto";
   if (S.mode === "bombard") order = "bombard";
+  if (S.mode === "board") order = "board";
   if (!target && S.sites && (u.orders || []).includes("settle") && S.sites.some(s => s.x === x && s.y === y)) order = "settle";
   S.mode = null; $("#map").classList.remove("goto");
   const res = await act("unit_order", {unit: u.id, order, x, y});
@@ -510,7 +565,7 @@ function tileTip(e, [x, y]) {
   h += `<div>${esc(t.overlay ? `${t.overlay} on ${t.terrain}` : t.terrain)}${t.river ? " · river" : ""}${t.resource ? ` · <span class="gold">${esc(t.resource)}</span>` : ""}</div>`;
   if (t.improvements.length) h += `<div class="k">${t.improvements.map(esc).join(", ")}</div>`;
   h += t.owner >= 0 ? `<div class="k">${esc(S.world.civ(t.owner))}'s territory</div>` : "";
-  for (const u of us) h += `<div><span class="sw" style="background:rgb(${S.world.color(u.owner).join(",")})"></span>${u.count > 1 ? `${u.count} ` : ""}${esc(u.type)}${u.id ? ` <span class="k">${esc(u.id)}</span>` : ` <span class="k">${esc(S.world.civ(u.owner))}</span>`}</div>`;
+  for (const u of us) h += `<div><span class="sw" style="background:rgb(${S.world.color(u.owner).join(",")})"></span>${u.count > 1 ? `${u.count} ` : ""}${esc(u.type)}${u.id ? ` <span class="k">${esc(u.id)}</span>` : ` <span class="k">${esc(S.world.civ(u.owner))}</span>`}${u.aboard ? ` <span class="k">aboard ${esc(u.aboard)}</span>` : ""}</div>`;
   if (!t.visible) h += `<div class="k">not in sight now</div>`;
   if (info) {
     const y_ = info.yield || {};
@@ -537,7 +592,9 @@ function hideTip() { $("#tip").hidden = true; clearTimeout(tipTimer); }
 
 function keys() {
   document.addEventListener("keydown", e => {
-    if (!S.view || e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (!S.view || e.metaKey || e.ctrlKey || e.altKey) return;
+    // in a dialog's field (a trade's checkbox or gold, the rates) keys are the field's, except Escape
+    if ((e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") && !(e.key === "Escape" && S.dialog)) return;
     if (S.dialog) {
       if (S.dialog.onKey && S.dialog.onKey(e)) return;   // the art screens' own keys (screens.js)
       if (e.key === "Escape") { e.preventDefault(); closeDialog(); }
@@ -608,10 +665,33 @@ function turnReport() {
   dialog(`<header><h2>Turn ${s.turn}</h2><span class="muted">${esc(state().civ)}</span><span class="grow"></span><button data-x>✕</button></header>
     <div class="body"><ul class="plain events">${items.map(ev =>
       `<li class="${HOT.has(ev.kind) || ev.kind === "notice" ? "hot" : ""}" ${ev.x != null ? `data-x="${ev.x}" data-y="${ev.y}" tabindex="0" style="cursor:pointer"` : ""}>${esc(ev.text)}</li>`).join("")}</ul>
-    <div class="actions"><button class="primary" data-x>Continue</button></div></div>`,
+    <div class="actions"><button class="primary" data-x>Continue</button>${events.some(ev => ev.kind === "trade_offered")
+      ? `<button id="seeoffers">See the offers (F4)</button>` : ""}</div></div>`,
     {kind: "report", onClose: () => { if (noResearch) advisor("science"); }});
   for (const li of $$("#dialog li[data-x]")) li.onclick = () => { closeDialog(); centerOn(+li.dataset.x, +li.dataset.y); };
+  if ($("#seeoffers")) $("#seeoffers").onclick = () => { SCR.foreignTab = 1; closeDialog(); advisor("foreign"); };
   $("#dialog .primary").focus();
+}
+
+// What a city's buildings add (Civ III's +50% science, tax or luxury, +25% shields), and what they added this turn.
+function bonusText(c) {
+  const b = c.bonus || {}, parts = [["science", "science"], ["tax", "tax"], ["luxury", "luxury"], ["shields", "shields"]]
+    .filter(([k]) => b[k]).map(([k, label]) => `+${b[k]}% ${label}`);
+  if (!parts.length) return "";
+  const added = [(c.commerce?.from_buildings || 0) && `${c.commerce.from_buildings} commerce`,
+    (c.shields?.from_buildings || 0) && `${c.shields.from_buildings} shields`].filter(Boolean);
+  return `Buildings: ${parts.join(", ")}${added.length ? ` (${added.join(" and ")} this turn)` : ""}`;
+}
+// Picking what a city builds: a click builds it now; Shift+click adds it to the queue, built after the current item.
+// A queue is set along with the current item, so it needs that item to still be one of the city's options (the
+// engine's AI may have picked one the city can no longer be given, such as a wonder another city of yours builds).
+const keepsCurrent = c => !c.producing || (c.options || []).some(o => o.name === c.producing);
+function chooseProduction(c, item, queue) {
+  if (queue && c.producing) {
+    if (!keepsCurrent(c)) { toast(`${c.name} can't queue after ${c.producing}: it is no longer among what the city can build. Pick what to build first.`, true); return null; }
+    return act("set_production", {city: c.id, item: c.producing, then: [...(c.queue || []), item]});
+  }
+  return act("set_production", {city: c.id, item});
 }
 
 async function openCity(id) {
@@ -633,17 +713,25 @@ async function openCity(id) {
           <div class="meter" style="margin-top:4px"><i style="width:${pct}%;background:#d1a54a"></i></div>
           <div class="muted" style="font-size:12px;margin-top:3px">${c.shields_per_turn} shields/turn${c.turns_to_complete != null ? ` · done in ${c.turns_to_complete} turns` : ""}</div></div>
       </div>
+      ${bonusText(c) ? `<div class="muted" style="font-size:12px;margin-top:6px">${esc(bonusText(c))}</div>` : ""}
       <div class="actions"><button id="buy" ${c.producing && c.producing !== "Wealth" ? "" : "disabled"}>Buy ${esc(c.producing || "")}</button></div>
-      <h3>Build</h3>
+      ${(c.queue || []).length ? `<div class="box" style="margin-top:6px"><div class="l">Then</div><div class="v">${c.queue.map(esc).join(" → ")}
+        ${keepsCurrent(c) ? `<button id="clearq" style="margin-left:8px">Clear</button>` : ""}</div></div>` : ""}
+      <h3>Build${c.producing && keepsCurrent(c) ? ` <span class="muted" style="font-size:12px;font-weight:400">· Shift+click queues it after ${esc(c.producing)}</span>` : ""}</h3>
       <ul class="opts">${(c.options || []).map(o => `<li tabindex="0" data-item="${esc(o.name)}" class="${o.name === c.producing ? "cur" : ""}">
-        <span>${esc(o.name)} <span class="k">${esc(o.kind)}</span></span><span class="k">${o.cost ?? ""} shields</span><span class="k">${o.turns != null ? o.turns + " t" : ""}</span></li>`).join("")}</ul>
+        <span>${esc(o.name)} <span class="k">${esc(o.kind)}</span></span><span class="k">${o.cost ?? ""} shields</span><span class="k">${o.turns != null ? o.turns + " t" : ""}</span>
+        ${(o.effects || []).length ? `<span class="sub">${o.effects.map(esc).join(" · ")}</span>` : ""}</li>`).join("")}</ul>
       ${(c.buildings || []).length ? `<h3>Buildings</h3><div class="muted">${c.buildings.map(esc).join(" · ")}</div>` : ""}
       ${units.length ? `<h3>Units in the city</h3><ul class="opts">${units.map(u => `<li tabindex="0" data-unit="${esc(u.id)}"><span>${esc(u.type)} <span class="k">${esc(u.id)}</span></span>
         <span class="k">${esc(statusText(u))}</span><span class="k">${fmtMoves(u.moves_left)}/${u.moves_max}</span></li>`).join("")}</ul>` : ""}
     </div>`, {kind: "city", side: true, city: c});
   for (const li of $$("#dialog li[data-item]")) li.onclick = li.onkeydown = async ev => {
     if (ev.type === "keydown" && ev.key !== "Enter") return;
-    const res = await act("set_production", {city: c.id, item: li.dataset.item});
+    const res = await chooseProduction(c, li.dataset.item, ev.shiftKey);
+    if (res) openCity(c.id);
+  };
+  if ($("#clearq")) $("#clearq").onclick = async () => {
+    const res = await act("set_production", {city: c.id, item: c.producing, then: []});
     if (res) openCity(c.id);
   };
   for (const li of $$("#dialog li[data-unit]")) li.onclick = () => { closeDialog(); select(li.dataset.unit); };
@@ -700,12 +788,16 @@ async function advisor(which) {
     let d;
     try { d = await api("play/api/diplomacy"); } catch (e) { toast(e.message, true); return; }
     const civs = d.civs || d.rivals || [];
+    const offers = civs.filter(r => r.trade_offered), mine = civs.filter(r => r.you_offered_trade);
     dialog(`<header><h2>Foreign advisor</h2><span class="grow"></span><button data-x>✕</button></header><div class="body">
+      ${offers.length ? `<h3>Offers to you</h3><ul class="plain">${offers.map(r => `<li style="margin-bottom:6px">${esc(offerText(r.civ, r.trade_offered))}
+        <span class="actions" style="display:inline-flex;margin:0 0 0 8px"><button class="primary" data-accept="${esc(r.civ)}">Accept</button><button data-decline="${esc(r.civ)}">Decline</button></span></li>`).join("")}</ul>` : ""}
+      ${mine.length ? `<h3>Your offers</h3><ul class="plain">${mine.map(r => `<li class="muted">To ${esc(r.civ)}: ${esc(dealText(r.you_offered_trade))}, until the end of turn ${r.you_offered_trade.until_turn}</li>`).join("")}</ul>` : ""}
       ${civs.length ? `<table class="civs"><tr><th>Civilization</th><th>Relation</th><th>Score</th><th>Government</th><th></th></tr>
       ${civs.map(r => `<tr><td><b>${esc(r.civ)}</b>${r.seat ? ` <span class="muted">${esc(r.seat)}</span>` : ""}</td>
         <td class="${r.at_war ? "bad" : "good"}">${r.at_war ? `at war${r.peace_price != null ? ` · peace: ${r.peace_price} gold` : r.talks_turn ? ` · talks from T${r.talks_turn}` : ""}` : "peace"}</td>
         <td>${r.score?.total ?? r.score ?? ""}</td><td>${esc(r.government || "")}</td>
-        <td>${r.at_war ? `<button data-peace="${esc(r.civ)}" data-gold="${r.peace_price ?? 0}">Propose peace</button>` : `<button class="danger" data-war="${esc(r.civ)}">Declare war</button>`}</td></tr>`).join("")}</table>`
+        <td>${r.at_war ? `<button data-peace="${esc(r.civ)}" data-gold="${r.peace_price ?? 0}">Propose peace</button>` : `<button data-trade="${esc(r.civ)}">Trade…</button> <button class="danger" data-war="${esc(r.civ)}">Declare war</button>`}</td></tr>`).join("")}</table>`
         : '<div class="muted">You haven\'t met another civilization yet.</div>'}</div>`, {kind: "foreign"});
     for (const b of $$("#dialog [data-war]")) b.onclick = async () => {
       if (!(await ask(`War with ${b.dataset.war}?`, `Declare war on ${esc(b.dataset.war)}? They will refuse to talk for some turns.`, "Declare war", "danger"))) return advisor("foreign");
@@ -714,14 +806,91 @@ async function advisor(which) {
     for (const b of $$("#dialog [data-peace]")) b.onclick = async () => {
       await act("diplomacy", {action: "propose_peace", civ: b.dataset.peace, gold: +b.dataset.gold || 0}); advisor("foreign");
     };
+    tradeButtons(() => advisor("foreign"));
   }
+}
+
+// ======================================================================== trades (docs/protocol.md, Trades)
+
+const dealSide = side => [...(side.techs || []), ...(side.gold ? [`${side.gold} gold`] : [])].join(", ") || "nothing";
+const dealText = t => `you get ${dealSide(t.you_get)} (worth ${t.you_value_get ?? "?"} to you) for ${dealSide(t.you_give)} (worth ${t.you_value_give ?? "?"} to you)`;
+const offerText = (civ, t) => `${civ} offers ${dealSide(t.you_get)} (worth ${t.you_value_get ?? "?"} to you) for ${dealSide(t.you_give)}`
+  + ` (worth ${t.you_value_give ?? "?"} to you), until the end of turn ${t.until_turn}.`;
+// The Accept, Decline and Trade buttons of an open advisor; `again` reopens it after.
+function tradeButtons(again) {
+  for (const b of $$("#dialog [data-accept]")) b.onclick = async () => { await act("diplomacy", {action: "accept_trade", civ: b.dataset.accept}); again(); };
+  for (const b of $$("#dialog [data-decline]")) b.onclick = async () => { await act("diplomacy", {action: "decline_trade", civ: b.dataset.decline}); again(); };
+  for (const b of $$("#dialog [data-trade]")) b.onclick = () => tradeDialog(b.dataset.trade, again);
+}
+// A trade with a civ at peace: the techs and gold each side can give, quoted as you pick (the AI's own values decide
+// whether it takes it; another player decides for their civ), balanced with gold, then proposed.
+async function tradeDialog(civ, back) {
+  let d;
+  try { d = await api("play/api/diplomacy"); } catch (e) { toast(e.message, true); return; }
+  const r = (d.civs || []).find(x => x.civ === civ), me = state();
+  if (!r) { toast(`${civ} is not a civilization you know.`, true); return; }
+  const techList = (list, side) => (list || []).length ? `<ul class="opts">${list.map(t => `<li><label style="display:contents;cursor:pointer">
+      <span><input type="checkbox" data-side="${side}" value="${esc(t.name)}"> ${esc(t.name)}</span>
+      <span class="k" title="worth to you">${t.you_value} you</span><span class="k" title="worth to ${esc(civ)}">${t.they_value} them</span></label></li>`).join("")}</ul>`
+    : `<div class="muted" style="font-size:12px">No tech to ${side === "get" ? "get" : "give"}.</div>`;
+  dialog(`<header><h2>Trade with ${esc(civ)}</h2>${r.agent ? '<span class="muted">another player decides</span>' : ""}<span class="grow"></span><button data-x>✕</button></header>
+    <div class="body"><div class="grid2">
+      <div class="box"><div class="l">You get</div>${techList(r.techs_for_you, "get")}
+        <div class="range"><span>Gold</span><input type="number" id="t-get-gold" min="0" max="${r.gold | 0}" value="0"><span class="muted">/${r.gold | 0}</span></div></div>
+      <div class="box"><div class="l">You give</div>${techList(r.techs_for_them, "give")}
+        <div class="range"><span>Gold</span><input type="number" id="t-give-gold" min="0" max="${me.gold | 0}" value="0"><span class="muted">/${me.gold | 0}</span></div></div>
+    </div>
+    <div class="note" id="t-quote" style="margin-top:8px">Pick what to trade.</div>
+    <div class="actions"><button id="t-balance" disabled>Balance with gold</button><button class="primary" id="t-propose" disabled>Propose</button>
+      <button id="t-back">Back</button></div></div>`, {kind: "trade"});
+  const read = () => ({civ, get_techs: $$("#dialog input[data-side=get]:checked").map(i => i.value),
+    give_techs: $$("#dialog input[data-side=give]:checked").map(i => i.value),
+    get_gold: Math.max(0, +$("#t-get-gold").value | 0), give_gold: Math.max(0, +$("#t-give-gold").value | 0)});
+  let seq = 0, last = null;
+  const quote = async () => {
+    const a = read(), my = ++seq, out = $("#t-quote");
+    last = null; $("#t-propose").disabled = $("#t-balance").disabled = true;
+    if (!a.get_techs.length && !a.give_techs.length && !a.get_gold && !a.give_gold) { out.textContent = "Pick what to trade."; return; }
+    try {
+      const res = await api("play/api/act", {tool: "diplomacy", args: {action: "quote_trade", ...a}});
+      if (my !== seq || S.dialog?.kind !== "trade") return;
+      const q = last = res.result;
+      // they_value_give: what you give, as the civ values it; they_value_get: what you get (docs/protocol.md)
+      out.innerHTML = `You get ${esc(dealSide(q.you_get))}: worth ${q.you_value_get} to you, ${q.they_value_get ?? "?"} to ${esc(civ)}.<br>
+        You give ${esc(dealSide(q.you_give))}: worth ${q.you_value_give} to you, ${q.they_value_give ?? "?"} to ${esc(civ)}.<br>
+        <b class="${q.accepts === false ? "bad" : q.accepts ? "good" : ""}">${q.accepts == null ? `${esc(civ)}'s player decides.`
+          : q.accepts ? `${esc(civ)} accepts.${q.gold_they_would_add ? ` You could ask up to ${q.gold_they_would_add} gold more.` : ""}`
+          : `${esc(civ)} refuses${q.gold_to_balance != null ? `: ${q.gold_to_balance} gold more from you would balance it${q.suggest ? "" : `, more than you can give (${state().gold})`}` : ""}.`}</b>`;
+      $("#t-propose").disabled = q.accepts === false;
+      // the bridge suggests the balanced trade only when you can pay it
+      $("#t-balance").disabled = !(q.accepts === false && q.gold_to_balance > 0 && q.suggest);
+    } catch (e) { if (my === seq) out.innerHTML = `<span class="bad">${esc(plain(e.message))}</span>`; }
+  };
+  for (const i of $$("#dialog input")) i[i.type === "checkbox" ? "onchange" : "oninput"] = quote;
+  $("#t-balance").onclick = () => {   // ask for less gold first, then give more, as the bridge's suggestion does
+    if (!last) return;
+    let need = last.gold_to_balance | 0;
+    const get = $("#t-get-gold"), give = $("#t-give-gold"), less = Math.min(need, +get.value | 0);
+    get.value = (+get.value | 0) - less; need -= less;
+    give.value = (+give.value | 0) + need;
+    quote();
+  };
+  $("#t-propose").onclick = async () => {
+    const res = await act("diplomacy", {action: "propose_trade", ...read()});
+    if (res) (back || closeDialog)();
+  };
+  $("#t-back").onclick = () => (back || closeDialog)();
 }
 
 function gameOver() {
   if (S.dialog?.kind === "over") return;
-  const g = S.view.game, s = state(), v = g.victory;
+  const g = S.view.game, s = state(), v = g.victory, r = s.race;
+  const how = v ? (v.kind === "score" ? "on score" : `by ${v.kind}`) : "";
+  const headline = !v ? `The game ended at turn ${g.turn}${s.defeated ? ": your civilization was destroyed" : ""}.`
+    : v.civ === g.me.civ ? `You win ${how} on turn ${v.turn}!` : `${v.label ? `${v.label} (${v.civ})` : v.civ} wins ${how} on turn ${v.turn}.`;
   dialog(`<header><h2>Game over</h2></header><div class="body">
-    <div style="font-size:16px;margin-bottom:8px">${v ? `${esc(v.label || v.civ)} wins by ${esc(v.kind)} on turn ${v.turn}.` : `The game ended at turn ${g.turn}.`}</div>
+    <div style="font-size:16px;margin-bottom:8px">${esc(headline)}</div>
+    ${r?.rank ? `<div class="muted" style="margin-bottom:8px">You finished ${ordinal(r.rank)} of ${r.civs_left} by score.</div>` : ""}
     <div class="box"><div class="l">Your score</div><div class="v">${s.score.total} <span class="muted">${s.score.cities} cities · ${s.score.pop} pop · ${s.score.techs} techs</span></div></div>
     <div class="actions"><button class="primary" data-x>Look at the map</button></div></div>`, {kind: "over"});
 }
