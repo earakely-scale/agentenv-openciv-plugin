@@ -462,6 +462,20 @@ def test_disbanding_everything_is_defeat(game):
     assert game.error("end_turn", skip_idle=True)["code"] == "game_over"
 
 
+def test_a_unit_disbanded_in_its_city_adds_its_shields(game):
+    """patches/0014: the ruleset's disband script runs (it failed anywhere inside the civ's borders) and gives the
+    city on the unit's tile a share of the unit's cost."""
+    city = found_capital(game)
+    worker = unit(game.call("state"), "u2")
+    assert (worker["x"], worker["y"]) == (city["x"], city["y"])
+    before = game.call("city", city="c1")["production_stored"]
+    res = game.call("unit_order", unit="u2", order="disband")
+    after = game.call("city", city="c1")["production_stored"]
+    assert after > before
+    gained = f"Rome gained {after - before} shields toward {city['producing']}."
+    assert res["message"] == f"u2 Worker was disbanded. {gained}"
+
+
 @pytest.mark.parametrize("policy", ["null", "found_capital", "engine_ai"])
 def test_autoplay_policies(launch, policy):
     b = launch()

@@ -5,6 +5,7 @@ using C7Engine.Pathing;
 using C7GameData;
 using C7GameData.AIData;
 using MoonSharp.Interpreter;
+using Serilog;
 
 namespace CivBridge;
 
@@ -71,13 +72,19 @@ sealed partial class Session {
 				if (!u.unitType.actions.Contains(UnitAction.Disband)) throw Invalid(u, $"{Label(u)} cannot be disbanded.");
 				string label = Label(u);
 				Stop(u);
+				// In one of our cities the ruleset's script adds shields to what it builds (patches/0014).
+				City here = u.location.cityAtTile is { } c && c.owner == human ? c : null;
+				int stored = here?.shieldsStored ?? 0;
 				try {
 					await u.Disband();
-				} catch (InterpreterException) {
-					// The ruleset's disband-reward script fails inside our own borders before changing anything.
+				} catch (InterpreterException e) {
+					// A script error leaves the unit in play: remove it as the engine would have.
+					Log.Error(e, "disband script failed for {Unit}", label);
 					u.RemoveFromPlay();
 				}
-				message = $"{label} was disbanded." + (human.defeated ? " You have no cities or settlers left: your civilization is defeated and the game is over." : "");
+				message = $"{label} was disbanded." + (here != null && here.shieldsStored > stored
+					? $" {here.name} gained {here.shieldsStored - stored} shields toward {here.itemBeingProduced?.name ?? "its production"}." : "")
+					+ (human.defeated ? " You have no cities or settlers left: your civilization is defeated and the game is over." : "");
 				break;
 			default:
 				message = StartJob(u, order);

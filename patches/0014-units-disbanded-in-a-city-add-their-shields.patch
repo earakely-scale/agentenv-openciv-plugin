@@ -1,0 +1,48 @@
+A unit disbanded in one of its civ's cities adds its shields to what the city builds, as the ruleset's script (C7/Lua/civ3/behaviors/gameplay.lua, gameplay.units.disband) means it to. The script took `unit.location.HasCity` (a method, so always true) for a city on the tile and gave the shields to the city whose borders hold the unit; then `item:GetType().Name` raised a MoonSharp error, since GetType() in a script gives the type's static members, not a System.Type. So every disband inside the civ's borders failed with "cannot access field Name of userdata<...>" before the unit was removed, and none gave shields. The script now takes the city on the unit's tile, and City.TakesDisbandShields says whether the item being built takes them (not a great wonder, nor an inflow).
+
+--- a/C7/Lua/civ3/behaviors/gameplay.lua
++++ b/C7/Lua/civ3/behaviors/gameplay.lua
+@@ -18,21 +18,11 @@
+   local unit = context
+   local unit_shield_cost = unit.unitType.shieldCost;
+ 
+-  local has_city = unit.location.HasCity
+-  local is_unit_on_own_city = unit.location.OwningPlayer() == unit.owner
+-
+-  if has_city and is_unit_on_own_city then
+-    local city = unit.location.owningCity;
+-    local item_produced = city.itemBeingProduced
+-
+-    if (item_produced:GetType().Name == "Building" and item_produced.IsGreatWonder() == true) then
+-      return
+-    end
+-
+-    if (item_produced:GetType().Name == "Inflow") then
+-      return
+-    end
++  -- The city on the unit's tile, not the one whose borders hold it; GetType() in a script gives the type's static
++  -- members, not a System.Type, so the city says itself whether it takes the shields.
++  local city = unit.location.cityAtTile
+ 
++  if city ~= nil and city.owner == unit.owner and city.TakesDisbandShields() then
+     local reward = math.floor(unit_shield_cost * rules().ShieldRateForDisbanding)
+     game_data().SendMessageToUiFromLua("Our " .. unit.name .. " has been converted to " .. reward .. " shields.",
+       unit.location)
+--- a/C7Engine/C7GameData/City.cs
++++ b/C7Engine/C7GameData/City.cs
+@@ -121,6 +121,15 @@
+ 				this.shieldsStored = shields;
+ 		}
+ 
++		/// <summary>
++		/// Whether a unit disbanded in this city adds shields to what it builds: not to a great wonder, nor to an inflow.
++		/// </summary>
++		[LuaMethod]
++		public bool TakesDisbandShields() {
++			return itemBeingProduced != null && itemBeingProduced is not Inflow
++				&& !(itemBeingProduced is Building b && b.IsGreatWonder());
++		}
++
+ 		public List<CityBuilding> GetBuildings() {
+ 			HashSet<Building> buildingsSeen = new();
+ 			List<CityBuilding> result = new();
