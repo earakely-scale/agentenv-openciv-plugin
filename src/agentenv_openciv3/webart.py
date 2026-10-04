@@ -84,7 +84,8 @@ TERRAFORM_BUTTON = {"unit_build_fortress": [0, 3], "unit_build_railroad": [7, 2]
                     "unit_build_airfield": [1, 4], "unit_build_radar_tower": [2, 4], "unit_build_outpost": [3, 4],
                     "unit_build_barricade": [4, 4]}
 # Unit type -> art folder under Assets/Art/Units, as the client's standalone ruleset maps them
-# (vendor/OpenCiv3/C7/Lua/standalone/ruleset.lua). Types without art are drawn as the page's own markers.
+# (C7/Lua/standalone/ruleset.lua, as patches/0018 extends it: the later and unique units borrow the folder of the
+# unit they replace or descend from). Types without art are drawn as the page's own markers.
 UNIT_ART = {
     "Settler": "Carthaginian Settler", "Worker": "Carthaginian Worker", "Scout": "Euro Scout",
     "Explorer": "German Explorer", "Warrior": "Tribal Mediterranean Warrior", "Archer": "Chichimeca Archer",
@@ -95,6 +96,22 @@ UNIT_ART = {
     "Galley": "Bireme", "Caravel": "Cog", "Frigate": "HeavyFrigate", "Galleon": "East_Indiaman1",
     "Privateer": "Pirate Ship", "Medieval Infantry": "Gothic Swordsman", "Trebuchet": "Medieval Trebuchet",
     "Crusader": "Black Hospitaller Swordsman", "Ancient Cavalry": "Oscan Companion", "Curragh": "MinoanGalley",
+    **dict.fromkeys(("Rifleman", "Infantry", "Guerilla", "Marine", "Paratrooper", "Mech Infantry", "TOW Infantry",
+                     "Modern Paratrooper", "Musketeer"), "Generic Musketman 1600"),
+    **dict.fromkeys(("Artillery", "Radar Artillery", "Hwach'a"), "French Artillery 17th C"),
+    **dict.fromkeys(("Tank", "Modern Armor", "Cossack", "Sipahi", "Panzer"), "1750 British Dragoon"),
+    **dict.fromkeys(("Ironclad", "Destroyer", "Cruiser", "Battleship", "AEGIS Cruiser", "Submarine", "Man-O-War"),
+                    "HeavyFrigate"),
+    "Transport": "East_Indiaman1",
+    **dict.fromkeys(("Jaguar Warrior", "Enkidu Warrior"), "Tribal Mediterranean Warrior"),
+    **dict.fromkeys(("Bowman", "Javelin Thrower"), "Chichimeca Archer"),
+    **dict.fromkeys(("Hoplite", "Impi"), "European Spearman"), "Numidian Mercenary": "Medieval Spearman",
+    "Legionary": "Serbian Regular Swordsman", **dict.fromkeys(("Immortals", "Gallic Swordsman"), "European Swordsman"),
+    **dict.fromkeys(("War Chariot", "Three-Man Chariot"), "thracian chariot"), "Mounted Warrior": "Serbian Horseman",
+    "Swiss Mercenary": "Elf Spearman", "Berserk": "Gothic Swordsman",
+    **dict.fromkeys(("Rider", "Samurai", "War Elephant", "Keshik", "Ansar Warrior", "Conquistador"),
+                    "Medieval European Horse Spearman"),
+    "Chasqui Scout": "Euro Scout", "Dromon": "Bireme", "Carrack": "Cog",
 }
 FONTS = ("NotoSans-Regular.ttf", "NotoSans-Bold.ttf", "NotoSans-Italic.ttf", "LICENSE-NotoSans.txt")
 

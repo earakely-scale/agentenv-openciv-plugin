@@ -85,6 +85,8 @@ sealed partial class Session {
 				["id"] = u.id?.ToString(),
 				["x"] = u.location.XCoordinate, ["y"] = u.location.YCoordinate, ["owner"] = index[u.owner], ["type"] = u.unitType.name,
 				["hp"] = u.hitPointsRemaining, ["hp_max"] = u.maxHitPoints, ["fortified"] = u.isFortified,
+				// The engine id of the ship carrying the unit, or null.
+				["aboard"] = u.loadedOnUnitId?.ToString(),
 			}),
 			// What happened since the last snapshot, in order (patches/0010 and 0012): each unit's steps and every battle.
 			["moves"] = SnapshotMoves(since),

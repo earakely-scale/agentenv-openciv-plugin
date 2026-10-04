@@ -14,7 +14,8 @@ URGENT = {"threat", "unit_lost", "war_declared", "city_destroyed", "disorder", "
 # Kept first when a turn has more events than fit; threats go last, they repeat the most.
 FIRST = {"city_founded", "unit_lost", "city_destroyed", "civ_destroyed", "war_declared", "disorder", "disorder_started",
          "gold_stolen", "defenseless", "tech_learned", "city_starved", "settle_failed", "goto_blocked",
-         "engine_restarted", "peace_offered", "peace_signed", "government_picked", "city_lost", "city_captured"}
+         "engine_restarted", "peace_offered", "peace_signed", "government_picked", "city_lost", "city_captured",
+         "trade_offered", "trade_signed"}
 CITY_TARGETS = ((1, 1), (15, 2), (30, 3), (45, 4), (60, 5), (80, 6), (100, 7))
 TECHS_LEARNED_TARGETS = ((20, 2), (40, 4), (60, 6), (80, 8), (100, 10))
 TERRAIN = {"grassland": "g", "plains": "p", "desert": "d", "tundra": "t", "floodplain": "f", "hills": "h",
@@ -23,14 +24,16 @@ TERRAIN = {"grassland": "g", "plains": "p", "desert": "d", "tundra": "t", "flood
 TERRAIN_NAMES = {"g": "grassland", "p": "plains", "d": "desert", "t": "tundra", "f": "flood plain", "h": "hills",
                  "m": "mountains", "F": "forest", "j": "jungle", "s": "marsh", "v": "volcano", "~": "water"}
 BASELINE_LABELS = {"engine_ai": "built-in AI", "settler_bot": "settler bot", "null": "do-nothing"}
-MAX_UNIT_LINES, MAX_STANDING, MAX_CITY_LINES, MAX_EVENTS, MAX_AUTO, MAX_MESSAGES = 5, 6, 6, 5, 3, 12
-MAX_DETAILED_CITIES, MAX_PICKS, MAX_BATCH_LINES = 4, 8, 30
+MAX_UNIT_LINES, MAX_STANDING, MAX_CITY_LINES, MAX_EVENTS, MAX_MESSAGES = 5, 6, 6, 5, 12
+MAX_DETAILED_CITIES, MAX_PICKS, MAX_BATCH_LINES, MAX_OFFERS = 4, 8, 30, 2
 # The characters of messages a brief lists at most (about 300 tokens; the oldest are left out first): every brief
 # repeats them, and the seat has read each one in full once already.
 MESSAGE_CHARS = 1200
 # An item is delivered only when the city is bigger than its population cost (Settler 2, Worker 1 in the ruleset).
 MIN_SIZE = {"Settler": 3, "Worker": 2}
 IDLE_GOLD = 100
+# The brief shows the culture race once a civ has 10,000 culture or a city 2,000 (a tenth of the victories' goals).
+CULTURE_SHOWN = (10_000, 2_000)
 # Governments that rush production with population, not gold (Civ III rules).
 FORCED_LABOUR = {"Despotism", "Communism", "Anarchy"}
 
@@ -72,6 +75,9 @@ def footer(state: dict) -> str:
 
 def status_text(u: dict) -> str:
     status = u.get("status") or "idle"
+    if u.get("aboard"):
+        on = f"aboard {u['aboard']}"
+        return on if status == "aboard" else f"{on}, " + status_text({**u, "aboard": None})
     if status in ("goto", "settle") and u.get("target"):
         return f"{status}→{pos(u['target'])} {rel(u['target'])}"
     if status.startswith("working:"):
@@ -91,13 +97,25 @@ def unit_line(u: dict, detail: bool = False) -> str:
              status_text(u)]
     if u.get("hp") is not None and u.get("hp_max") and u["hp"] < u["hp_max"]:
         parts.append(f"hp {u['hp']}/{u['hp_max']}")
+    if u.get("capacity"):
+        cargo = u.get("cargo") or []
+        parts.append(f"cargo {len(cargo)}/{u['capacity']}" + (": " + " ".join(cargo) if cargo else ""))
     if detail and u.get("orders"):
         parts.append("orders: " + " ".join(u["orders"]))
     if found := found_text(u):
         parts.append(found)
     if targets := u.get("attack_targets"):
         parts.append("attack: " + ", ".join(target_text(t) for t in targets))
+    if up := u.get("upgrade"):
+        parts.append(upgrade_text(up, detail))
     return " · ".join(parts)
+
+
+def upgrade_text(up: dict, detail: bool = False) -> str:
+    text = f"upgrade → {up['to']} {up['gold']}g"
+    if up.get("ok"):
+        return text
+    return text + (f" (not now: {up['reason']})" if detail and up.get("reason") else " (not now)")
 
 
 def target_text(t: dict) -> str:
@@ -131,11 +149,18 @@ def idle_groups(units: list[dict]) -> list[tuple[str, int]]:
     return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
 
 
+def cargo_text(u: dict) -> str:
+    """A ship's passengers, for a list of units: ", cargo u4 u5"."""
+    return ", cargo " + " ".join(u["cargo"]) if u.get("cargo") else ""
+
+
 def batch_hint(units: list[dict]) -> str:
-    """A unit_orders call for idle units, by type: workers work, settlers settle, the rest fortify."""
+    """A unit_orders call for idle units, by type: workers work, settlers settle, the rest fortify. A ship carrying
+    passengers is left out: fortified at sea, it would park them there out of sight."""
     def order(t: str) -> str:
         return "auto_work" if t == "Worker" else "explore" if t in ("Scout", "Explorer") else "fortify"
-    groups = [t for t, _ in idle_groups(units) if t != "Settler"][:2]
+    laden = {u["type"] for u in units if u.get("cargo")}
+    groups = [t for t, _ in idle_groups(units) if t != "Settler" and t not in laden][:2]
     if not groups:
         return 'unit_orders(orders=[{"unit": "idle", "order": "..."}])'
     return "unit_orders(orders=[" + ", ".join(f'{{"unit": "idle:{t}", "order": "{order(t)}"}}' for t in groups) + "])"
@@ -241,7 +266,16 @@ def option_text(o: dict, c: dict) -> str:
     if o.get("kind") == "wealth":
         return o["name"]
     eta = f"{o['turns']}t" if o.get("turns") is not None else f"no progress: {stalled(c)}"
-    return f"{o['name']} {o['cost']} ({eta})"
+    text = f"{o['name']} {o['cost']} ({eta})"
+    # A building's first two effects, economic ones first: "Library 80 (6t): +50% science (+2 here); +3 culture".
+    return text + ": " + "; ".join(o["effects"][:2]) if o.get("effects") else text
+
+
+def bonus_text(c: dict) -> str | None:
+    """What the city's buildings add, in percent: "bonus +50% science +25% shields"."""
+    b = c.get("bonus") or {}
+    parts = [f"+{b[k]}% {k}" for k in ("science", "tax", "luxury", "shields") if b.get(k)]
+    return "bonus " + " ".join(parts) if parts else None
 
 
 def city_detail(c: dict) -> str:
@@ -258,7 +292,7 @@ def city_detail(c: dict) -> str:
     if c.get("shields_lost_last_turn"):
         lines.append(f"  {c['shields_lost_last_turn']} shields lost last turn (production full)")
     if c.get("buildings"):
-        lines.append("  buildings: " + ", ".join(c["buildings"]))
+        lines.append("  buildings: " + ", ".join(c["buildings"]) + (f" · {bonus}" if (bonus := bonus_text(c)) else ""))
     opts = [option_text(o, c) for o in c.get("options", [])]
     if opts:
         lines.append("  can build: " + " · ".join(opts))
@@ -353,6 +387,30 @@ def domination_race(state: dict) -> str | None:
     return f"land/pop {_shares(r['you'])}" + ("" if near.get("you") else f", top {_race_name(near)} {_shares(near)}")
 
 
+def kilo(n: int) -> str:
+    """Rounded down, so a goal never shows as reached early: 999, 5.8k, 99.9k, 215k."""
+    return str(n) if n < 1000 else f"{n // 100 / 10:g}k" if n < 100_000 else f"{n // 1000}k"
+
+
+def culture_race(state: dict) -> str | None:
+    """The culture race once it matters (CULTURE_SHOWN): Civ III's cultural victory goes to a civ with a city of
+    20,000 culture, or with 100,000 and at least twice the next civ's."""
+    r = state.get("race")
+    if not r or not r.get("you") or not r.get("nearest_culture"):
+        return None
+    top, second, city = r["nearest_culture"], r.get("culture_runner_up"), r.get("best_city") or {}
+    if top["culture"] < CULTURE_SHOWN[0] and city.get("culture", 0) < CULTURE_SHOWN[1]:
+        return None
+    lead = (f"you {kilo(r['you']['culture'])}" if top.get("you")
+            else f"you {kilo(r['you']['culture'])}, top {_race_name(top)} {kilo(top['culture'])}")
+    if second and second["culture"]:
+        tenths = top["culture"] * 10 // second["culture"]   # rounded down, so 2x never shows early
+        lead += f" ({'>99.9' if tenths > 999 else f'{tenths / 10:.1f}'}x the next)"
+    owner = "yours" if city.get("you") else city.get("civ") or "an unmet civ"
+    return (f"CULTURE {lead} · best city {city.get('name') or '?'} ({owner}) {kilo(city.get('culture', 0))}"
+            f" · a civ wins at {kilo(r['culture_goal'])} and 2x the next, or a city at {kilo(r['city_culture_goal'])}")
+
+
 def pace_line(state: dict, start_techs: int) -> str:
     s, turn = state["score"], state["turn"]
     return (f"PACE cities {s['cities']} {_milestone(CITY_TARGETS, turn, s['cities'])} · "
@@ -384,9 +442,12 @@ def _rank(e: dict) -> int:
 
 
 def short_event(e: dict) -> dict:
-    """An event as the brief lists it: disorder without its fixes, which NEEDS ORDERS gives while it lasts."""
+    """An event as the brief lists it: disorder without its fixes, which NEEDS ORDERS gives while it lasts, and a trade
+    offer without the call that accepts it, which its TRADE line gives while it stands."""
     if e.get("kind") in ("disorder", "disorder_started") and ": " in e.get("text", ""):
         return {**e, "text": e["text"].split(": ", 1)[0] + "."}
+    if e.get("kind") == "trade_offered" and " Accept " in e.get("text", ""):
+        return {**e, "text": e["text"].split(" Accept ", 1)[0]}
     return e
 
 
@@ -464,13 +525,53 @@ def attention_lines(state: dict) -> list[str]:
     for c in (c for c in cities if c.get("capped")):
         lost = f", {c['shields_lost_last_turn']} shields lost last turn" if c.get("shields_lost_last_turn") else ""
         out.append(f"{c['id']} {c['name']} {production_text(c)}{lost}")
+    if line := upgrades_line(state):
+        out.append(line)
     gold = state.get("gold", 0)
-    if gold >= IDLE_GOLD:
+    # Gold the upgrade line above asks for is not idle.
+    if gold >= IDLE_GOLD and not any((u.get("upgrade") or {}).get("ok") for u in state.get("units", [])):
         hints = [h for h in (science_fix(state),) if h]
         if state.get("government") not in FORCED_LABOUR and cities:
             hints.append('buy(city="...") rushes a city\'s production')
         out.append(f"gold {gold} unspent" + (" → " + " · ".join(hints) if hints else ""))
     return out
+
+
+def upgrades_line(state: dict) -> str | None:
+    """Units in their cities that can upgrade now, by type, with the gold it takes and how many the treasury pays for
+    (in unit order, as unit_orders runs them), and the call for the commonest type it pays for."""
+    units = state.get("units", [])
+    ready = [u for u in units if (u.get("upgrade") or {}).get("ok")]
+    if not ready:
+        return None
+    kinds: dict[tuple[str, str], int] = {}
+    for u in ready:
+        key = (u["type"], u["upgrade"]["to"])
+        kinds[key] = kinds.get(key, 0) + 1
+    top = sorted(kinds.items(), key=lambda kv: (-kv[1], kv[0]))
+    named = ", ".join(f"{n} {a}→{b}" for (a, b), n in top[:3]) + (f", +{len(top) - 3} more" if len(top) > 3 else "")
+    gold, paid, payable = state.get("gold", 0), 0, []
+    for u in ready:
+        if paid + u["upgrade"]["gold"] <= gold:
+            paid += u["upgrade"]["gold"]
+            payable.append(u)
+    total = sum(u["upgrade"]["gold"] for u in ready)
+    text = f"{len(ready)} unit{'s' if len(ready) > 1 else ''} can upgrade for {total} gold in all ({named})"
+    if len(payable) < len(ready):
+        text += f"; your {gold} gold pays for {len(payable)} now"
+    if not payable:
+        return text
+    counts: dict[str, int] = {}
+    for u in payable:
+        counts[u["type"]] = counts.get(u["type"], 0) + 1
+    first = min(counts, key=lambda t: (-counts[t], t))
+    chosen = [u for u in payable if u["type"] == first]
+    # "all:Type" only when it names exactly these units; otherwise their ids (a few), so no order of the call fails.
+    if len(chosen) == sum(1 for u in units if u["type"] == first):
+        orders = [{"unit": f"all:{first}", "order": "upgrade"}]
+    else:
+        orders = [{"unit": u["id"], "order": "upgrade"} for u in chosen[:4]]
+    return f"{text} → " + call("unit_orders", orders=orders)
 
 
 def science_fix(state: dict) -> str | None:
@@ -490,6 +591,18 @@ def rates_text(state: dict) -> str | None:
     if not r:
         return None
     return f"tax {r.get('tax', 0) * 10}% sci {r.get('science', 0) * 10}% lux {r.get('luxury', 0) * 10}%"
+
+
+def trade_lines(state: dict) -> list[str]:
+    """The AI offers standing for the seat, the best for it first (what it gets less what it gives, to it), at most
+    MAX_OFFERS; diplomacy() lists them all."""
+    offers = sorted((r for r in state.get("rivals", []) if r.get("trade_offered")),
+                    key=lambda r: r["trade_offered"]["you_value_give"] - r["trade_offered"]["you_value_get"])
+    lines = ["TRADE " + trade_offer_text(r["civ"], r["trade_offered"]) for r in offers[:MAX_OFFERS]]
+    if len(offers) > MAX_OFFERS:
+        lines.append(f"TRADE +{len(offers) - MAX_OFFERS} more offers ("
+                     + ", ".join(r["civ"] for r in offers[MAX_OFFERS:]) + ") → diplomacy()")
+    return lines
 
 
 def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: int | None = None,
@@ -524,6 +637,7 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
                      + (" (engine pick)" if r.get("source") == "engine" else ""))
     else:
         lines.append("RESEARCH none — research() lists techs")
+    lines += trade_lines(s)
     if s.get("revolution_target"):
         lines.append(f"GOVERNMENT anarchy, then {s['revolution_target']}")
     elif s.get("governments"):
@@ -536,6 +650,8 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
     lines.append(f"SCORE {score_text(s['score'])}" + (f" · {rank}" if rank else "")
                  + f" · explored {num(s.get('explored_pct', 0))}%")
     lines.append(pace_line(s, start_techs) + (f" · {d}" if (d := domination_race(s)) else ""))
+    if line := culture_race(s):
+        lines.append(line)
     if baselines:
         lines.append(vs_line(s["turn"], baselines))
 
@@ -577,7 +693,7 @@ def brief(state: dict, *, start_techs: int, plan: str | None = None, plan_turn: 
 
     standing = [u for u in s.get("units", []) if not u.get("needs_orders") and u.get("status") not in ("idle", "done")]
     if standing:
-        items = [f"{u['id']} {u['type']} {status_text(u)}" for u in standing[:MAX_STANDING]]
+        items = [f"{u['id']} {u['type']} {status_text(u)}" + cargo_text(u) for u in standing[:MAX_STANDING]]
         if len(standing) > MAX_STANDING:
             items.append(f"+{len(standing) - MAX_STANDING} more")
         lines.append("STANDING " + " · ".join(items))
@@ -632,6 +748,42 @@ def offer_text(o: dict) -> str:
     return (f" with {o['gold']} gold" if o.get("gold") else "") + f", until T{o['until_turn']}"
 
 
+def goods(g: dict | None) -> str:
+    """One side of a trade: its techs and gold."""
+    parts = [*(g or {}).get("techs", []), *([f"{g['gold']} gold"] if (g or {}).get("gold") else [])]
+    return ", ".join(parts) or "nothing"
+
+
+def trade_offer_text(civ: str, o: dict) -> str:
+    """An offer standing for the seat, with what each side is worth to it, and the call that accepts it."""
+    return (f"{civ} offers {goods(o['you_get'])} (worth {o['you_value_get']} to you) for {goods(o['you_give'])} "
+            f"(worth {o['you_value_give']} to you), until T{o['until_turn']}: accept with "
+            + call("diplomacy", action="accept_trade", civ=civ))
+
+
+def tradeable_text(techs: list[dict] | None, max_techs: int = 4) -> str:
+    shown = [f"{t['name']} {t['you_value']}/{t['they_value']}" for t in (techs or [])[:max_techs]]
+    more = f", +{len(techs) - max_techs} more" if len(techs or []) > max_techs else ""
+    return ", ".join(shown) + more if shown else "none"
+
+
+def trade_quote(q: dict) -> str:
+    """quote_trade's answer: both sides' values, whether an AI takes it, and the call that would balance it."""
+    head = (f"{q['civ']}: you give {goods(q['you_give'])} (worth {q['you_value_give']} to you, "
+            f"{q['they_value_give']} to them) · you get {goods(q['you_get'])} (worth {q['you_value_get']} to you, "
+            f"{q['they_value_get']} to them)")
+    if q.get("accepts") is None:
+        return head + " · another agent decides: propose_trade offers it"
+    if q["accepts"]:
+        more = f"; it would add up to {q['gold_they_would_add']} gold" if q.get("gold_they_would_add") else ""
+        return head + f" · {q['civ']} accepts{more} → " + call(
+            "diplomacy", action="propose_trade", civ=q["civ"],
+            **{k: v for k, v in (("give_techs", q["you_give"]["techs"]), ("give_gold", q["you_give"]["gold"]),
+                                 ("get_techs", q["you_get"]["techs"]), ("get_gold", q["you_get"]["gold"])) if v})
+    fix = f" → {q['suggest']}" if q.get("suggest") else ", more than you have"
+    return head + f" · {q['civ']} refuses: it wants {q['gold_to_balance']} gold more{fix}"
+
+
 def civ_line(c: dict) -> str:
     sc = c.get("score") or {}
     if c.get("at_war") and c.get("agent"):
@@ -652,6 +804,16 @@ def civ_line(c: dict) -> str:
         parts.append(f"military {num(c['military_vs_yours'])}× yours")
     if c.get("at_war_with"):
         parts.append("at war with " + ", ".join(c["at_war_with"]))
+    if not c.get("at_war") and "gold" in c:
+        parts.append(f"gold {c['gold']}")
+        if c.get("techs_for_you") or c.get("techs_for_them"):
+            parts.append(f"has {tradeable_text(c.get('techs_for_you'))}; "
+                         f"lacks {tradeable_text(c.get('techs_for_them'))} (worth to you/them)")
+    if c.get("trade_offered"):
+        parts.append("OFFERS " + trade_offer_text(c["civ"], c["trade_offered"]).split(" offers ", 1)[1])
+    if c.get("you_offered_trade"):
+        o = c["you_offered_trade"]
+        parts.append(f"you offered {goods(o['you_give'])} for {goods(o['you_get'])}, until T{o['until_turn']}")
     return " · ".join(p for p in parts if p)
 
 
@@ -664,18 +826,17 @@ def diplomacy(d: dict) -> str:
     if any(c.get("at_war") and c.get("agent") for c in civs):
         lines.append("Peace with another agent's civ: both propose it (" + call("diplomacy", action="propose_peace",
                      civ="...") + "), the second within a turn of the first; each pays the gold it offers.")
+    if any(c.get("techs_for_you") or c.get("techs_for_them") for c in civs):
+        lines.append("Trade: " + call("diplomacy", action="quote_trade", civ="...", get_techs=["..."], give_gold=0)
+                     + " says what each side is worth and whether an AI takes it; propose_trade makes the trade. "
+                     "An AI takes a trade it values at least even; another agent's civ accepts with accept_trade.")
     return "\n".join(lines)
 
 
 # ---- end turn ----
 
 def auto_lines(autos: list[dict]) -> list[str]:
-    trades = [a for a in autos if a.get("kind") == "trade_declined"]
-    others = [a for a in autos if a.get("kind") != "trade_declined"]
-    lines = [f"auto: {a.get('text') or a.get('kind')}" for a in others + trades[:MAX_AUTO]]
-    if len(trades) > MAX_AUTO:
-        lines.append(f"auto: +{len(trades) - MAX_AUTO} more trade offers declined (the env declines every offer)")
-    return lines
+    return [f"auto: {a.get('text') or a.get('kind')}" for a in autos]
 
 
 def turn_report(result: dict, prev_turn: int) -> str:
@@ -725,8 +886,8 @@ def match_line(s: dict) -> str | None:
     return (f"MATCH vs agents {', '.join(agents)}" + (f" and the AI's {', '.join(ai)}" if ai else "")
             + " · every agent plays each turn at once; end_turn waits for the others"
             + f" · it ends at T{s['turn_limit']}, or once one agent's civilization is the last an agent plays"
-            + " (conquest) or any civ holds 2/3 of the world's land and population (domination); else the top"
-            + " score wins"
+            + " (conquest), any civ holds 2/3 of the world's land and population (domination), or has a city of"
+            + " 20,000 culture or 100,000 culture and twice the next civ's (culture); else the top score wins"
             + " · message() talks to the other agents")
 
 

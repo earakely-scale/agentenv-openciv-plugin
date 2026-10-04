@@ -226,7 +226,8 @@ async def test_city_info(tools):
                                     "· works 2 tiles · no defender")
     assert text.splitlines()[1] == "  mood happy 0 content 1 unhappy 0 · defenders 0"
     assert "  producing Warrior 0/10 → 5t (engine pick)" in text
-    assert "  can build: Settler 30 (15t) · Worker 10 (5t) · Warrior 10 (5t) · Barracks 40 (20t) · Wealth" in text
+    assert ("  can build: Settler 30 (15t) · Worker 10 (5t) · Warrior 10 (5t) · Barracks 40 (20t): veteran land units; "
+            "upkeep 1 · Wealth") in text
     assert text == await tools("city_info")
     err = await tools.error("city_info", city="c7")
     assert "you have no city 'c7'." in err and "Valid: c1" in err

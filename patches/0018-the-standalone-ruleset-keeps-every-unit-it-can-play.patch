@@ -1,0 +1,180 @@
+The standalone ruleset keeps every land and sea unit the engine can play, and their upgrades. Its filter (C7/Lua/standalone/ruleset.lua) kept only the 27 units with community art, and dropped every unit's upgrades: it looked the upgradesTo list up as a key of the art map, which is always nil. With no upgrades, no unit ever went obsolete (Rome could build Spearmen beside Pikemen at T200), 25 civs lost a whole unit class to their missing unique units (Rome had no Swordsman-class unit, France no Musketman), and the Industrial and Modern techs unlocked no unit at all. The filter now keeps 76 units: the 27, the 12 later land units (Rifleman to Modern Armor and Radar Artillery), the 7 later sea units (Ironclad to AEGIS Cruiser and the Transport) and the 30 unique units, each new one with the art folder of the unit it replaces or descends from, and their upgrades to units kept. It leaves out the air units, missiles and nukes, the Carrier, Nuclear Submarine, Flak and Mobile SAM (the engine has no air movement, air missions or nuclear attack: an air unit cannot even move), and the Leader, Army, Princess and named leaders (unproducible, with no rule behind them). The kept units' era and slave art variants are cleared, since they name folders this art does not have. UnitPrototype.GetUnitUpgrade, which logged a warning and took the alphabetically first target when several fit a civ (the Spearman lists both the Pikeman and, for the Dutch, the Musketman), now takes the next step: the cheapest target costing no less than the unit, then the cheapest, then by name; the chain stops at a repeat.
+
+--- a/C7/Lua/standalone/ruleset.lua
++++ b/C7/Lua/standalone/ruleset.lua
+@@ -1,72 +1,139 @@
+ --[[
+ The art replacements for units in the standalone mode.
+ A key represents a name of a unit prototype,
+ a value refers to a directory with unit art in C7/Assets/Art/Units
++
++The community art has 29 unit folders. Units without art of their own borrow the
++folder of the unit they replace or descend from: later infantry look like musketmen,
++tanks like dragoons, steel ships like frigates.
++
++Left out (no entry, so the filter below drops them): the air units, missiles and nukes,
++the Carrier, Nuclear Submarine, Flak and Mobile SAM, which need air units and nuclear
++attacks the engine does not have, and the Leader, Army, Princess and the named leaders,
++which no rule produces or uses.
+ ]]
+ local unit_replacement_art_map = {
+   ["Settler"] = "Carthaginian Settler",
+   ["Worker"] = "Carthaginian Worker",
+   ["Scout"] = "Euro Scout",
+   ["Explorer"] = "German Explorer",
+   ["Warrior"] = "Tribal Mediterranean Warrior",
+   ["Archer"] = "Chichimeca Archer",
+   ["Spearman"] = "European Spearman",
+   ["Swordsman"] = "European Swordsman",
+   ["Chariot"] = "thracian chariot",
+   ["Horseman"] = "Serbian Horseman",
+   ["Pikeman"] = "Elf Spearman",
+   ["Longbowman"] = "Longbowman",
+   ["Musketman"] = "Generic Musketman 1600",
+   ["Knight"] = "Medieval European Horse Spearman",
+   ["Cavalry"] = "1750 British Dragoon",
+   ["Catapult"] = "Dark Ages Onager",
+   ["Cannon"] = "French Artillery 17th C",
+   ["Galley"] = "Bireme",
+   ["Caravel"] = "Cog",
+   ["Frigate"] = "HeavyFrigate",
+   ["Galleon"] = "East_Indiaman1",
+   ["Privateer"] = "Pirate Ship",
+   ["Medieval Infantry"] = "Gothic Swordsman",
+   ["Trebuchet"] = "Medieval Trebuchet",
+   ["Crusader"] = "Black Hospitaller Swordsman",
+   ["Ancient Cavalry"] = "Oscan Companion",
+   ["Curragh"] = "MinoanGalley",
++
++  -- The Industrial and Modern land and sea units, with stand-in art
++  ["Rifleman"] = "Generic Musketman 1600",
++  ["Infantry"] = "Generic Musketman 1600",
++  ["Guerilla"] = "Generic Musketman 1600",
++  ["Marine"] = "Generic Musketman 1600",
++  ["Paratrooper"] = "Generic Musketman 1600",
++  ["Mech Infantry"] = "Generic Musketman 1600",
++  ["TOW Infantry"] = "Generic Musketman 1600",
++  ["Modern Paratrooper"] = "Generic Musketman 1600",
++  ["Artillery"] = "French Artillery 17th C",
++  ["Radar Artillery"] = "French Artillery 17th C",
++  ["Tank"] = "1750 British Dragoon",
++  ["Modern Armor"] = "1750 British Dragoon",
++  ["Ironclad"] = "HeavyFrigate",
++  ["Destroyer"] = "HeavyFrigate",
++  ["Cruiser"] = "HeavyFrigate",
++  ["Battleship"] = "HeavyFrigate",
++  ["AEGIS Cruiser"] = "HeavyFrigate",
++  ["Submarine"] = "HeavyFrigate",
++  ["Transport"] = "East_Indiaman1",
++
++  -- The civilizations' unique units, with the art of the unit each replaces
++  ["Jaguar Warrior"] = "Tribal Mediterranean Warrior",
++  ["Enkidu Warrior"] = "Tribal Mediterranean Warrior",
++  ["Bowman"] = "Chichimeca Archer",
++  ["Javelin Thrower"] = "Chichimeca Archer",
++  ["Hoplite"] = "European Spearman",
++  ["Impi"] = "European Spearman",
++  ["Numidian Mercenary"] = "Medieval Spearman",
++  ["Legionary"] = "Serbian Regular Swordsman",
++  ["Immortals"] = "European Swordsman",
++  ["Gallic Swordsman"] = "European Swordsman",
++  ["War Chariot"] = "thracian chariot",
++  ["Three-Man Chariot"] = "thracian chariot",
++  ["Mounted Warrior"] = "Serbian Horseman",
++  ["Swiss Mercenary"] = "Elf Spearman",
++  ["Berserk"] = "Gothic Swordsman",
++  ["Musketeer"] = "Generic Musketman 1600",
++  ["Rider"] = "Medieval European Horse Spearman",
++  ["Samurai"] = "Medieval European Horse Spearman",
++  ["War Elephant"] = "Medieval European Horse Spearman",
++  ["Keshik"] = "Medieval European Horse Spearman",
++  ["Ansar Warrior"] = "Medieval European Horse Spearman",
++  ["Conquistador"] = "Medieval European Horse Spearman",
++  ["Cossack"] = "1750 British Dragoon",
++  ["Sipahi"] = "1750 British Dragoon",
++  ["Panzer"] = "1750 British Dragoon",
++  ["Hwach'a"] = "French Artillery 17th C",
++  ["Chasqui Scout"] = "Euro Scout",
++  ["Dromon"] = "Bireme",
++  ["Carrack"] = "Cog",
++  ["Man-O-War"] = "HeavyFrigate",
+ }
+ 
+ --[[
+ This function defines the standalone addon to the base ruleset.
+ 
+ This function takes the initial save data from `civ3/ruleset.json` and
+ removes the units for which we don't have graphics replacements.
+ 
+ On the C# side, this function is called as part of addon loading logic
+ in GameModeLoader class
+ ]]
+ return function(civ3_game_mode)
+   local updated_unit_prototypes = {}
+ 
+   for _, unit_prototype in ipairs(civ3_game_mode.unitPrototypes) do
+     local replacement_art = unit_replacement_art_map[unit_prototype.name]
+ 
+     -- Only preserve a unit if we have an art replacement for it
+     if replacement_art then
+       unit_prototype.art.mainArt.defaultName = replacement_art
++      -- The era and slave variants name folders this art does not have
++      unit_prototype.art.mainArt.variations = nil
+ 
+       -- TODO: these are just placeholders until we have some proper art
+       unit_prototype.art.pediaArt.large = "art\\civilopedia\\icons\\units\\unit_large.png"
+       unit_prototype.art.pediaArt.small = "art\\civilopedia\\icons\\units\\unit_small.png"
+ 
+-      -- Remove the unit upgrade if we don't have a sprite for it
+-      local upgrade = unit_prototype.upgradesTo
+-      if not unit_replacement_art_map[upgrade] then
+-        unit_prototype.upgradesTo = nil
++      -- Keep the upgrades to units that are kept; upgradesTo is a list of names
++      local upgrades = {}
++      for _, upgrade in ipairs(unit_prototype.upgradesTo or {}) do
++        if unit_replacement_art_map[upgrade] then
++          table.insert(upgrades, upgrade)
++        end
+       end
++      unit_prototype.upgradesTo = #upgrades > 0 and upgrades or nil
+ 
+       table.insert(updated_unit_prototypes, unit_prototype)
+     end
+   end
+ 
+   civ3_game_mode.unitPrototypes = updated_unit_prototypes
+ 
+   return civ3_game_mode
+ end
+--- a/C7Engine/C7GameData/UnitPrototype.cs
++++ b/C7Engine/C7GameData/UnitPrototype.cs
+@@ -193,12 +193,15 @@
+ 			return instance;
+ 		}
+ 
+-		/// Immediate upgrade target, given a civilization.
++		/// Immediate upgrade target, given a civilization. Where several fit (the Spearman lists
++		/// both the Pikeman and, for civs with no Pikeman, the Musketman), the next step is the
++		/// cheapest that costs no less than this unit, then the cheapest, then by name.
+ 		private UnitPrototype GetUnitUpgrade(Civilization civ) {
+-			var match = upgradesTo.Where(x => x.producibleBy.Contains(civ)).ToList();
+-			if (match.Count > 1)
+-				Log.Warning($"Unexpected upgrade chain: more than one valid target for upgrading {name} with {civ.name}.");
+-			return match.FirstOrDefault();
++			return upgradesTo.Where(x => x.producibleBy.Contains(civ))
++				.OrderBy(x => x.shieldCost < shieldCost)
++				.ThenBy(x => x.shieldCost)
++				.ThenBy(x => x.name, StringComparer.Ordinal)
++				.FirstOrDefault();
+ 		}
+ 
+ 		/// The upgrade chain: a unit upgrade series as an ordered collection of unit prototypes,
+@@ -208,7 +211,7 @@
+ 		private List<UnitPrototype> GetUpgradeChain(Civilization civ) {
+ 			var chain = new List<UnitPrototype>();
+ 			var current = this.GetUnitUpgrade(civ);
+-			while (current != null) {
++			while (current != null && current != this && !chain.Contains(current)) {
+ 				chain.Add(current);
+ 				current = current.GetUnitUpgrade(civ);
+ 			}

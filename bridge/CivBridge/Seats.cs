@@ -26,6 +26,9 @@ sealed class Seat(Player player, string label) {
 	/// <summary>Peace this seat offered another seat, with the gold it pays and the turn it offered it.</summary>
 	public readonly Dictionary<Player, (int Gold, int Turn)> PeaceOffers = [];
 
+	/// <summary>Trades offered to this seat, by who offers them (an AI during its turn, or another seat).</summary>
+	public readonly Dictionary<Player, StandingTrade> TradeOffers = [];
+
 	public readonly Dictionary<City, string> ProducingSource = [];
 
 	/// <summary>What each city builds next, after its current item (set_production's `then`), first first.</summary>
@@ -173,11 +176,12 @@ sealed partial class Session {
 	}
 
 	/// <summary>Tells another seat what the active seat did to it; it reads the event with its events of this turn.</summary>
-	void Notify(Player p, string kind, string text, Tile at = null) {
-		if (SeatOf(p) is not Seat other || other == seat) return;
+	JsonObject Notify(Player p, string kind, string text, Tile at = null) {
+		if (SeatOf(p) is not Seat other || other == seat) return null;
 		JsonObject e = Event(kind, text, at);
 		e["turn"] = gd.turn;
 		other.Incoming.Add(e);
+		return e;
 	}
 
 	sealed record Victory(string Kind, Player Player, int Turn);
@@ -188,8 +192,9 @@ sealed partial class Session {
 	/// <summary>
 	/// Civ III's victories, for any civilization, an agent's or the AI's, checked after every turn. Conquest: it is
 	/// the last civilization left (with seats, also when its seat is the last one an agent still plays). Domination:
-	/// it holds two thirds of the world's land and two thirds of its population. Score: at the turn limit, the highest
-	/// score wins, and a tie on top is no one's victory.
+	/// it holds two thirds of the world's land and two thirds of its population. Culture: one of its cities has
+	/// 20,000 culture points, or it has 100,000 and at least twice as many as any other civilization. Score: at the
+	/// turn limit, the highest score wins, and a tie on top is no one's victory.
 	/// </summary>
 	Victory CheckVictory() {
 		if (MultiSeat && seats.Where(s => !s.Player.defeated).ToList() is [Seat last]) return new Victory("conquest", last.Player, gd.turn);
@@ -199,6 +204,7 @@ sealed partial class Session {
 			var (land, pop) = ShareOf(p);
 			if (land >= Domination && pop >= Domination) return new Victory("domination", p, gd.turn);
 		}
+		if (CultureWinner(civs) is Player cultured) return new Victory("culture", cultured, gd.turn);
 		if (gd.turn < turnLimit) return null;
 		var top = civs.OrderByDescending(p => (int)ScoreOf(p)["total"]).Take(2).ToList();
 		if (top.Count == 0) return null;
@@ -208,12 +214,36 @@ sealed partial class Session {
 	const double Domination = 2.0 / 3;
 
 	/// <summary>
-	/// A one-seat game ends at once when its civ is defeated in its own turn (its last unit disbanded or lost), so no
-	/// turn ends to check for a winner: check now (the last civilization left, say). With seats the others play on,
-	/// and the end of the turn checks.
+	/// Civ III's cultural victory, at its default thresholds (the BIQ's OneCityCultureWin and AllCitiesCultureWin,
+	/// QueryCiv3/Game.cs; the ruleset leaves them out): a city with 20,000 culture points wins for its owner, and so
+	/// does a civilization with 100,000 that has at least twice as many as the next one.
+	/// </summary>
+	const int CityCultureWin = 20000, CivCultureWin = 100000;
+
+	/// <summary>A civilization's culture as the engine's history counts it (Player.UpdateHistory): its cities' culture.</summary>
+	static int CultureOf(Player p) => p.cities.Sum(c => c.GetCultureFor(p));
+
+	/// <summary>The city with the most culture for its owner among these civilizations', the oldest on a tie; or null.</summary>
+	City BestCultureCity(IEnumerable<Player> civs) {
+		var owners = civs.ToHashSet();
+		return gd.cities.Where(c => owners.Contains(c.owner)).OrderByDescending(c => c.GetCultureFor(c.owner)).FirstOrDefault();
+	}
+
+	/// <summary>The civilization that wins by culture now (CityCultureWin, CivCultureWin), if one does.</summary>
+	Player CultureWinner(List<Player> civs) {
+		if (BestCultureCity(civs) is City city && city.GetCultureFor(city.owner) >= CityCultureWin) return city.owner;
+		var top = civs.OrderByDescending(CultureOf).Take(2).ToList();
+		if (top.Count == 0 || CultureOf(top[0]) < CivCultureWin) return null;
+		return top.Count == 1 || CultureOf(top[0]) >= 2L * CultureOf(top[1]) ? top[0] : null;
+	}
+
+	/// <summary>
+	/// A game ends at once when its last undefeated seat is defeated in its own turn (its last unit disbanded or lost),
+	/// so no turn ends to check for a winner: check now (the last civilization left, say). While another seat still
+	/// plays, the end of the turn checks.
 	/// </summary>
 	string VictoryNow() {
-		if (MultiSeat || victory != null || !human.defeated || CheckVictory() is not Victory won) return "";
+		if (seats.Any(s => !s.Player.defeated) || victory != null || CheckVictory() is not Victory won) return "";
 		victory = won;
 		return " " + VictoryText(won);
 	}
@@ -235,6 +265,13 @@ sealed partial class Session {
 			case "domination":
 				var (land, pop) = ShareOf(v.Player);
 				return $"{who} won by domination: {land:P0} of the world's land and {pop:P0} of its population.";
+			case "culture":
+				City best = BestCultureCity([v.Player]);
+				if (best != null && best.GetCultureFor(v.Player) >= CityCultureWin)
+					return $"{who} won by culture: {best.name} has {best.GetCultureFor(v.Player):N0} culture points ({CityCultureWin:N0} win).";
+				var next = Civs().Where(p => p != v.Player && !p.defeated).OrderByDescending(CultureOf).FirstOrDefault();
+				return $"{who} won by culture: {CultureOf(v.Player):N0} culture points"
+					+ (next == null ? "." : $", at least twice {CivName(next)}'s {CultureOf(next):N0}.");
 			default:
 				var runnerUp = Civs().Where(p => p != v.Player).OrderByDescending(p => (int)ScoreOf(p)["total"]).FirstOrDefault();
 				return $"{who} won on score at the turn limit: {ScoreOf(v.Player)["total"]}"

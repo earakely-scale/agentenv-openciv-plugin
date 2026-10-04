@@ -109,9 +109,9 @@ sealed partial class Session {
 
 	/// <summary>
 	/// The city's next item from its queue, after it completed something (or the engine changed what it builds): the
-	/// first queued item it can build now. Items it cannot build any more are dropped with a note.
+	/// first queued item it can build now. Items it cannot build any more are dropped, into `skipped` for the note.
 	/// </summary>
-	IProducible NextQueued(City c, List<string> skipped) {
+	IProducible NextQueued(City c, List<IProducible> skipped) {
 		if (!queues.TryGetValue(c, out var q)) return null;
 		var options = c.ListProductionOptions(gd).ToList();
 		while (q.Count > 0) {
@@ -122,7 +122,7 @@ sealed partial class Session {
 				if (q.Count == 0) queues.Remove(c);
 				return can;
 			}
-			skipped.Add(p.name);
+			skipped.Add(p);
 		}
 		queues.Remove(c);
 		return null;

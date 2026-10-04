@@ -1,0 +1,262 @@
+Buildings multiply the city's science, gold and shields, as in Civilization III. SaveBuilding and Building get sciencePercent, taxPercent, luxuryPercent and productionPercent; City.Boost raises the beakers, taxes and luxuries left after corruption and the sliders (specialists included, Wealth not) in CurrentCommerceYieldRaw, and the useful shields left after waste in CurrentProductionYield, by the sum of the city's buildings' percentages, rounded down, and records what it added in CommerceBreakdown.fromBuildings and CorruptableValue.fromBuildings. The ruleset gives Library, University and Research Lab +50% science, Copernicus' Observatory and Newton's University +100%, Marketplace, Bank and Stock Exchange +50% tax and luxury, Factory and Manufacturing Plant +25% shields, and Wall Street the treasuryEarnsInterest flag the engine already pays (5% of the treasury, at most 50 gold). ImportCiv3 maps the BIQ's three +50% flags. The AI (ChooseProducible.ScoreBuilding) values such a building by what it would add in the city when in order: CurrentProductionYield, like CurrentCommerceYieldRaw, can ignore civil disorder, so a Marketplace's luxury counts in a rioting city. Without this a Library, Marketplace, University, Bank or Factory cost upkeep and returned nothing. No random number is drawn; a save keeps its own buildings, so saves made before this have no multipliers.
+
+--- a/C7Engine/C7GameData/Save/SaveBuilding.cs
++++ b/C7Engine/C7GameData/Save/SaveBuilding.cs
+@@ -41,6 +41,12 @@
+ 		public int contentFacesInCity;
+ 		public double combatDefenseBonus;
+ 		public int maintenanceCost;
++		// Percentages added to the city's science, taxes, luxuries and useful
++		// shields (a Library's +50% science). They add up over the buildings.
++		public int sciencePercent;
++		public int taxPercent;
++		public int luxuryPercent;
++		public int productionPercent;
+ 		public int iconRowIndex;
+ 		public ID? renderedObsoleteBy;
+ 
+--- a/C7Engine/C7GameData/Building.cs
++++ b/C7Engine/C7GameData/Building.cs
+@@ -48,6 +48,13 @@
+ 		public int culturePerTurn = 0;
+ 		public int maintenanceCost = 0;
+ 
++		// Percentages added to the city's science, taxes, luxuries and useful
++		// shields; see City.Boost.
++		public int sciencePercent = 0;
++		public int taxPercent = 0;
++		public int luxuryPercent = 0;
++		public int productionPercent = 0;
++
+ 		// The number of unhappy faces that become content in the city with this
+ 		// building.
+ 		public int contentFacesInCity = 0;
+@@ -73,6 +80,10 @@
+ 			isSmallWonder = building.isSmallWonder;
+ 			culturePerTurn = building.culturePerTurn;
+ 			maintenanceCost = building.maintenanceCost;
++			sciencePercent = building.sciencePercent;
++			taxPercent = building.taxPercent;
++			luxuryPercent = building.luxuryPercent;
++			productionPercent = building.productionPercent;
+ 			iconRowIndex = building.iconRowIndex;
+ 
+ 			if (building.contentFacesInCity < 0) {
+--- a/C7Engine/C7GameData/City.cs
++++ b/C7Engine/C7GameData/City.cs
+@@ -20,6 +20,10 @@
+ 		public int beakers;
+ 		public int happiness;
+ 		public int wealth;
++
++		// How much of taxes, beakers and happiness the city's buildings added
++		// (City.Boost); already counted in them.
++		public int fromBuildings;
+ 	}
+ 
+ 	public struct CorruptableValue {
+@@ -33,10 +37,15 @@
+ 
+ 			// Whatever is left over is corrupt.
+ 			corrupt = value - useful;
++			fromBuildings = 0;
+ 		}
+ 
+ 		public int useful;
+ 		public int corrupt;
++
++		// How much of useful the city's buildings added (City.Boost); already
++		// counted in it.
++		public int fromBuildings;
+ 	}
+ 
+ 	public class City {
+@@ -514,7 +523,7 @@
+ 			return yield;
+ 		}
+ 
+-		public CorruptableValue CurrentProductionYield() {
++		public CorruptableValue CurrentProductionYield(bool respectCivilDisorder = true) {
+ 			int yield = location.ProductionYield(this).yield;
+ 			foreach (CityResident r in residents) {
+ 				yield += r.tileWorked.ProductionYield(this).yield;
+@@ -527,8 +536,9 @@
+ 			// setting corruption to 100% because CorruptableValue would give us
+ 			// one useful commerce in that situation.
+ 			//
+-			// The same is true for civil disorder.
+-			if (owner.government.transitionType || isInCivilDisorder) {
++			// The same is true for civil disorder, which can be ignored to see
++			// what the city would make in order (as for commerce below).
++			if (owner.government.transitionType || (isInCivilDisorder && respectCivilDisorder)) {
+ 				result.useful = 0;
+ 				result.corrupt = yield;
+ 			}
+@@ -536,6 +546,11 @@
+ 			// TODO: add specialist shields here. Do specialists still work in
+ 			// civil disorder?
+ 
++			// Factories and the like add to the shields left after waste.
++			int boosted = Boost(result.useful, GetBuildings().Sum(b => b.building.productionPercent));
++			result.fromBuildings = boosted - result.useful;
++			result.useful = boosted;
++
+ 			return result;
+ 		}
+ 
+@@ -574,9 +589,23 @@
+ 				result.taxes += cr.citizenType.Taxes;
+ 			}
+ 
++			// Libraries, marketplaces and the like add to what is left after
++			// corruption and the sliders, specialists included, as in Civ III.
++			// Wealth (a Lua inflow, added by CurrentCommerceYield) is not boosted.
++			List<CityBuilding> buildings = GetBuildings();
++			int before = result.beakers + result.taxes + result.happiness;
++			result.beakers = Boost(result.beakers, buildings.Sum(b => b.building.sciencePercent));
++			result.taxes = Boost(result.taxes, buildings.Sum(b => b.building.taxPercent));
++			result.happiness = Boost(result.happiness, buildings.Sum(b => b.building.luxuryPercent));
++			result.fromBuildings = result.beakers + result.taxes + result.happiness - before;
++
+ 			return result;
+ 		}
+ 
++		// A value raised by a percentage, rounded down. Zero and negative
++		// values (see the specialist TODO above) are left alone.
++		public static int Boost(int value, int percent) => value > 0 ? value * (100 + percent) / 100 : value;
++
+ 		[MoonSharpHidden]
+ 		public CommerceBreakdown CurrentCommerceYield(bool respectCivilDisorder = true) {
+ 			CommerceBreakdown result = CurrentCommerceYieldRaw(respectCivilDisorder);
+--- a/C7Engine/C7GameData/ImportCiv3.cs
++++ b/C7Engine/C7GameData/ImportCiv3.cs
+@@ -1579,6 +1579,9 @@
+ 					iconRowIndex=pediaIcons.buildingToRowNumberMapping[bldg.CivilopediaEntry],
+ 					combatDefenseBonus=bldg.DefenseBonus / 100.0,
+ 					maintenanceCost=bldg.MaintenanceCost,
++					sciencePercent=bldg.Plus50PercentResearch ? 50 : 0,
++					taxPercent=bldg.Plus50PercentCommerce ? 50 : 0,
++					luxuryPercent=bldg.Plus50PercentLuxury ? 50 : 0,
+ 				};
+ 
+ 				if (bldg.RequiredAdvance != -1) {
+--- a/C7Engine/AI/ChooseProducible.cs
++++ b/C7Engine/AI/ChooseProducible.cs
+@@ -225,6 +225,22 @@
+ 				score += Math.Max(city.residents.Count - city.GetLuxuries(gd).Keys.Count, 0) * (city.GetLuxuries(gd).Keys.Count / 2);
+ 			}
+ 
++			// A building that raises the city's science, taxes, luxuries or
++			// shields is worth what it would add here: each percentage applies
++			// to the base the current buildings already raise. A city in civil
++			// disorder is valued as it would be in order, since the luxuries
++			// matter most there.
++			if (building.sciencePercent > 0 || building.taxPercent > 0 || building.luxuryPercent > 0 || building.productionPercent > 0) {
++				List<CityBuilding> have = city.GetBuildings();
++				CommerceBreakdown now = city.CurrentCommerceYieldRaw(respectCivilDisorder: false);
++				float Gain(int value, int percentNow, int percentAdded) => value * percentAdded / (100f + percentNow);
++				float gain = Gain(now.beakers, have.Sum(b => b.building.sciencePercent), building.sciencePercent)
++					+ Gain(now.taxes, have.Sum(b => b.building.taxPercent), building.taxPercent)
++					+ Gain(now.happiness, have.Sum(b => b.building.luxuryPercent), building.luxuryPercent)
++					+ Gain(city.CurrentProductionYield(respectCivilDisorder: false).useful, have.Sum(b => b.building.productionPercent), building.productionPercent);
++				score += Math.Max(gain, 0) * 5;
++			}
++
+ 			// Only build an aqueduct if we need one.
+ 			if (building.allowsCitySize2 &&
+ 				city.residents.Count == player.rules.MaximumLevel1CitySize && city.FoodGrowthPerTurn() > 0) {
+--- a/C7/Lua/civ3/ruleset.json
++++ b/C7/Lua/civ3/ruleset.json
+@@ -8111,6 +8111,8 @@
+       "contentFacesInCity": 0,
+       "combatDefenseBonus": 0,
+       "maintenanceCost": 1,
++      "taxPercent": 50,
++      "luxuryPercent": 50,
+       "iconRowIndex": 4,
+       "flags": [
+         "increasesLuxuryTrade"
+@@ -8129,6 +8131,7 @@
+       "contentFacesInCity": 0,
+       "combatDefenseBonus": 0,
+       "maintenanceCost": 1,
++      "sciencePercent": 50,
+       "iconRowIndex": 5,
+       "traits": [
+         "scientific"
+@@ -8203,6 +8206,8 @@
+       "contentFacesInCity": 0,
+       "combatDefenseBonus": 0,
+       "maintenanceCost": 1,
++      "taxPercent": 50,
++      "luxuryPercent": 50,
+       "iconRowIndex": 9,
+       "traits": [
+         "commercial"
+@@ -8235,6 +8240,7 @@
+       "contentFacesInCity": 0,
+       "combatDefenseBonus": 0,
+       "maintenanceCost": 2,
++      "sciencePercent": 50,
+       "iconRowIndex": 11,
+       "traits": [
+         "scientific"
+@@ -8262,6 +8268,7 @@
+       "contentFacesInCity": 0,
+       "combatDefenseBonus": 0,
+       "maintenanceCost": 3,
++      "productionPercent": 25,
+       "iconRowIndex": 13,
+       "requiredResources": [
+         "Iron"
+@@ -8278,6 +8285,7 @@
+       "contentFacesInCity": 0,
+       "combatDefenseBonus": 0,
+       "maintenanceCost": 3,
++      "productionPercent": 25,
+       "iconRowIndex": 14
+     },
+     {
+@@ -8375,6 +8383,7 @@
+       "contentFacesInCity": 0,
+       "combatDefenseBonus": 0,
+       "maintenanceCost": 2,
++      "sciencePercent": 50,
+       "iconRowIndex": 20,
+       "traits": [
+         "scientific"
+@@ -8753,6 +8762,7 @@
+       "contentFacesInCity": 0,
+       "combatDefenseBonus": 0,
+       "maintenanceCost": 0,
++      "sciencePercent": 100,
+       "iconRowIndex": 40,
+       "traits": [
+         "expansionist"
+@@ -8820,6 +8830,7 @@
+       "contentFacesInCity": 0,
+       "combatDefenseBonus": 0,
+       "maintenanceCost": 0,
++      "sciencePercent": 100,
+       "iconRowIndex": 44,
+       "traits": [
+         "scientific"
+@@ -9070,6 +9081,9 @@
+       "contentFacesInCity": 0,
+       "combatDefenseBonus": 0,
+       "maintenanceCost": 0,
++      "flags": [
++        "treasuryEarnsInterest"
++      ],
+       "iconRowIndex": 59
+     },
+     {
+@@ -9341,6 +9355,8 @@
+       "contentFacesInCity": 0,
+       "combatDefenseBonus": 0,
+       "maintenanceCost": 3,
++      "taxPercent": 50,
++      "luxuryPercent": 50,
+       "iconRowIndex": 76,
+       "traits": [
+         "commercial"

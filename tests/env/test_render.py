@@ -84,14 +84,67 @@ def test_typical_brief_fits_600_tokens():
     assert "!! Barbarian Warrior 3 tiles E of Veii (19,13)" in text
 
 
-def test_crowded_brief_stays_bounded():
+def offer(gets: list[str], gives: list[str], gold: int, value_get: int, value_give: int) -> dict:
+    return {"you_get": {"techs": gets, "gold": 0}, "you_give": {"techs": gives, "gold": gold},
+            "you_value_get": value_get, "you_value_give": value_give, "until_turn": 35}
+
+
+def crowded() -> dict:
+    """A late game's brief at its fullest: every capped section over its cap, riots and engine picks folded, the
+    governments to choose, the culture race, units to upgrade, a loaded ship, an AI offer from every rival."""
     s = state(9, idle=9, standing=12, n_events=8)
+    s["tile_penalty"] = True
+    s["governments"] = [{"name": "Monarchy", "corruption": "problematic", "hurry": "gold"},
+                        {"name": "Republic", "corruption": "nuisance", "hurry": "gold", "trade_bonus": True},
+                        {"name": "Feudalism", "corruption": "problematic", "hurry": "population"}]
+    for c in s["cities"]:
+        c["producing_source"] = "engine"
+    s["blockers"][:0] = [{"kind": "choose_production", "id": c["id"], "message": "x"} for c in s["cities"]] + [
+        {"kind": "disorder", "id": f"c{i}", "now": True, "unhappy": 3, "happy": 1, "luxury": 2, "message": "x"}
+        for i in (1, 2, 3, 4)]
+    culture = [{"civ": n, "you": n == "Rome", "score": 60, "land": 0.1, "pop": 0.1, "culture": c}
+               for n, c in (("Rome", 41_000), ("Greece", 152_000), ("Egypt", 98_000))]
+    s["race"] |= {"you": culture[0], "nearest_culture": culture[1], "culture_runner_up": culture[2],
+                  "best_city": {"civ": "Greece", "you": False, "name": "Athens", "culture": 14_500},
+                  "culture_goal": 100_000, "city_culture_goal": 20_000}
+    s["rivals"] = [{"civ": n, "met": True, "at_war": False, "cities_seen": 1,
+                    "trade_offered": offer(["Monotheism"], ["Theory of Gravity", "Banking"], 120, 1240, v)}
+                   for n, v in (("Greece", 2310), ("Egypt", 1500), ("Babylon", 1900), ("Persia", 1300))]
+    s["gold"] = 400
+    for u in s["units"]:
+        if u["type"] == "Warrior":
+            u["upgrade"] = {"to": "Swordsman", "gold": 60, "ok": True}
+    galley = {**unit(30, "Galley", 15, 11, needs=True), "capacity": 3, "cargo": ["u31", "u32"]}
+    s["units"][1:1] = [galley, *({**unit(n, "Settler", 15, 11, status="aboard"), "aboard": "u30"} for n in (31, 32))]
+    first = next(i for i, b in enumerate(s["blockers"]) if b["kind"] == "idle_unit")
+    s["blockers"].insert(first + 1, {"kind": "idle_unit", "id": "u30", "message": "u30 Galley has moves and no orders"})
+    return s
+
+
+def test_crowded_brief_stays_bounded():
+    s = crowded()
     text = brief_of(s, plan_chars=1000)
-    assert len(text) / 4 < 800, len(text) / 4
-    assert len(brief_of(s, plan_chars=0)) / 4 < 600
-    assert ('+4 more idle units (3 Settler, 3 Warrior, 3 Worker in all) → list_units() · unit_orders(orders=['
-            '{"unit": "idle:Warrior", "order": "fortify"}, {"unit": "idle:Worker", "order": "auto_work"}])') in text
-    assert "+6 more" in text and "+3 more → city_info()" in text
+    assert len(text) / 4 < 1350, len(text) / 4   # docs/tools.md: a full late-game brief, plus the plan
+    assert len(brief_of(s, plan_chars=0)) / 4 < 1100
+    lines = text.splitlines()
+    assert sum(line.startswith("TRADE ") for line in lines) == 3   # two offers, then the count of the rest
+    assert "TRADE +2 more offers (Babylon, Greece) → diplomacy()" in lines
+    assert lines[2].startswith("TRADE Persia offers Monotheism (worth 1240 to you) for Theory of Gravity, Banking, "
+                               "120 gold (worth 1300 to you)")
+    assert any(line.startswith("CULTURE you 41k, top Greece 152k (1.5x the next)") for line in lines)
+    assert "  u30 Galley (15,11) 1/1mv · idle · cargo 2/3: u31 u32 · orders: explore goto fortify hold disband" \
+        in lines
+    assert any(line.startswith("  10 units can upgrade for 600 gold in all (10 Warrior→Swordsman); your 400 gold "
+                               "pays for 6 now → unit_orders(") for line in lines)
+    assert "STANDING u31 Settler aboard u30 · u32 Settler aboard u30 · " in text
+    assert any(line.startswith("  !! 4 cities riot") for line in lines)
+    assert any(line.startswith("  9 cities: the engine picked their next item") for line in lines)
+    assert any(line.startswith("GOVERNMENT Despotism: -1 on any tile yield above 2 · can choose Monarchy")
+               for line in lines)
+    assert ('+5 more idle units (3 Settler, 3 Warrior, 3 Worker, 1 Galley in all) → list_units() · unit_orders('
+            'orders=[{"unit": "idle:Warrior", "order": "fortify"}, {"unit": "idle:Worker", "order": "auto_work"}])') \
+        in text
+    assert "+8 more" in text and "+3 more → city_info()" in text
     events = next(line for line in text.splitlines() if line.startswith("EVENTS"))
     assert "learned Pottery" in events and events.endswith("+3 more")
     assert "Barbarian" not in events  # threats are the first to go when a turn has too many events
@@ -235,12 +288,12 @@ def test_turn_report_groups_events_by_turn():
            "events": [{"turn": 23, "kind": "built", "text": "Rome completed Warrior.", "x": 12, "y": 10},
                       {"turn": 24, "kind": "unit_lost", "text": "u5 Worker was killed", "x": 14, "y": 9},
                       {"turn": 24, "kind": "city_grew", "text": "Veii grew to size 2"}],
-           "auto": [{"kind": "trade_declined", "text": "declined a trade offer from Greece"}]}
+           "auto": [{"kind": "research_picked", "text": "the engine picked Pottery"}]}
     assert render.turn_report(res, 23) == (
         "TURN T23 → T25 (2 turns)\n"
         "  T23: Rome completed Warrior (12,10)\n"
         "  T24: !! u5 Worker was killed (14,9) · Veii grew to size 2\n"
-        "  auto: declined a trade offer from Greece")
+        "  auto: the engine picked Pottery")
 
 
 def test_city_detail_and_techs():
@@ -411,13 +464,6 @@ def test_peaceful_and_repeated_threats_are_not_spam():
     lines = render.events_lines(events, cap=2)
     assert lines == ["T44: !! Barbarians Galley 3 tiles W of Veii (T44–T46)", "T46: Founded Cumae", "+1 more"]
     assert render.event_text(events[0]) == "Zululand Archer (at peace) 2 tiles N of Rome"
-
-
-def test_declined_trades_are_summarised():
-    autos = [{"kind": "trade_declined", "text": f"Declined a trade from Greece #{i}"} for i in range(5)]
-    report = render.turn_report({"turn": 5, "turns_advanced": 1, "auto": autos}, 4)
-    assert report.count("auto: Declined") == 3
-    assert report.endswith("auto: +2 more trade offers declined (the env declines every offer)")
 
 
 def test_vs_line_marks_failed_baselines():

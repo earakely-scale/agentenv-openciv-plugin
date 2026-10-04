@@ -49,6 +49,7 @@ sealed partial class Session {
 					["at_war"] = war,
 					["peace_price"] = war && other == null && p.PeacePriceFor(gd, h) is int price && price != int.MaxValue ? price : null,
 					["peace_offered"] = war ? OfferJson(OpenOffer(other, h)) : null,
+					["trade_offered"] = met ? TradeJson(OpenTrade(seat, p), toMe: true) : null,
 					["cities_seen"] = p.cities.Count(c => h.tileKnowledge.isTileKnown(c.location)),
 				};
 			}),
@@ -74,21 +75,25 @@ sealed partial class Session {
 	}
 
 	/// <summary>
-	/// How far each way to win is (CheckVictory): the civilizations left, the score race and its leader, and the civ
-	/// closest to domination (two thirds of the land and of the population). A civ the seat has not met has no name.
+	/// How far each way to win is (CheckVictory): the civilizations left, the score race and its leader, the civ
+	/// closest to domination (two thirds of the land and of the population), the two civs with the most culture and
+	/// the city with the most. A civ the seat has not met has no name, nor have its cities.
 	/// </summary>
 	JsonObject Race() {
 		var civs = Civs().Where(p => !p.defeated).ToList();
 		if (civs.Count == 0) return null;
 		var scores = civs.ToDictionary(p => p, p => (int)ScoreOf(p)["total"]);
 		var shares = civs.ToDictionary(p => p, ShareOf);
+		var cultures = civs.ToDictionary(p => p, CultureOf);
 		JsonObject Civ(Player p) => new() {
-			["civ"] = p == human || human.playerRelationships.ContainsKey(p.id) ? Owner(p) : null,
+			["civ"] = Knows(p) ? Owner(p) : null,
 			["you"] = p == human, ["score"] = scores[p],
-			["land"] = Math.Round(shares[p].Land, 3), ["pop"] = Math.Round(shares[p].Pop, 3),
+			["land"] = Math.Round(shares[p].Land, 3), ["pop"] = Math.Round(shares[p].Pop, 3), ["culture"] = cultures[p],
 		};
 		Player leader = civs.OrderByDescending(p => scores[p]).First();
 		Player nearest = civs.OrderByDescending(p => Math.Min(shares[p].Land, shares[p].Pop)).First();
+		var cultured = civs.OrderByDescending(p => cultures[p]).Take(2).ToList();
+		City best = BestCultureCity(civs);
 		return new JsonObject {
 			["civs_left"] = civs.Count,
 			["rank"] = human.defeated ? null : 1 + civs.Count(p => scores[p] > scores[human]),
@@ -96,6 +101,14 @@ sealed partial class Session {
 			["leader"] = Civ(leader),
 			["nearest_domination"] = Civ(nearest),
 			["domination"] = Math.Round(Domination, 3),
+			["nearest_culture"] = Civ(cultured[0]),
+			["culture_runner_up"] = cultured.Count < 2 ? null : Civ(cultured[1]),
+			["best_city"] = best == null ? null : new JsonObject {
+				["civ"] = Knows(best.owner) ? Owner(best.owner) : null, ["you"] = best.owner == human,
+				["name"] = Knows(best.owner) ? best.name : null, ["culture"] = best.GetCultureFor(best.owner),
+			},
+			["culture_goal"] = CivCultureWin,
+			["city_culture_goal"] = CityCultureWin,
 		};
 	}
 
@@ -211,8 +224,13 @@ sealed partial class Session {
 				["total"] = commerce.taxes + commerce.beakers + commerce.happiness + commerce.corrupted + commerce.wealth,
 				["taxes"] = commerce.taxes, ["science"] = commerce.beakers, ["luxury"] = commerce.happiness,
 				["corrupt"] = commerce.corrupted, ["wealth"] = commerce.wealth,
+				["from_buildings"] = commerce.fromBuildings,
 			},
-			["shields"] = new JsonObject { ["total"] = shields.useful + shields.corrupt, ["useful"] = shields.useful, ["corrupt"] = shields.corrupt },
+			["shields"] = new JsonObject {
+				["total"] = shields.useful + shields.corrupt, ["useful"] = shields.useful, ["corrupt"] = shields.corrupt,
+				["from_buildings"] = shields.fromBuildings,
+			},
+			["bonus"] = BuildingBonus(c),
 			["maintenance"] = c.MaintenanceCosts(),
 		};
 	}
@@ -288,7 +306,18 @@ sealed partial class Session {
 			string why = FoundSite(u.location) ?? (u.movementPoints.canMove ? null : "no moves left this turn");
 			o["can_found_city"] = why == null ? new JsonObject { ["ok"] = true } : new JsonObject { ["ok"] = false, ["reason"] = why };
 		}
+		// A passenger is carried by its ship (patches/0020: lost with it at sea); a ship lists who is aboard.
+		if (ShipOf(u) is MapUnit ship) o["aboard"] = ids.Of(ship);
+		if (u.CanTransport()) {
+			o["capacity"] = u.unitType.capacity;
+			o["cargo"] = Json.Strings(Cargo(u).Select(x => ids.Of(x)));
+		}
 		o["orders"] = Json.Strings(ValidOrders(u));
+		if (u.UpgradeTarget() is UnitPrototype up) {
+			string why = WhyNoUpgrade(u);
+			o["upgrade"] = new JsonObject { ["to"] = up.name, ["gold"] = u.UpgradeCost(up), ["ok"] = why == null };
+			if (why != null) o["upgrade"]["reason"] = why;
+		}
 		if (AttackTargets(u) is { Count: > 0 } targets) o["attack_targets"] = Json.Array(targets, e => TargetJson(u, e));
 		o["needs_orders"] = NeedsOrders(u);
 		return o;
@@ -296,6 +325,7 @@ sealed partial class Session {
 
 	string Status(MapUnit u) =>
 		orders.TryGetValue(u, out Order o) ? o.Kind
+		: u.IsLoaded() ? "aboard"
 		: u.isFortified ? "fortified"
 		: u.isAutomated && u.currentAI is ExplorerAI ? "exploring"
 		: u.isAutomated ? "auto_work"
@@ -303,7 +333,8 @@ sealed partial class Session {
 		: u.path?.PathLength() > 0 ? "goto"
 		: u.movementPoints.canMove ? "idle" : "done";
 
-	bool NeedsOrders(MapUnit u) => !GameOver && u.CanBeActive() && !orders.ContainsKey(u);
+	// A passenger waits for its ship, awake or not: it is never what holds up the turn.
+	bool NeedsOrders(MapUnit u) => !GameOver && u.CanBeActive() && !orders.ContainsKey(u) && !u.IsLoaded();
 
 	JsonObject Map(Args a) {
 		Tile center = TileArg(a.Int("x"), a.Int("y"), requireExplored: false);
@@ -473,8 +504,11 @@ sealed partial class Session {
 
 	JsonArray TileUnits(Tile t) {
 		var list = new JsonArray();
-		foreach (MapUnit u in t.unitsOnTile.Where(u => u.owner == human).OrderBy(u => Ids.Number(ids.Of(u))))
-			list.Add(new JsonObject { ["owner"] = human.civilization.name, ["type"] = u.unitType.name, ["count"] = 1, ["id"] = ids.Of(u) });
+		foreach (MapUnit u in t.unitsOnTile.Where(u => u.owner == human).OrderBy(u => Ids.Number(ids.Of(u)))) {
+			var o = new JsonObject { ["owner"] = human.civilization.name, ["type"] = u.unitType.name, ["count"] = 1, ["id"] = ids.Of(u) };
+			if (ShipOf(u) is MapUnit ship) o["aboard"] = ids.Of(ship);
+			list.Add(o);
+		}
 		foreach (var g in t.unitsOnTile.Where(u => u.owner != human).GroupBy(u => (Owner(u.owner), u.unitType.name)))
 			list.Add(new JsonObject { ["owner"] = g.Key.Item1, ["type"] = g.Key.name, ["count"] = g.Count() });
 		return list;
@@ -490,11 +524,15 @@ sealed partial class Session {
 	JsonObject CityInfo(Args a) {
 		City c = CityArg(a);
 		JsonObject o = CityJson(c);
-		o["options"] = Json.Array(c.ListProductionOptions(gd), p => new JsonObject {
-			["name"] = p.name,
-			["kind"] = p switch { UnitPrototype => "unit", Building => "building", _ => "wealth" },
-			["cost"] = p is Inflow ? 0 : human.ShieldCost(p),
-			["turns"] = p is Inflow ? null : Json.Turns(c.TurnsToProduce(p)),
+		o["options"] = Json.Array(c.ListProductionOptions(gd), p => {
+			var option = new JsonObject {
+				["name"] = p.name,
+				["kind"] = p switch { UnitPrototype => "unit", Building => "building", _ => "wealth" },
+				["cost"] = p is Inflow ? 0 : human.ShieldCost(p),
+				["turns"] = p is Inflow ? null : Json.Turns(c.TurnsToProduce(p)),
+			};
+			if (p is Building b) option["effects"] = Json.Strings(BuildingEffects(b, c));
+			return option;
 		});
 		o["tiles_worked"] = Json.Array(c.residents.Where(r => Tile.IsTileValid(r.tileWorked)), r => {
 			Tile t = r.tileWorked;
@@ -537,6 +575,26 @@ sealed partial class Session {
 		return null;
 	}
 
+	/// <summary>Why the engine's UnitPrototype.CanProduce refuses this unit here, in its own order, or null.</summary>
+	string WhyNot(City c, UnitPrototype u) {
+		if (u.unproducible) return "no city can build it";
+		if (!u.producibleBy.Contains(human.civilization))
+			return $"it is a unique unit of {string.Join(", ", u.producibleBy.Select(x => x.name).Order())}";
+		if (!human.HasRequiredTechnology(u)) return $"it needs {u.requiredTech.Name}";
+		if (u.IsSeaUnit() && !c.location.NeighborsWater()) return $"{c.name} is not on the coast";
+		HashSet<Resource> have = c.GetAccessibleResources(gd);
+		var missing = u.requiredResources.Where(r => !have.Contains(r)).Select(r => r.Name).Order().ToList();
+		if (missing.Count > 0) return $"it needs {string.Join(" and ", missing)} connected to {c.name}";
+		if (u.UpgradeTargetIn(c, have) is UnitPrototype better) return $"it is obsolete now that {c.name} can build the {better.name} that replaces it";
+		return null;
+	}
+
+	string WhyNot(City c, IProducible p) => p switch {
+		Building building => WhyNot(c, building),
+		UnitPrototype unit => WhyNot(c, unit),
+		_ => null,
+	};
+
 	/// <summary>Sets what a city builds now, and with `then` what it builds after; `city` may name several (Batch.cs).</summary>
 	JsonObject SetProduction(Args a) {
 		EnsurePlaying();
@@ -577,7 +635,7 @@ sealed partial class Session {
 			Tech missing = known?.requiredTech is Tech t && !human.knownTechs.Contains(t.id) ? t : null;
 			string why = known == null ? $"'{wanted}' is not something a city can build"
 				: missing != null ? $"{known.name} requires {missing.Name}"
-				: $"{c.name} cannot build {known.name} now" + (known is Building building && WhyNot(c, building) is string reason ? $": {reason}" : "");
+				: $"{c.name} cannot build {known.name} now" + (WhyNot(c, known) is string reason ? $": {reason}" : "");
 			IProducible close = known == null ? options.FirstOrDefault(o => Close(o.name, wanted)) : null;
 			throw new BridgeError("unknown_item", $"{why}. {c.name} can build: {string.Join(", ", options.Select(o => o.name))}.",
 				BridgeError.Names(options.Select(o => o.name)),
@@ -701,6 +759,10 @@ sealed partial class Session {
 	string Label(MapUnit u) => $"{ids.Of(u)} {u.unitType.name}";
 
 	static string At(Tile t) => $"({t.XCoordinate},{t.YCoordinate})";
+
+	/// <summary>A unit type's name with its article: "a Longbowman", "an Explorer", and a plural name alone ("Immortals").</summary>
+	static string WithArticle(string name) =>
+		name.EndsWith('s') && !name.EndsWith("ss") ? name : ("AEIOU".Contains(char.ToUpperInvariant(name.FirstOrDefault())) ? "an " : "a ") + name;
 
 	static string Terrain(Tile t) =>
 		t.overlayTerrainType != t.baseTerrainType ? $"{t.overlayTerrainType.DisplayName} on {t.baseTerrainType.DisplayName}" : t.baseTerrainType.DisplayName;

@@ -85,8 +85,9 @@ class UnitOrderSpec(BaseModel):
     """One order of unit_orders."""
     unit: str = Field(description='A unit id ("u7"), or a group: "idle" (every unit waiting for orders), "idle:Worker" '
                                   '(those of a type) or "all:Warrior" (every unit of a type).')
-    order: str = Field(description="As unit_order takes it: fortify, auto_work, explore, goto, settle, hold, ...")
-    x: int | None = Field(default=None, description="Target x, for goto, settle, attack and bombard.")
+    order: str = Field(description="As unit_order takes it: fortify, auto_work, explore, goto, settle, hold, upgrade, "
+                                   "board, ...")
+    x: int | None = Field(default=None, description="Target x, for goto, settle, attack, bombard and board.")
     y: int | None = Field(default=None, description="Target y.")
 Coord = Annotated[int | None, Field(description="Map coordinate; x+y is always even.")]
 Rate = Annotated[int | None, Field(ge=0, le=10, description="Tenths of commerce, 0-10; omit to keep the current one.")]
@@ -752,13 +753,49 @@ class OpenCiv3Env(AgentEnvEnvironment):
         res, read_as = await self._call_resolving("revolution", "unknown_government", "government", government)
         return res, read_as + res.get("message", "revolution")
 
-    async def _diplomacy(self, action: str, civ: str | None, gold: int) -> tuple[dict, str]:
+    async def _diplomacy(self, action: str, civ: str | None, gold: int, give_techs: list[str] | None = None,
+                         give_gold: int = 0, get_techs: list[str] | None = None,
+                         get_gold: int = 0) -> tuple[dict, str]:
         if not civ:
             raise BridgeError("bad_args", f"{action} needs civ; diplomacy() lists the civilizations you know.",
                               suggest='diplomacy(action="status")')
-        res, read_as = await self._call_resolving(action, "unknown_civ", "civ", civ,
-                                                  **({"gold": gold} if action == "propose_peace" else {}))
+        args = {"gold": gold} if action == "propose_peace" else {}
+        if action in ("quote_trade", "propose_trade"):
+            args = {k: v for k, v in (("give_techs", give_techs), ("give_gold", give_gold), ("get_techs", get_techs),
+                                      ("get_gold", get_gold)) if v}
+        try:
+            res, read_as = await self._call_resolving(action, "unknown_civ", "civ", civ, **args)
+        except BridgeError as e:
+            fixed = await self._trade_techs(civ, args) if e.code == "unknown_tech" else None
+            if fixed is None:
+                raise
+            res, read_as = await self._call_resolving(action, "unknown_civ", "civ", civ, **{**args, **fixed[0]})
+            read_as = fixed[1] + read_as
+        if action == "quote_trade":
+            return res, read_as + render.trade_quote(res)
         return res, read_as + res.get("message", "done")
+
+    async def _trade_techs(self, civ: str, args: dict) -> tuple[dict, str] | None:
+        """The trade's tech names, each read as the tradeable tech it plainly means; None if one is unclear or none
+        changes. Your techs are what the civ lacks (techs_for_them), its techs what you lack (techs_for_you)."""
+        civs = (await self._call("diplomacy")).get("civs", [])
+        them = next((c for c in civs if c["civ"] == resolve_name(civ, [c["civ"] for c in civs])), None)
+        if them is None:
+            return None
+        fixed, notes = {}, []
+        for key, side in (("give_techs", "techs_for_them"), ("get_techs", "techs_for_you")):
+            options = [t["name"] for t in them.get(side) or []]
+            names = []
+            for name in args.get(key) or []:
+                match = resolve_name(name, options)
+                if match is None:
+                    return None
+                if match != name:
+                    notes.append(f"(read {name!r} as {match!r}) ")
+                names.append(match)
+            if names:
+                fixed[key] = names
+        return (fixed, "".join(notes)) if notes else None
 
     # ---- tools ----
     # Tools have no return annotation on purpose: `-> str` makes FastMCP send every result twice
@@ -768,11 +805,14 @@ class OpenCiv3Env(AgentEnvEnvironment):
     async def get_turn_brief(self):
         """Your whole situation in one page: turn and year, gold and tax/science/luxury rates, research, score
         (10·cities + 3·pop + tiles + 4·techs) and your rank, pace against targets and against reference players on
-        the same seed, your share of the world's land and population, what needs orders (with the call that resolves
-        it), what needs attention (disorder and riot risk, cities without a defender, full production, unspent gold),
-        standing orders, cities, last turn's events, and your plan. A civilization wins, and the game ends, by
-        conquest (the last one left), domination (2/3 of the land and 2/3 of the population) or, at the turn limit,
-        the top score. Lost context? Call get_turn_brief."""
+        the same seed, your share of the world's land and population, the culture race once it matters (CULTURE),
+        AI trade offers with their worth to you and the accept_trade call (TRADE), what needs orders (with the call
+        that resolves it), what needs attention (disorder and riot risk, cities without a defender, full production,
+        unspent gold, units that can upgrade and the call), standing orders, cities, last turn's events, and your
+        plan. A civilization wins, and the game ends, by
+        conquest (the last one left), domination (2/3 of the land and 2/3 of the population), culture (a city with
+        20,000 culture points, or 100,000 in all and twice the next civ's) or, at the turn limit, the top score.
+        Lost context? Call get_turn_brief."""
         return await self._run("get_turn_brief", {}, self._brief)
 
     @tool()
@@ -780,8 +820,9 @@ class OpenCiv3Env(AgentEnvEnvironment):
             description="needs_orders (default): only units waiting for orders; all: every unit.")] = "needs_orders",
                          type: Annotated[str | None, Field(
                              description='Only units of this type, e.g. "Worker".')] = None):
-        """One line per unit: id, type, (x,y), moves, status or standing order, the orders it accepts now, and
-        whether it can found a city on its tile (and why not). Many units at once: unit_orders."""
+        """One line per unit: id, type, (x,y), moves, status or standing order ("aboard u3" on a ship), a ship's
+        cargo ("cargo 1/2: u5"), the orders it accepts now, whether it can found a city on its tile (and why not), and
+        in a city its upgrade and the gold (or why not now). Many units at once: unit_orders."""
         async def body():
             return render.units_list(await self._state(), everything=filter == "all", kind=type)
         return await self._run("list_units", {"filter": filter, "type": type}, body)
@@ -854,7 +895,11 @@ class OpenCiv3Env(AgentEnvEnvironment):
                 "explore, auto_work. Now: found_city (on this tile), fortify (a military unit fortified in a city "
                 "also keeps an unhappy citizen content), wake, hold (skip this turn), disband, build_road, build_mine, "
                 "irrigate, clear_forest, attack (an adjacent enemy unit or city, x,y; only civs you are at war "
-                "with) and bombard (x,y in range, for units that can)."))],
+                "with), bombard (x,y in range, for units that can), upgrade (in one of your cities, for gold, to "
+                "the best unit of its line the city can build; uses its moves), board (a land unit boards your ship "
+                "on its tile, or on the adjacent water tile x,y; the ship then carries it) and unload (in a city, a "
+                "ship's passengers go ashore). At sea a passenger lands with goto or settle to a land tile next to its "
+                "ship."))],
             x: Coord = None, y: Coord = None):
         """Order one of your units. Standing orders keep working on later turns without further calls, so prefer
         them: settle for settlers, explore for one scout, auto_work for workers; keep a military unit in every city.
@@ -892,8 +937,9 @@ class OpenCiv3Env(AgentEnvEnvironment):
     async def city_info(self, city: Annotated[str | None, Field(
             description='City id, e.g. "c1"; omit for all your cities.')] = None):
         """City details: size, food and growth ETA, mood (happy, content, unhappy, defenders), production and ETA,
-        buildings, and everything it can build now with shield cost and turns. With more than 4 cities and none named:
-        one line per city, those waiting on you first."""
+        buildings and the % they add, and everything it can build now with shield cost, turns and, for a building,
+        what it does (e.g. "+50% science (+2 here)"). With more than 4 cities and none named: one line per city,
+        those waiting on you first."""
         async def body():
             cities = (await self._state()).get("cities", [])
             ids = [city] if city else [c["id"] for c in cities]
@@ -992,21 +1038,35 @@ class OpenCiv3Env(AgentEnvEnvironment):
     @tool()
     async def diplomacy(
             self,
-            action: Annotated[Literal["status", "declare_war", "propose_peace"], Field(description=(
-                "status (default): the civilizations you know; declare_war or propose_peace with civ."))] = "status",
+            action: Annotated[Literal["status", "declare_war", "propose_peace", "quote_trade", "propose_trade",
+                                      "accept_trade", "decline_trade"], Field(description=(
+                "status (default): the civilizations you know; the others take civ. quote_trade asks what a trade is "
+                "worth to each side, propose_trade makes it, accept_trade or decline_trade answers an offer."))
+            ] = "status",
             civ: Annotated[str | None, Field(description='A civilization you know, e.g. "Arabia".')] = None,
-            gold: Annotated[int, Field(ge=0, description="Gold you pay with a peace proposal.")] = 0):
-        """The civilizations you know: war or peace, their score, government and military against yours, and their
-        wars. Declare war to attack a civ; a civ you attack refuses to talk for some turns. At war, the status shows the
-        gold a civ asks for peace (it asks more when it is winning); propose_peace pays it."""
-        args = {"action": action, "civ": civ, "gold": gold}
+            gold: Annotated[int, Field(ge=0, description="Gold you pay with a peace proposal.")] = 0,
+            give_techs: Annotated[list[str] | None, Field(
+                max_length=20, description="Trade: techs you give (ones the civ lacks).")] = None,
+            give_gold: Annotated[int, Field(ge=0, description="Trade: gold you give.")] = 0,
+            get_techs: Annotated[list[str] | None, Field(
+                max_length=20, description="Trade: techs you get (ones you lack).")] = None,
+            get_gold: Annotated[int, Field(ge=0, description="Trade: gold you get.")] = 0):
+        """The civilizations you know: war or peace, their score, government and military against yours, their wars,
+        treasury and the techs each side could trade. Declare war to attack a civ; a civ you attack refuses to talk for
+        some turns. At war, the status shows the gold a civ asks for peace (it asks more when it is winning);
+        propose_peace pays it. At peace, trade techs and gold: an AI takes a trade it values at least even (its
+        values are its own research costs), another agent's civ when it accepts. An AI's offer stands for one turn."""
+        args = {"action": action, "civ": civ, "gold": gold, "give_techs": give_techs, "give_gold": give_gold,
+                "get_techs": get_techs, "get_gold": get_gold}
 
         async def body():
             if action == "status":
                 return "\n".join([render.diplomacy(await self._call("diplomacy")), await self._footer()])
-            res, message = await self._diplomacy(action, civ, gold)
+            res, message = await self._diplomacy(action, civ, gold, give_techs, give_gold, get_techs, get_gold)
+            if action == "quote_trade":
+                return "\n".join([message, await self._footer()])
             return "\n".join([message, render.civ_line(res["civ"]), await self._footer()])
-        return await self._run("diplomacy", args, body, mutating=action != "status")
+        return await self._run("diplomacy", args, body, mutating=action not in ("status", "quote_trade"))
 
     @tool()
     async def end_turn(
@@ -1177,7 +1237,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
             except BridgeError:
                 world = {}
         standings = [{"civ": p["civ"], "you": p["is_human"], "defeated": p["defeated"], "score": p["score"]["total"],
-                      **({"seat": p.get("seat")} if self.multi else {})}
+                      "culture": p.get("culture", 0), **({"seat": p.get("seat")} if self.multi else {})}
                      for p in sorted(world.get("players", []), key=lambda p: -p["score"]["total"])]
         s = states[self.seats[0].civ]
         summary = {
@@ -1616,7 +1676,9 @@ class OpenCiv3Env(AgentEnvEnvironment):
     async def _play_diplomacy(self, request: Request) -> Response:
         async def body():
             return await self._call("diplomacy")
-        return await self._play_call(request, "diplomacy", {"action": "status", "civ": None, "gold": 0}, body)
+        args = {"action": "status", "civ": None, "gold": 0, "give_techs": None, "give_gold": 0, "get_techs": None,
+                "get_gold": 0}
+        return await self._play_call(request, "diplomacy", args, body)
 
     async def _play_tile(self, request: Request) -> Response:
         if self._play_seat(request) is None:
@@ -1693,10 +1755,11 @@ class OpenCiv3Env(AgentEnvEnvironment):
             elif a["action"] == "status":
                 return {"message": "the civilizations you know", "result": await self._call("diplomacy")}
             else:
-                res, message = await self._diplomacy(a["action"], a["civ"], a["gold"])
+                res, message = await self._diplomacy(a["action"], a["civ"], a["gold"], a["give_techs"], a["give_gold"],
+                                                     a["get_techs"], a["get_gold"])
             return {"message": message, "result": res}
         mutating = not ((tool_name == "research" and a["tech"] is None)
-                        or (tool_name == "diplomacy" and a["action"] == "status"))
+                        or (tool_name == "diplomacy" and a["action"] in ("status", "quote_trade")))
         return body, mutating
 
     async def _play_end_turn(self, request: Request) -> Response:

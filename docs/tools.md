@@ -1,8 +1,10 @@
 # Agent tools
 
 The env (`agentenv_openciv3.server.OpenCiv3Env`, card name `openciv3`) exposes sixteen MCP tools. They
-return compact text, not JSON: briefs are under about 600 tokens (plus up to about 300 for the messages between
-leaders), a radius-3 map under about 700.
+return compact text, not JSON: an early game's brief with a short plan is under about 600 tokens; a late game's
+with every section full (a dozen cities, more idle units than it lists, riots and engine picks folded, governments
+to choose, the culture race, units to upgrade, AI offers) stays under about 1,200 without its plan, which adds up to
+about 250 (1,000 characters). The messages between leaders add up to about 300. A radius-3 map is under about 700.
 Every tool that changes the game ends with a one-line footer: `[T23/60 · needs orders: u7, c1]`.
 
 Invalid actions **raise**, so the agent sees `isError: true`, with a message that gives the reason,
@@ -10,18 +12,18 @@ the valid alternatives and the exact call to make instead.
 
 | Tool | Args | Returns |
 |---|---|---|
-| `get_turn_brief` | — | Turn and limit with the year, gold, research and ETA, score with the seat's rank among the civilizations, a pace line against the targets with its share of the world's land and population against the civ nearest domination, both baselines (null and built-in AI on the same seed), what needs orders (more than two cities in disorder fold into one line with the luxury rate that calms them all), standing orders, one line per city, the last turn's events, and the agent's plan. Self-contained: "lost context? call get_turn_brief". |
-| `list_units` | `filter`: `needs_orders` (default) or `all`; `type` (optional, e.g. `"Worker"`) | One line per unit: id, type, `(x,y)`, moves, status or standing order, valid orders, and why `found_city` is or isn't possible here; with many idle units, the `unit_orders` call that orders them by type. |
+| `get_turn_brief` | — | Turn and limit with the year, gold, research and ETA, score with the seat's rank among the civilizations, a pace line against the targets with its share of the world's land and population against the civ nearest domination, a `CULTURE` line once a civ has 10,000 culture points or a city 2,000 (the seat's culture, the top civ's and its lead over the next as a ratio to one decimal (shown as >99.9x beyond that), and the city with the most, against the cultural victory's 100,000 with twice the next civ's, or 20,000 in one city; numbers rounded down), both baselines (null and built-in AI on the same seed), a `TRADE` line per AI offer standing for the seat with what each side is worth to it and the `accept_trade` call (the two best for the seat, then `TRADE +N more offers (...) → diplomacy()`), what needs orders (more than two cities in disorder fold into one line with the luxury rate that calms them all), how many units can upgrade now, for how much gold and how many the treasury pays for, with the `unit_orders` call for those, standing orders, one line per city, the last turn's events, and the agent's plan. Self-contained: "lost context? call get_turn_brief". |
+| `list_units` | `filter`: `needs_orders` (default) or `all`; `type` (optional, e.g. `"Worker"`) | One line per unit: id, type, `(x,y)`, moves, status or standing order (`aboard u3` for a unit carried by ship u3), a ship's `cargo 1/2: u5`, valid orders, why `found_city` is or isn't possible here, and in a city the unit's upgrade and its gold (`upgrade → Longbowman 60g`, or why not now); with many idle units, the `unit_orders` call that orders them by type. |
 | `view_map` | `x`, `y`, `radius` (default 3, max 6), or `around` (`"u7"`, `"c1"`) | Staggered ASCII of the explored tiles, a legend, then a "notable" list (resources, rivers, foreign units, cities, good sites) with distance and direction. Unexplored tiles are blank. |
 | `find_city_sites` | `unit` (optional), `top` (default 5) | Ranked sites: `(x,y)`, score, distance and direction, travel turns, yields, river or coast. |
-| `unit_order` | `unit`, `order`, `x`, `y` | Result line plus footer. `settle` walks to the site and founds the city on arrival. `attack` (an adjacent enemy unit or city of a civ at war) and `bombard` (in range) fight with the engine's own combat; a unit next to an enemy lists its targets with an estimated chance to win, and a city that falls is captured (one of size 1 is destroyed). |
+| `unit_order` | `unit`, `order`, `x`, `y` | Result line plus footer. `settle` walks to the site and founds the city on arrival. `attack` (an adjacent enemy unit or city of a civ at war) and `bombard` (in range) fight with the engine's own combat; a unit next to an enemy lists its targets with an estimated chance to win, and a city that falls is captured (one of size 1 is destroyed). `upgrade` turns a unit in one of your cities into the best unit of its line the city can build, for gold (see [Upgrades](#upgrades)). `board` puts a land unit aboard your ship on its tile, or on the adjacent water tile `x`,`y` (which takes its moves); `unload` puts a ship's passengers ashore in a city. At sea a passenger lands with `goto` or `settle` to a land tile next to its ship; a ship lost at sea takes its passengers with it. |
 | `unit_orders` | `orders`: 1 to 100 of `{unit, order, x, y}`; `unit` is an id or a group, `"idle"`, `"idle:Worker"` or `"all:Warrior"` | One line saying how many orders were done and failed, then one line per unit (the first 30), plus footer. One that fails doesn't stop the rest. |
-| `city_info` | `city` (optional; all cities when omitted) | Size, food, growth ETA, production and ETA, queue, and what it can build with cost and turns. With more than 4 cities and none named: one line per city, those waiting on a production choice first. |
+| `city_info` | `city` (optional; all cities when omitted) | Size, food, growth ETA, production and ETA, queue, buildings with the percentages they add (`bonus +50% science +25% shields`), and what it can build with cost and turns; a building also shows its first two effects, what it would add in that city now first, as if in order for a city that riots (`Library 80 (6t): +50% science (+2 here); +3 culture`). With more than 4 cities and none named: one line per city, those waiting on a production choice first. |
 | `set_production` | `city`: an id, several (`"c1,c3"`), `"all"` or `"pending"`; `item`; `then` (optional, up to 10: the queue; `[]` clears it) | Result line, a line per city (and per city that could not), plus footer. With a queue, each completion starts the next queued item the city can build; the engine picks only when it is empty. |
 | `research` | `tech` (optional) | With no tech: researchable techs with turns and what each unlocks. With a tech: sets it, queuing any prerequisites. |
 | `end_turn` | `skip_idle` (default false), `until_attention` (default false), `max_turns` (default 5), `note` (optional) | Either END TURN BLOCKED with each blocker and the call that resolves it, or the turn report plus the next brief. At the turn limit: `GAME OVER` and final metrics. `note`: one line for the people watching, what the agent did this turn and why (see [What spectators read](#what-spectators-read)). |
 | `revolution` | `government` | Starts anarchy (no taxes or science for a few turns), then the chosen government. The brief lists the choices. |
-| `diplomacy` | `action` (`status`, `declare_war`, `propose_peace`), `civ`, `gold` | Status: one line per civ you know (war or peace, score, government, military against yours, its wars, and at war the gold it asks for peace or the turn it talks again). `declare_war` starts a war; `propose_peace` pays the asked price. |
+| `diplomacy` | `action` (`status`, `declare_war`, `propose_peace`, `quote_trade`, `propose_trade`, `accept_trade`, `decline_trade`), `civ`, `gold` (peace), `give_techs`, `give_gold`, `get_techs`, `get_gold` (trades) | Status: one line per civ you know (war or peace, score, government, military against yours, its wars, and at war the gold it asks for peace or the turn it talks again; at peace its treasury, the techs each side could trade with their worth to you and to it, and a trade it offers). `declare_war` starts a war; `propose_peace` pays the asked price. `quote_trade` says what a trade is worth to each side, whether an AI takes it and the call that balances it; `propose_trade` makes it; `accept_trade` and `decline_trade` answer a standing offer. See [Trades](#trades). |
 | `plan` | `text` (optional) | Reads, or replaces, the agent's plan (at most 1,000 characters), which every brief shows back; spectators see it too. |
 | `message` | `to` (`"all"`, or another leader's civ or label), `text` (at most 280 characters) | Sends a message to another agent's leader, or to all of them, in a game with several seats; see [Messages](#messages). Not a game action: no footer. |
 
@@ -41,6 +43,49 @@ the valid alternatives and the exact call to make instead.
   comes from the engine's attack and defense strengths and both units' hit points. It ignores retreats, so it is
   an estimate.
 
+## Trades
+
+- **What can be traded:** techs and gold, with a civ you have met and are at peace with. A tech you give must be one
+  the civ lacks, a tech you get one you lack; a trade with an AI carries at least one tech. A tech can be got without
+  its prerequisites, as the AIs trade among themselves. Misspelt tech names are read as the tradeable tech they
+  plainly mean.
+- **Values:** a tech is worth its research cost to the civ that gets it (less to a civ that knows more civs that have
+  it, and less the beakers already spent on it), gold its face value. The status lists each tradeable tech as
+  `name you/them`.
+- **An AI** takes a trade worth at least as much to it as what it gives. `quote_trade` tells you before you propose
+  it, and how much gold balances it (its suggested call asks for less gold first, then gives more).
+- **An AI's offers:** an AI makes offers during its turn. Each one stands until the end of your next turn (after an
+  `end_turn` of several turns, the turn it stops on): a `trade_offered` event, a `TRADE` line in the brief (the two
+  best for you, then a count of the rest) and `OFFERS` in the status, with what each side is worth to you. An offer
+  that can no longer be made (after another trade, say) is not shown. Most are good for the AI only, so compare the
+  two values before `accept_trade`.
+- **Another agent's civ:** `propose_trade` offers the trade; it stands until the end of the next turn and is made
+  when the other agent accepts it (or proposes the same trade back).
+- **The game's end** ends every offer: after a victory or the turn limit none is told, listed or accepted.
+- **Research:** a tech you get is known at once. If it was the one being researched, the research moves on (your
+  queue, or the engine's pick to confirm); otherwise the research keeps its progress.
+
+## Upgrades
+
+- **Where and what:** a unit standing in one of your cities upgrades to the furthest unit along its line that the
+  city can build now: the tech known, the strategic resources connected (the Spearman line goes Pikeman, Musketman,
+  Rifleman, Infantry, Mech Infantry; a civ with a unique unit gets it in its line). A unit outside a city, or whose
+  next unit needs a tech or a resource the city lacks, is refused with what is missing.
+- **Cost:** 3 gold per shield of difference (at least 3); the unit keeps its id, experience, hit points and
+  fortification, and has no moves left that turn; another standing order (goto, explore) ends.
+- **Seeing it:** a unit line shows `upgrade → Pikeman 30g` where it can upgrade, `(not now)` when it lacks the gold
+  or the moves; the brief counts the units that can upgrade, how many your gold pays for when it does not pay for
+  all, and gives the call for those, e.g. `unit_orders(orders=[{"unit": "all:Spearman", "order": "upgrade"}])`
+  (unit ids instead when some units of that type cannot upgrade or are not paid for). `unit_orders` upgrades them in
+  turn until the gold runs out.
+- **Not always stronger:** a few lines end in a weaker unit (the Chasqui Scout becomes an Explorer, 0/0; the
+  Samurai a Cavalry, defence 3); the unit line shows the target, so check it before you upgrade a city's defender.
+- **Obsolete units:** a unit leaves a city's options exactly when it could upgrade there (Archers at Invention,
+  not before); `set_production` says which unit replaces it, and a queued unit that went obsolete leaves the queue
+  with the same reason. A unit being built that goes obsolete when a trade brings its tech mid-turn is replaced by
+  the unit that replaces it, keeping its shields; the trade's message says so.
+- **The AI** upgrades its city garrisons too, with the gold above a turn's upkeep, and not into a weaker unit.
+
 ## Several agents in one game
 
 A game started with `seats` (new-game extension) is played by several agents, one civ each; there are no baselines.
@@ -51,8 +96,9 @@ A game started with `seats` (new-game extension) is played by several agents, on
   its own ids, plan, notices and action log.
 - **The rules:** the brief's `MATCH` line names the other agents and the AI civilizations and says how the match
   ends: at the turn limit (the top score wins), or sooner by conquest (one agent's civilization is the last an
-  agent still plays, or any civ is the last left) or domination (any civ holds two thirds of the world's land and
-  population). A victory ends the game for everyone, and
+  agent still plays, or any civ is the last left), domination (any civ holds two thirds of the world's land and
+  population) or culture (any civ has a city with 20,000 culture points, or 100,000 in all and twice the next
+  civ's). A victory ends the game for everyone, and
   GAME OVER names the winner; `data/get` reports it as `victory`.
 - **The turn:** all seats play it at the same time. `end_turn` holds until every seat has ended the turn, then
   returns this seat's turn report and the next brief; meanwhile the env serves the other seats. After 10 minutes it
@@ -153,9 +199,9 @@ first in a browser.
 - When the same call fails 3 times in a turn, the error adds: "same error 3x — try one of: …".
 - After 25 calls in one turn, every response adds: "consider end_turn(skip_idle=true)".
 - When a standing order can't make progress, it becomes an event and the unit goes back to idle.
-- At the turn limit, or when a civilization wins earlier by conquest or domination, `end_turn` returns `GAME OVER`
-  naming the winner (the top score's at the limit, none on a tie) with final metrics, and further game actions
-  fail with "the game is over".
+- At the turn limit, or when a civilization wins earlier by conquest, domination or culture, `end_turn` returns
+  `GAME OVER` naming the winner (the top score's at the limit, none on a tie) with final metrics, and further game
+  actions fail with "the game is over".
 
 ## Action log
 
@@ -214,7 +260,7 @@ Implemented. These extend the sections above; folding them in is still to do.
 - `decisions`, as in `state.decisions`;
 - `harness`: `{"autoplay_turns", "new_games", "extension_calls"}`. A graded agent game must have `autoplay_turns == 0`.
 - `baselines` gains `settler_bot`.
-- `standings`: every civ, best first, `{"civ", "you", "defeated", "score"}`;
+- `standings`: every civ, best first, `{"civ", "you", "defeated", "score", "culture"}` (`culture`: its cities' culture points, as the cultural victory counts them);
 - `share`: `{"land", "pop"}`, your fractions of the world's land and population (Civ III's domination victory needs two thirds of each).
 
 **Robustness:**

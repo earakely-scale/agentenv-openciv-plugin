@@ -719,4 +719,5 @@ const MINI = {desert: [169, 169, 169], plains: [189, 183, 107], grassland: [143,
   floodplain: [173, 216, 230], "flood plain": [173, 216, 230], hills: [192, 192, 192], mountains: [188, 143, 143],
   forest: [143, 188, 143], jungle: [95, 158, 160], marsh: [119, 136, 153], volcano: [105, 105, 105]};
 // Units the client draws no HP bar for (attack and defence 0).
-const NONCOMBAT = new Set(["Settler", "Worker", "Scout", "Explorer", "Catapult", "Cannon", "Trebuchet", "Leader"]);
+const NONCOMBAT = new Set(["Settler", "Worker", "Scout", "Explorer", "Catapult", "Cannon", "Trebuchet", "Leader",
+  "Artillery", "Radar Artillery", "Hwach'a"]);

@@ -312,8 +312,9 @@ sequenceDiagram
 
 A seat that makes no call for five minutes has its turn ended for it; the verifier fails a match in which the env
 ended more than a tenth of any agent's turns. A game ends at its turn limit, or sooner when every other agent's
-civilization has been destroyed (conquest) or one agent holds two thirds of the world's land and population
-(domination).
+civilization has been destroyed (conquest), one agent holds two thirds of the world's land and population
+(domination), or any civilization has a city with 20,000 culture points or 100,000 in all and twice the next one's
+(culture).
 
 **Where each piece runs** (every player agent and the env run in their own containers):
 
@@ -396,7 +397,7 @@ call to make instead. Full contract: [docs/tools.md](docs/tools.md).
 | `list_units` | One line per unit: position, moves, status, valid orders, whether it can found a city here |
 | `view_map` | ASCII map of explored tiles around a point, a unit or a city, plus notable things with distance and direction |
 | `find_city_sites` | Ranked city sites with travel time and yields, and every legal site nearby |
-| `unit_order` | `settle`, `found_city`, `goto`, `explore`, `auto_work`, `fortify`, worker jobs, `attack` (with the estimated chance to win) and `bombard` |
+| `unit_order` | `settle`, `found_city`, `goto`, `explore`, `auto_work`, `fortify`, worker jobs, `attack` (with the estimated chance to win), `bombard`, `upgrade` (in a city, for gold), and `board` and `unload` to carry land units by ship |
 | `unit_orders` | Orders for many units in one call, by id or by group (`"idle:Worker"`, `"all:Warrior"`) |
 | `city_info` | Growth, production, mood and what each city can build |
 | `set_production` | Choose what a city builds, or many cities (`"all"`, `"pending"`), and a queue to follow after it |
@@ -404,19 +405,21 @@ call to make instead. Full contract: [docs/tools.md](docs/tools.md).
 | `set_rates` | Set the science and luxury rates; luxury is the main fix for disorder |
 | `buy` | Rush a city's current production with gold (with citizens, under Despotism) |
 | `revolution` | Change government, after a few turns of anarchy |
-| `diplomacy` | The civilizations you know: war or peace, score, government, military against yours, the price of peace; declare war or propose peace (with another agent's civilization, peace is signed when both propose it) |
+| `diplomacy` | The civilizations you know: war or peace, score, government, military against yours, the price of peace, their treasury and the techs to trade; declare war or propose peace (with another agent's civilization, peace is signed when both propose it); trade techs and gold, and answer the trades AIs offer |
 | `end_turn` | End the turn, or several quiet ones until something needs attention; lists blockers instead when something needs orders. With other agents in the game, it waits until every agent has ended the turn. An optional one-line note tells the people watching what the agent did and why |
 | `plan` | Read or replace the agent's plan, which every brief shows back and spectators see |
 | `message` | Talk to the other agents' leaders, one or all of them: alliances, threats, deals. They read it in their next reply and brief, and the live view and recordings show it |
 
 **What the game covers.** Agents found and place cities and choose what they build and research; set the science and
-luxury rates and buy production; move, automate, fortify, attack and bombard; change government; and declare war or
-make peace; a city that falls in war is captured (one of size 1 is destroyed). They cannot trade techs or gold, and
-the score (10 × cities + 3 × citizens + 1 × tiles + 4 × techs) rewards growth. Any civilization, an agent's or the
-AI's, wins as in Civ III by conquest (the last one left), domination (two thirds of the world's land and of its
-population) or the top score at the turn limit, and the game ends there. The engine still makes some choices
-itself (what a city builds after finishing something, the next tech); those picks are reported and block the turn
-until the agent changes or accepts them. [docs/full-game.md](docs/full-game.md) lists what a full game still lacks.
+luxury rates and buy production; move, automate, fortify, attack and bombard, and carry units by ship; change
+government; and declare war or make peace; a city that falls in war is captured (one of size 1 is destroyed); and
+trade techs and gold with the AIs (which judge a trade by their own values) and with each other. The score (10 ×
+cities + 3 × citizens + 1 × tiles + 4 × techs) rewards growth. Any civilization, an agent's or the AI's, wins as in
+Civ III by conquest (the last one left), domination (two thirds of the world's land and of its population), culture (a
+city with 20,000 culture points, or 100,000 in all and twice the next civilization's) or the top score at the turn
+limit, and the game ends there. The engine still makes some choices itself (what a city builds after finishing
+something, the next tech); those picks are reported and block the turn until the agent changes or accepts them.
+[docs/full-game.md](docs/full-game.md) lists what a full game still lacks.
 
 ## The player agents
 
@@ -449,10 +452,10 @@ claude "Play OpenCiv3 with the openciv3 tools until GAME OVER." --allowedTools "
 
 ## Grading
 
-**A match** (`three-agents`, `frontier`) is graded by the victor verifier. A conquest or domination ends the game and
-wins it; otherwise the top score at the turn limit wins. The grade is 1 for a valid match with one victor and 0.5 for
-a tie, and 0 when the match didn't reach its end, the engine failed, or the env ended more than 10% of any agent's
-turns. Each agent's rank, score, cities, techs and share of the world are reported alongside.
+**A match** (`three-agents`, `frontier`) is graded by the victor verifier. A conquest, domination or cultural victory
+ends the game and wins it; otherwise the top score at the turn limit wins. The grade is 1 for a valid match with one
+victor and 0.5 for a tie, and 0 when the match didn't reach its end, the engine failed, or the env ended more than 10%
+of any agent's turns. Each agent's rank, score, cities, techs and share of the world are reported alongside.
 
 **A single agent** (`play`) is graded against baselines the env plays in the background on the same seed: `null`
 (never founds a city), `settler_bot` (a no-LLM script that follows the env's own suggestions through the same tools,
@@ -623,7 +626,11 @@ This repository is licensed under the Apache License 2.0 ([LICENSE](LICENSE), [N
   become buildable, the AI funds its science, supports its units, changes government and makes peace, research
   cost follows the difficulty, battles tell an observer each round as they are fought, a city taken changes hands,
   units tell an observer each step they take, the palace moves when the capital falls, a unit disbanded in a city
-  adds its shields, and a tech got in a trade leaves the research queue without hanging the turn.
+  adds its shields, a tech got in a trade leaves the research queue without hanging the turn and keeps the
+  progress on what else was being researched, buildings multiply a city's science, gold and shields (and Wall Street
+  pays interest), the standalone ruleset keeps the 76 land and sea units the engine can play with their upgrades,
+  units upgrade in a city for gold, a ship lost at sea takes its passengers with it, and the AI explores by sea and
+  ferries settlers overseas.
 - The image also contains Blast (Apache-2.0), Serilog (Apache-2.0), MoonSharp (BSD-3-Clause), ini-parser (MIT), the
   .NET runtime (MIT) and a static FFmpeg build (GPL-3.0-or-later); it carries their licences in
   `/opt/civbridge/licenses/`. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

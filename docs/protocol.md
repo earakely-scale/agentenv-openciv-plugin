@@ -33,10 +33,15 @@ only client: it renders the facts the bridge returns into text for the agent.
 - **Victory.** After every turn the bridge checks Civ III's victories, for every civilization, an agent's or the
   AI's (the engine has none of its own): conquest, when it is the last civilization left (with several seats, also
   when its seat is the last one an agent still plays); domination, when it holds two thirds of the world's land
-  tiles and two thirds of its population; and, at the turn limit, score, when it has the highest score (a tie on
-  top is no one's victory). A one-seat game whose civilization is defeated in its own turn (its last units
-  disbanded or lost) is checked at once, since no turn ends after that. The game is then over: every seat gets a `victory` event, `game_over` turns true, and
-  `state`, `score` and the world snapshot carry `"victory": {"kind": "conquest"|"domination"|"score", "civ",
+  tiles and two thirds of its population; culture, when one of its cities has 20,000 culture points, or it has
+  100,000 and at least twice as many as any other civilization (Civ III's default thresholds, the BIQ's
+  OneCityCultureWin and AllCitiesCultureWin, which the ruleset leaves out; a civ's culture is its cities' culture,
+  as the engine's history counts it, so a city lost takes its culture with it, and a city taken starts at 0 for
+  its new owner); and, at the turn limit, score, when it has the highest score (a tie on top is no one's victory).
+  The checks run in that order, so the first one met wins; among several cities over 20,000 the one with the most
+  culture (the oldest on a tie) decides. A game whose last seat still playing is defeated in its own turn (its last
+  units disbanded or lost) is checked at once, since no turn ends after that. The game is then over: every seat gets a `victory` event, `game_over` turns true, and
+  `state`, `score` and the world snapshot carry `"victory": {"kind": "conquest"|"domination"|"culture"|"score", "civ",
   "label", "turn"}` (`label` is the seat's, null for an AI civ; null until someone wins). `autoplay` plays on
   after a victory, as after a defeat, so baselines cover every turn they were asked for.
 - **Score** = `10·cities + 3·pop + 1·tiles + 4·techs`, where `tiles` counts owned tiles that count
@@ -72,10 +77,13 @@ The human player's full situation. Result:
 ```json
 {
   "turn": 12, "turn_limit": 60, "game_over": false, "defeated": false, "victory": null, "date": "3400 BC",
-  "race": {"civs_left": 5, "rank": 2, "domination": 0.667,
-           "you": {"civ": "Rome", "you": true, "score": 61, "land": 0.04, "pop": 0.05},
-           "leader": {"civ": "Greece", "you": false, "score": 66, "land": 0.05, "pop": 0.06},
-           "nearest_domination": {"civ": null, "you": false, "score": 58, "land": 0.06, "pop": 0.05}},
+  "race": {"civs_left": 5, "rank": 2, "domination": 0.667, "culture_goal": 100000, "city_culture_goal": 20000,
+           "you": {"civ": "Rome", "you": true, "score": 61, "land": 0.04, "pop": 0.05, "culture": 24},
+           "leader": {"civ": "Greece", "you": false, "score": 66, "land": 0.05, "pop": 0.06, "culture": 40},
+           "nearest_domination": {"civ": null, "you": false, "score": 58, "land": 0.06, "pop": 0.05, "culture": 31},
+           "nearest_culture": {"civ": "Greece", "you": false, "score": 66, "land": 0.05, "pop": 0.06, "culture": 40},
+           "culture_runner_up": {"civ": null, "you": false, "score": 58, "land": 0.06, "pop": 0.05, "culture": 31},
+           "best_city": {"civ": "Greece", "you": false, "name": "Athens", "culture": 22}},
   "civ": "Rome", "era": 0, "government": "Despotism", "anarchy_until": null, "tile_penalty": true,
   "governments": [{"name": "Monarchy", "corruption": "problematic", "hurry": "gold", "tile_penalty": false,
                    "trade_bonus": false, "unit_cost": 1, "free_units_per_city": 3}],
@@ -93,8 +101,10 @@ The human player's full situation. Result:
     "food_stored": 4, "food_needed": 20, "food_per_turn": 2, "turns_to_grow": 8,
     "shields_per_turn": 3, "producing": "Settler", "production_stored": 12, "production_cost": 30,
     "turns_to_complete": 6, "disorder": false, "buildings": ["Palace"], "queue": ["Warrior", "Granary"],
-    "food_eaten": 6, "commerce": {"total": 5, "taxes": 2, "science": 3, "luxury": 0, "corrupt": 0, "wealth": 0},
-    "shields": {"total": 3, "useful": 3, "corrupt": 0}, "maintenance": 0
+    "food_eaten": 6, "commerce": {"total": 5, "taxes": 2, "science": 3, "luxury": 0, "corrupt": 0, "wealth": 0,
+                                  "from_buildings": 0},
+    "shields": {"total": 3, "useful": 3, "corrupt": 0, "from_buildings": 0},
+    "bonus": {"science": 0, "tax": 0, "luxury": 0, "shields": 0}, "maintenance": 0
   }],
   "units": [{
     "id": "u3", "type": "Settler", "x": 14, "y": 10, "moves_left": 1.0, "moves_max": 1,
@@ -109,18 +119,27 @@ The human player's full situation. Result:
 }
 ```
 
-- `status` is one of `idle`, `fortified`, `exploring`, `auto_work`, `goto`, `settle`,
-  `working:<job>` (e.g. `working:build_road`), `done` (no moves left this turn).
+- `status` is one of `idle`, `fortified`, `aboard` (carried by a ship, see `board`), `exploring`, `auto_work`,
+  `goto`, `settle`, `working:<job>` (e.g. `working:build_road`), `done` (no moves left this turn).
+- A unit aboard a ship has `aboard`, the ship's id. A ship that can carry units has `capacity` (Galley 2,
+  Caravel 3, Galleon 4) and `cargo`, the ids of the units aboard. Neither key is there otherwise.
 - `target` is `{"x", "y", "dist", "dir"}` for `goto`/`settle`, else null.
 - `orders` lists the orders `unit_order` would accept for this unit right now. A unit with moves next to an
   enemy also has `attack_targets` (see `unit_order`).
+- A unit in one of the seat's cities whose line has a later unit the city can build has `"upgrade": {"to":
+  "Longbowman", "gold": 60, "ok": true}`, also when it cannot upgrade now: then `ok` is false and `reason` says why
+  (no moves left, not enough gold). The later unit is not always stronger: the Chasqui Scout's line ends in the
+  Explorer (0/0), the Samurai's in the Cavalry (defence 3). `ok` is true exactly when `orders` has `upgrade`, and `gold` is what the order
+  charges.
 - `era` is the civ's era (`Player.EraIndex()`): 0 Ancient Times, 1 Middle Ages, 2 Industrial Age, 3 Modern Era.
   The client picks its advisors' heads and the science advisor's background by it.
 - `governments` lists the governments a revolution can change to now, as in `revolution`'s result;
   `tile_penalty` is true when the current government takes 1 from any tile yield above 2 (Despotism);
   `revolution_target` is the one a revolution under way ends in. `rivals[].peace_price` is the gold that civ asks for peace while at war (null at peace, or
-  while it refuses to talk).
-- `needs_orders` is true when the unit can move, is not under a standing order, and is not fortified.
+  while it refuses to talk). `rivals[].trade_offered` is the trade that civ offers the seat while it stands and can
+  still be made (as in `diplomacy`), else null.
+- `needs_orders` is true when the unit can move, is not under a standing order, is not fortified and is not aboard
+  a ship.
 - `blockers` lists what stops `end_turn`: `no_research` (has a city, nothing being researched),
   `no_production` (a city producing nothing), `idle_unit` (one per unit with `needs_orders`). A `disorder` blocker
   (a city in civil disorder, or that riots when the turn ends) also has `now` (in disorder already), `unhappy` and
@@ -129,8 +148,12 @@ The human player's full situation. Result:
 - `date` is the turn's year as the client's turn box shows it (`TimeOptions.GetRawNumber`): `"4000 BC"`,
   `"AD 1250"`; null for a ruleset that counts months or weeks.
 - `race` is how each victory stands: `civs_left` (undefeated civilizations), the seat's `rank` by score (1 + the
-  civs with a higher score), and `you`, the score `leader` and the civ `nearest_domination` (the highest of its land
-  and population shares' minimum), each with its score and shares; a civ the seat has not met has `civ` null.
+  civs with a higher score), and `you`, the score `leader`, the civ `nearest_domination` (the highest of its land
+  and population shares' minimum), the civ with the most culture (`nearest_culture`) and the next one
+  (`culture_runner_up`, null with one civ left), each with its score, shares and `culture` (its cities' culture
+  points); a civ the seat has not met has `civ` null. `best_city` is the city with the most culture for its owner
+  (`{"civ", "you", "name", "culture"}`, `civ` and `name` null for an unmet civ's), and `culture_goal` and
+  `city_culture_goal` are the cultural victory's thresholds (100,000 with twice the next civ's, and 20,000).
   `rank` and `you` are null once the seat is defeated; `race` is null when every civ is.
 - `last_events` are the events produced by the most recent `end_turn` (empty before the first).
 - `finance` is the domestic advisor's income and expenses, `Player.AggregateFlows()` as the client's
@@ -146,10 +169,16 @@ The human player's full situation. Result:
   (`City.FoodConsumedPerTurn()`, two per citizen; `food_per_turn` is what is left); `commerce`, from
   `City.CurrentCommerceYield()`, its `taxes`, `science` (beakers), `luxury`, `corrupt` and `wealth` (what
   building Wealth adds), with `total` their sum: the city's tiles' commerce, corrupt part included, plus what its
-  specialists add (taxes counts the tax collectors'). The cities' `total`s add up to `finance.income.cities +
+  specialists add (taxes counts the tax collectors'), plus `from_buildings`, what its buildings' percentages added
+  to taxes, science and luxury (already in them). The cities' `total`s add up to `finance.income.cities +
   taxmen`, their science, luxury and corrupt to the expenses' science, entertainment and corruption. `shields`
   is `City.CurrentProductionYield()`: `useful` (= `shields_per_turn`), `corrupt` (waste; everything in disorder
-  or anarchy) and `total`, the city screen's "PRODUCTION: n per turn". `maintenance` is
+  or anarchy), `from_buildings` (what its buildings added to `useful`, already in it) and `total` (`useful +
+  corrupt`), the city screen's "PRODUCTION: n per turn". `bonus` is the sum of the percentages the city's buildings
+  (wonder-granted ones included) add, by patch 0016's `City.Boost`: `science` (Library, University and Research Lab
+  50 each, Copernicus' Observatory and Newton's University 100), `tax` and `luxury` (Marketplace, Bank and Stock
+  Exchange 50 each) and `shields` (Factory and Manufacturing Plant 25 each). They apply after corruption and the
+  rates, to the specialists' output too, rounded down; Wealth is not raised. `maintenance` is
   `City.MaintenanceCosts()`, its buildings' upkeep in gold (the client's column reads 0, a TODO there); they add
   up to `finance.expenses.maintenance`.
 
@@ -170,8 +199,8 @@ explored are returned. Result:
 ```
 
 `overlay` is the overlay terrain (e.g. `Forest`, `Hills`, `Jungle`) or null. `units` lists only
-units on visible tiles; `id` is present for the player's own units. `resource` is null unless the
-player knows about it.
+units on visible tiles; `id` is present for the player's own units, and `aboard` (the ship's id) for those of them
+aboard a ship. `resource` is null unless the player knows about it.
 
 ### `known_map`
 Args: none. Everything the seat knows of the world, for drawing it (the play page polls it after every action, so
@@ -284,7 +313,8 @@ Args: `unit` (a Settler id; default: the first settler, else the capital), `top`
 Result: `{"origin": {"x", "y"}, "sites": [{"x", "y", "score", "dist", "dir", "turns", "terrain",
 "river", "coastal", "yield": {"food", "shields", "commerce"}}], "note": "only sites on the unit's
 continent are scored"}`. `turns` is the estimated travel time for the unit (null without a unit);
-`yield` sums the 3x3 area around the site.
+`yield` sums the 3x3 area around the site. For a unit aboard a ship, `sites` ranks the sites on every landmass
+along the ship's body of water instead.
 
 ### `unit_order`
 Args: `unit` (id), `order`, and `x`, `y` where the order needs a target.
@@ -303,6 +333,14 @@ Args: `unit` (id), `order`, and `x`, `y` where the order needs a target.
 | `build_road`, `build_mine`, `irrigate`, `clear_forest` | — | Worker job on the current tile. |
 | `attack` | x, y | Attack the adjacent tile: the top defender of a civ at war with you (barbarians always are), or move into an undefended enemy city, which is captured: it loses a citizen, its palace, small wonders and what it was building, and one of size 1 is destroyed (patch 0011). |
 | `bombard` | x, y | Bombard a tile in range (`bombard` units): an enemy unit, city or improvement, at war. |
+| `upgrade` | — | In one of your cities: the unit becomes the furthest unit along its civ's upgrade chain that the city can build now (tech known, a coastal city for ships, strategic resources connected), for `max(1, shield difference) × 3` gold (patch 0019). It keeps its id, experience, hit points and fortification, has no moves left this turn, and any other standing order (goto, explore) ends. Refused (`invalid_order`, with the reason) outside your cities, when nothing in its line can be built there (naming the next unit and what it needs), with no moves left, or without the gold. |
+| `board` | x, y optional | A land unit goes aboard one of your ships with room: on its own tile (in port; free), or on the adjacent water tile (x,y), which it steps onto at the cost of its moves. The ship then carries it, and it is `aboard`. |
+| `unload` | — | In a city only: a ship's passengers go ashore (or, ordered to a passenger, that one). At sea a passenger lands with `goto` or `settle` to a land tile next to its ship, which takes its moves. |
+
+Ships: a Galley (Map Making) carries 2 land units, a Caravel 3, a Galleon 4; a Curragh carries none. `goto` sails
+a ship (it may enter your own cities), and its passengers go with it. A ship lost at sea, sunk or disbanded, takes
+its passengers with it (patch 0020); in a city they go ashore. `disband`'s message names them. The engine has no
+coast-only rule for the Galley: it sails the open ocean safely.
 
 `attack_targets` on a unit: `[{"x", "y", "dir", "owner", "defender": "Spearman 3/3 hp"|null, "city": name|null,
 "win_chance": 0.62}]`. The chance comes from the engine's own strengths: each combat round the attacker wins
@@ -314,10 +352,15 @@ Result: `{"message": "<one line>", "unit": {<unit object as in state, or null if
 the battle an `attack` or `bombard` fought, as `known_map` lists it (null for any other order, an undefended
 city entered, or a bombardment of no unit).
 
+An `upgrade` reports `"u5 Archer is now a Longbowman (60 gold; 40 left). It has no moves left this turn."`.
+
 Error codes: `unknown_unit`, `invalid_order` (alternatives = the unit's valid orders),
 `cannot_found` (alternatives = top city sites; suggest = a `settle` call), `bad_target` (off map,
-`x+y` odd, or not explored; for `attack` and `bombard`, alternatives = the unit's targets), `no_path`, `no_moves`,
-`at_peace` (attacking a civ you are at peace with; suggest = declare war), `game_over`.
+`x+y` odd, or not explored; for `attack` and `bombard`, alternatives = the unit's targets; for `board`, a tile
+not next to the unit or land; a land unit's `goto` to a water tile with your ship on it suggests `board`), `no_path`
+(a land unit's route across water says to board a ship), `no_moves`, `no_transport` (`board`: no ship of yours with
+room there; suggest = boarding one nearby, if any), `at_peace` (attacking a civ you are at peace with; suggest =
+declare war), `game_over`.
 
 Standing orders are carried out at the start of each human turn (multi-turn `goto`/`settle`, explore,
 auto_work, worker jobs). When one cannot make progress, `end_turn` reports an event (e.g.
@@ -328,10 +371,22 @@ Args: `city` (id). Result: the city object from `state` plus `"options": [{"name
 "unit"|"building"|"wealth", "cost", "turns"}]` (what it can produce now), `"tiles_worked"`, and for the city
 screen's map (the client's `C7/Map/TileAssignmentLayer.cs`):
 
+- A building option also has `"effects"`, what it does in short phrases from its engine fields, economic ones first:
+  `["+50% science (+2 here)", "+3 culture", "upkeep 1"]`. A percentage says what it would add in this city now, at
+  the current rates, tiles and corruption: the engine's yields with the building put in the city for the call
+  (`"+50% tax and luxury (+3 gold, +1 luxury here)"`, `"+25% shields (+3 here)"`). A city in disorder makes nothing,
+  so its figures are those it would have in order (the engine's `respectCivilDisorder: false`), as the AI values
+  them. The others: `"interest on the treasury (5%, at most 50 gold a turn)"`, `"less corruption (4 commerce, 3
+  shields lost here)"` (what the city loses now, in order), `"a second centre against corruption"`, `"N unhappy made content"`, `"more happiness from luxury
+  resources"`, `"grows past 6"`, `"grows past 12"`, `"keeps half its food on growth"`, `"+50% defence"` (with `"up
+  to size 6"` for walls), `"+1 food on water tiles"` (shield, commerce), `"veteran land units"`, `"veteran sea
+  units"`, `"a Granary in every city on the continent"` (or `"in every city"`), `"+3 culture"`, `"upkeep 1"`.
+
 - `"worked": [[x, y, food, shields, commerce], ...]`: the city centre first, then each tile a citizen works, with
   the yields the client draws on it, the engine's `Tile.FoodYield/ProductionYield/CommerceYield(city)`. They
   sum to the city's totals before corruption: food minus two per citizen is `food_per_turn`, and shields are
-  `shields_per_turn` plus what corruption (or disorder, or anarchy) takes.
+  `shields_per_turn` plus what corruption (or disorder, or anarchy) takes, less what its buildings add
+  (`shields.from_buildings`).
 - `"workable": [[x, y], ...]`: the tiles in the city's radius it could work, `City.GetWorkableTiles` (inside the
   civ's borders, no city on them), around which the client draws its border; this includes tiles another of the
   civ's cities works, and not the centre.
@@ -363,11 +418,16 @@ And the rest of the client's city screen (`C7/UIElements/CityScreen/CityScreen.c
 
 ### `set_production`
 Args: `city`, `item`, `then` (optional list of up to 10 names). Result: `{"message", "city": {...}}`. Errors:
-`unknown_city`, `unknown_item` (alternatives = option names), `no_cities`, `bad_args`.
+`unknown_city`, `unknown_item` (alternatives = option names), `no_cities`, `bad_args`. A unit the city cannot build
+says why: another civ's unique unit, the tech it needs, a city off the coast for a ship, the strategic resources not
+connected, or that it is obsolete, with the unit that replaces it (the engine's `UnitPrototype.CanProduce`, which
+leaves out a unit once a unit of its civ's upgrade chain can be built there: exactly when a unit of that type could
+`upgrade` there, patch 0019).
 
 - `then` is the city's queue (the city object's `queue`): each time the city completes something, or the engine
   changes what it builds, the bridge sets the first queued item it can build now and takes it off the queue; an item
-  it cannot build any more leaves the queue, and the `built` event says so. Only when the queue is empty does the
+  it cannot build any more leaves the queue, and the `built` event says why ("Archer left the queue: it is obsolete
+  now that Rome can build the Longbowman that replaces it", or a building's reason). Only when the queue is empty does the
   engine pick, and the `choose_production` blocker asks the agent to keep or change that pick. `then: []` clears the
   queue; leaving `then` out keeps it. Queues are saved with the game.
 - `city` may name several cities: ids or names separated by commas, `"all"`, or `"pending"` (the cities whose
@@ -401,26 +461,32 @@ Args: `skip_idle` (default false), `until_attention` (default false), `max_turns
 - Otherwise idle units hold, research is auto-picked if missing, and the turn advances (up to
   `max_turns` while `until_attention` is set and no blocker appears). Result:
   `{"blocked": false, "turns_advanced", "turn", "game_over", "defeated", "events": [...],
-  "auto": [{"kind": "research_picked"|"government_picked"|"trade_declined", "text"}]}`.
+  "auto": [{"kind": "research_picked"|"government_picked", "text"}]}`.
 
 Event kinds: `city_founded`, `city_grew`, `city_starved`, `built` (unit/building completed),
 `tech_learned`, `unit_lost`, `unit_promoted`, `settle_failed`, `goto_blocked`, `explore_done`,
 `job_done`, `contact` (met a civ), `war_declared`, `threat` (a foreign or barbarian unit within 3
 tiles of a city or a settler), `city_destroyed`, `city_captured` (the seat took a city, or a civ it knows
-took one in sight), `city_lost` (one of the seat's cities was taken), `civ_destroyed`, `disorder`. Each event is
+took one in sight), `city_lost` (one of the seat's cities was taken), `civ_destroyed`, `disorder`, `trade_offered`
+(an AI or another seat offers a trade; see `accept_trade`), `trade_signed` and `trade_declined` (another seat answered
+the seat's trade offer), `unit_upgraded` (`autoplay`'s `engine_ai` upgraded one of the seat's units in its city: "u5
+Archer was upgraded to a Longbowman in Rome."). Each event is
 `{"turn", "kind", "text"}`, plus `"x", "y"` when it has a location.
 
 ### `autoplay`
 Args: `turns` (required), `policy`: `null` (end turns holding everything, research auto-picked),
 `found_capital` (found the capital with the first settler on turn 1, automate workers, then like
 `null`), `engine_ai` (OpenCiv3's own AI plays the human seat each turn), and `record` (default
-false). Result: `{"turn", "game_over", "defeated", "score": {...}, "trajectory": [{"turn",
-"score": {...}}]}` (trajectory only when `record`).
+false). Result: `{"turn", "game_over", "defeated", "score": {...}, "trades_declined", "trajectory": [{"turn",
+"score": {...}}]}` (trajectory only when `record`). Every policy declines the trades AIs offer the seat
+(`trades_declined` counts them), as the env did before trading, so baselines do not depend on trades; with
+`engine_ai` the engine's AI still trades with other AIs itself during the seat's turn, as it always did.
 
 ### `score`
 Result: `{"turn", "human": {score}, "players": [{"civ", "is_human", "seat", "defeated", "score": {...}, "share":
-{"land", "pop"}}], "human_share": {"land", "pop"}}`: each player's fractions of the world's land tiles and of its
-population (Civ III's domination victory needs two thirds of each). `seat` is the seat's label (or civ) for a civ an
+{"land", "pop"}, "culture"}], "human_share": {"land", "pop"}}`: each player's fractions of the world's land tiles and
+of its population (Civ III's domination victory needs two thirds of each), and its culture points, its cities' (the
+cultural victory needs 100,000 and twice the next civ's). `seat` is the seat's label (or civ) for a civ an
 agent plays, else null; `is_human` marks the seat the command plays. `victory` as in `state`.
 
 ### `revolution`
@@ -434,8 +500,20 @@ the target. Result: `{"message", "government": {"current", "anarchy_until", "rev
 ### `diplomacy`
 No args. Result: `{"civs": [<civ>], "unmet": n}`, where a civ (one you have met and that is alive) is `{"civ",
 "agent" (another seat), "at_war", "talks", "refuses_talks_until", "peace_price", "peace_offered" and "you_offered"
-(a standing peace offer between seats: `{"gold", "until_turn"}`), "score": {...}, "government", "military_vs_yours"
-(sum of each combat unit's best strength, theirs over yours), "at_war_with": [known civs]}`.
+(a standing peace offer between seats: `{"gold", "until_turn"}`), "gold" (its treasury, as the client's deal screen
+shows it), "techs_for_you" and "techs_for_them", "trade_offered", "you_offered_trade", "score": {...},
+"government", "military_vs_yours" (sum of each combat unit's best strength, theirs over yours), "at_war_with":
+[known civs]}`.
+
+- `techs_for_you` are the techs the civ knows and you do not, `techs_for_them` the reverse (null at war), each
+  `{"name", "you_value", "they_value"}` and most valuable to the receiver first. A tech's value to a civ is the
+  engine's `TradeOffer.GoldEquivalentFor`: its research cost for that civ (`GameData.TechCostFor`: lower the more
+  civs it knows have it, and less the beakers already spent when it is the one being researched).
+- `trade_offered` is the trade the civ offers you while it stands, `you_offered_trade` the one you offered another
+  seat: `{"you_get": {"techs", "gold"}, "you_give": {"techs", "gold"}, "you_value_get", "you_value_give",
+  "until_turn"}` (the last turn it stands), else null. An offer that can no longer be made as it is (a side lacks
+  the gold, or knows a tech it would get, after another trade or research) is not shown; `accept_trade` on it fails
+  with `offer_changed` and the reason.
 
 ### `declare_war`
 Args: `civ`. The engine's `DeclareWarOn`; the civ refuses to talk for 5 to 16 turns (longer after a sneak attack
@@ -452,6 +530,46 @@ asked price, when you can pay), `not_enough_gold`.
 An AI that wants peace offers it during its turn; the bridge cannot hold the AI's turn open, so it reports a
 `peace_offered` event (which stops `end_turn(until_attention)`) and the agent accepts with `propose_peace`. Peace
 between any two civs the human knows is reported as `peace_signed`.
+
+### Trades: `quote_trade`, `propose_trade`, `accept_trade`, `decline_trade`
+Techs and gold change hands between the seat and a civ it has met and is at peace with, through the engine's own
+deal path, as the client's deal screen does it (`DealScreen.AttemptDeal`): the AI's `Player.WouldAcceptDealFrom`
+judges a trade and `Player.ExecuteDeal` makes it. An AI takes a trade when what it gets is worth at least what it
+gives, both by its own values (its research costs, gold at face value); it has no memory of past trades and no
+mood. Gold per turn, maps, luxuries and embassies are not traded (the engine has no tradeable form for them).
+
+- `quote_trade` and `propose_trade` take `civ`, `give_techs` and `get_techs` (lists of names; default none),
+  `give_gold` and `get_gold` (default 0). Each tech given must be one you know and the civ does not (one of its
+  `techs_for_them`), each tech got the reverse; each side must have the gold it gives; a trade with an AI carries at
+  least one tech, as the engine's own trades do. Tech prerequisites are not checked: a tech can be got without the
+  ones it needs, as the engine's AIs trade among themselves and as the client's deal screen lists them. Errors: `unknown_civ` (alternatives = the civs you have met),
+  `not_at_peace`, `unknown_tech` (alternatives = the techs that side can give), `not_enough_gold`, `bad_args`.
+- `quote_trade` changes nothing. Result: `{"civ", "agent", "you_give", "you_get" (each `{"techs", "gold"}`),
+  "you_value_give", "you_value_get", "they_value_give", "they_value_get", "accepts", "gold_to_balance" (the gold you
+  would add for the AI to accept), "gold_they_would_add" (the most gold you could ask on top and still have it
+  accepted), "suggest" (the balanced `propose_trade` call, when you can pay it: it asks for less of the gold you get
+  first, then gives more gold)}`. With another seat `accepts`,
+  `gold_to_balance` and `gold_they_would_add` are null: the other agent decides.
+- `propose_trade` with an AI makes the trade or fails with `refused` (the AI's two values; suggest = the balanced
+  call, when you can pay it). Result: `{"message", "civ": <civ>, "gold", "research"}`, `research` as in `state`.
+  With another seat it only offers the trade (see Seats), with the same result.
+- An AI offers trades itself during its turn (`PlayerAI.AttemptTrading`, on about a quarter of its turns). The AI's
+  turn cannot wait for the agent, so the bridge keeps the offer for the seat until the end of its next turn
+  (`trade_offered` in `diplomacy` and `state.rivals`, and a `trade_offered` event with what each side is worth to
+  you) and lets the AI's turn go on. An `end_turn` that plays several turns (`until_attention`) holds every offer
+  made on any of them until the end of the turn it stops on. A `trade_offered` event is delivered only while its
+  offer stands and can be made, and says the turn it stands until: `"<civ> offers <goods> (worth N to you) for
+  <goods> (worth M to you), until the end of turn T. Accept with diplomacy(action=\"accept_trade\", civ=\"<civ>\")."`;
+  one answered, replaced by a newer offer, lapsed or made impossible before it is delivered is dropped. The AI values its offers at least even for itself; by your own values they are
+  often bad, so compare `you_value_get` with `you_value_give`. A newer offer from the same AI replaces the older one.
+- `accept_trade {civ}` makes the standing offer, checked again first: each side must still have what it gives and
+  an AI must still accept it by its values (both drift a little in a turn). Result as `propose_trade`'s. Errors:
+  `no_offer` (none stands: it lapsed, was answered, or a war ended it), `offer_changed` (with why it can no longer
+  be made). `decline_trade {civ}` drops it (`no_offer` likewise), also one not shown because it can no longer be made
+  (its message then says why); letting it lapse does the same.
+- A tech got in a trade is known at once. If it was the one being researched, its beakers go with it and the research
+  moves on as when a tech is learned (the seat's queue goes on, else the engine picks and `choose_research` asks);
+  any other research keeps its progress (patch 0017). `declare_war` drops the trades standing between the two.
 
 ## Seats: several agents in one game
 
@@ -472,12 +590,19 @@ events, decisions and plan state are its own. An unknown seat fails with `unknow
 - **Peace between seats** has no price: `propose_peace` from one seat stands until the end of the next turn and
   reaches the other as a `peace_offered` event; a `propose_peace` from the other meanwhile signs it, each side paying
   the gold it offered. Talks are never refused between seats.
+- **Trades between seats** need both: `propose_trade` from one seat changes nothing yet; the offer stands until the
+  end of the next turn, shows in the other's `diplomacy` (`trade_offered`) and reaches it as a `trade_offered` event
+  when the turn ends, in its own values, unless it was answered or replaced meanwhile.
+  The other makes it with `accept_trade`, or by proposing the same trade back, once (both seats' offers between the
+  two go); the proposer then gets a `trade_signed` event, or `trade_declined` after `decline_trade`. Gold alone may
+  change hands between seats.
 - **Victory** (see Conventions): conquest also when one seat's civilization is the last an agent still plays
   (the other seats are defeated), whatever AI civs are left. The game is then over for every seat. A victory on
   score at the turn limit may be an AI civ's; the victor verifier then still ranks the seats by score, while an AI
-  civ's conquest or domination leaves the match without a victor.
-- `autoplay` fails with `multi_seat`. The autosave (format 2) keeps every seat, the victory and the battles
-  `known_map` lists; `load` restores them.
+  civ's conquest, domination or cultural victory leaves the match without a victor.
+- `autoplay` fails with `multi_seat`. The autosave (format 2) keeps every seat, the victory, the battles
+  `known_map` lists and the standing peace and trade offers (`trade_offers`; a save without them loads with none);
+  `load` restores them.
 
 ## Engine patches
 
@@ -529,7 +654,8 @@ submodule itself stays untouched):
 13. `0013-the-palace-moves-when-the-capital-falls.patch`: a civ whose capital is taken (`CaptureCity`) or
    destroyed (`DestroyCity`) gets a new one at once and free, as in Civ III (`CityInteractions.RelocatePalace`):
    its largest city (the oldest of those), preferring one without a Forbidden Palace; a Forbidden Palace where the
-   palace lands is lost. Corruption is measured again from there.
+   palace lands is lost. Corruption is measured again from there. A civ that held no city when it took one gets
+   its palace in that city, as one founding its first city does.
 14. `0014-units-disbanded-in-a-city-add-their-shields.patch`: the ruleset's disband script
    (`C7/Lua/civ3/behaviors/gameplay.lua`) failed for every unit disbanded inside its civ's borders (`HasCity`
    read as a method, then `GetType().Name` on a MoonSharp static userdata), so none gave shields. A unit disbanded
@@ -541,6 +667,70 @@ submodule itself stays untouched):
    and a traded tech further down the queue stayed in it; at the head, `PlayerAI.MaybePickTechToResearch` picked it
    again forever and the turn hung (a seat with a `set_research` queue, played by `autoplay`'s `engine_ai`). The
    completed tech now leaves the queue wherever it is, and a known tech at the head is skipped.
+16. `0016-buildings-multiply-science-gold-and-shields.patch`: buildings have their Civ III economic effects; a
+   Library, Marketplace, University, Bank or Factory cost upkeep and returned nothing. `SaveBuilding` and `Building`
+   get `sciencePercent`, `taxPercent`, `luxuryPercent` and `productionPercent`, and `City.Boost` raises the beakers,
+   taxes and luxury left after corruption and the rates (the specialists' included, Wealth's not) in
+   `CurrentCommerceYieldRaw`, and the useful shields left after waste in `CurrentProductionYield`, by the sum of the
+   city's buildings' percentages, rounded down; `CommerceBreakdown.fromBuildings` and `CorruptableValue.fromBuildings`
+   record what was added (the city's `from_buildings`). The ruleset gives Library, University and Research Lab +50%
+   science, Copernicus' Observatory and Newton's University +100%, Marketplace, Bank and Stock Exchange +50% tax and
+   luxury, Factory and Manufacturing Plant +25% shields, and Wall Street the `treasuryEarnsInterest` flag the engine
+   already paid on (5% of the treasury, at most 50 gold a turn). `ImportCiv3` maps the BIQ's three +50% flags. The AI
+   (`ChooseProducible.ScoreBuilding`) values such a building by what it would add in the city in order:
+   `CurrentProductionYield`, like `CurrentCommerceYieldRaw`, takes `respectCivilDisorder`, so a Marketplace's luxury
+   counts in a city that riots. Everything that reads the city's yields (finances, research, the AI's budget and
+   government choice, moods, the client's city screen) follows; nothing draws from `GameData.rng`. A save keeps its
+   own building definitions, so a save made before the patch has no multipliers.
+17. `0017-a-traded-tech-keeps-research-progress.patch`: `Player.CompleteResearchingTech` cleared the current
+   research and its beakers for every tech it completed, so a civ that got a tech in a trade (`Player.ExecuteDeal`)
+   lost all its progress on whatever else it was researching (AIs lost it about three times per 200-turn game, and
+   an agent buying a tech would at every purchase). The research now ends only when the completed tech is the one
+   being researched; a traded tech that is the current research still takes its beakers with it.
+18. `0018-the-standalone-ruleset-keeps-every-unit-it-can-play.patch`: the standalone ruleset
+   (`C7/Lua/standalone/ruleset.lua`) kept only the 27 units with community art, and dropped every unit's upgrades (it
+   looked the `upgradesTo` list up as a key), so no unit ever went obsolete and 25 civs had lost a unit class to their
+   missing unique units. It now keeps 76 units: those 27, the 12 later land units (Rifleman to Modern Armor, Artillery,
+   Radar Artillery), the 7 later sea units (Ironclad to AEGIS Cruiser, Transport) and the 30 unique units, each new one
+   drawn with the art of the unit it replaces or descends from, and their upgrades to units kept. It leaves out air
+   units, missiles, nukes, the Carrier, Nuclear Submarine, Flak and Mobile SAM (the engine has no air movement, air
+   missions or nuclear attack) and the leaders and armies (no rule behind them). `UnitPrototype.GetUnitUpgrade` takes
+   the next step where several targets fit a civ (the Spearman goes to the Pikeman, or to the Musketman for the
+   Dutch), instead of the alphabetically first with a warning.
+19. `0019-units-upgrade-in-a-city-for-gold.patch`: `MapUnit.Upgrade` (`MapUnit_Upgrade.cs`) upgrades a unit in one of
+   its owner's cities to the furthest unit of its civ's chain the city can build (`UnitPrototype.UpgradeTargetIn`), for
+   the shield difference (at least 1) times `Rules.UpgradeCostPerShield` gold (3; Conquests' value is not imported).
+   It keeps its id, experience, hit points and fortification and uses up its moves. The AI
+   (`PlayerAI.MaybeUpgradeUnits`) spends the gold above a reserve of a turn's upkeep (at least 50) on its combat units
+   in its cities, the largest defence gain first, skipping an upgrade to a unit that does not fight (the Chasqui
+   Scout to the Explorer) or that defends worse while no other unit in the city defends as well (the Samurai to the
+   Cavalry); while a city's best defender could upgrade, it keeps one tenth of its commerce from science for it. A
+   unit is obsolete in a city exactly when it could upgrade there: `UnitPrototype.IsUnitObsolete` follows the civ's
+   own chain, without the "siblings" that made the Archer obsolete at Feudalism (through the Medieval Infantry)
+   before it could upgrade at Invention. The bridge's `upgrade` order and the units' `upgrade` field use it.
+20. `0020-cargo-goes-down-with-its-ship.patch`: `GameData.RemoveUnit` left a lost ship's passengers on the water,
+   still aboard a ship that no longer existed. A ship lost at sea (sunk, disbanded, or disbanded by patch 0007's
+   broke AI) now takes its passengers with it, as in Civ III; one lost in a city puts them ashore, awake. As one
+   removal can now take several units, a destroyed civ's units are removed from a copy of its list (by index, the
+   engine threw once a passenger listed before its ship had gone with it, and a captured last city stayed on its
+   tile), a broke human seat stops disbanding when it has no units left, and the broke AI spares a loaded ship at sea
+   as it spares settlers and workers.
+21. `0021-the-ai-explores-by-sea.patch`: the AI builds a few ships to explore the ocean. A coastal city builds one
+   while unknown tiles border what its civ knows of the ocean next to it (`ExplorerAI.HasOceanToExplore`, which,
+   unlike the check it replaces, changes nothing), the civ is at peace and its ships, built or being built, number
+   fewer than min(4, 1 + cities / 6); the ship gets +15, which the cheap Curragh wins. `ExplorerAI` skips
+   unreachable targets (no route is an empty path, length 0, not null) and a ship explores only its own body of
+   water, so a boat on a lake refuses `explore`.
+22. `0022-the-ai-ferries-settlers-overseas.patch`: the AI settles other landmasses. A settler weighs the best known site
+   overseas (reachable by sea from one of its civ's ports on its landmass, outside other civs' borders) against the best
+   one at home and takes it when it scores more than twice as much; it waits in that port, a free ship is sent or the
+   port builds one, and a new `FerryAI` carries it and its escort to a landing next to the site. A ship found with cargo
+   and no plan (after a load) finishes the crossing or puts its cargo ashore in port (with no port it can reach, on the
+   nearest shore it can reach), and passengers stay aboard, fortified, until landed (a settler of a civ with no city
+   left founds its city ashore, not where it stood on the water). A unit told to hold where it stood that is carried off
+   its post before it fortifies (an escort whose ship sails, or a seat unit moved by `goto` before `autoplay`) plans
+   again; it used to throw on its missing path and end its player's turn. Wars across water, amphibious attack and naval
+   combat are not done (`docs/full-game.md`).
 
 Measured over full 540-turn Standard games with 7 AIs at Regent (seeds 1-3), patches 0005-0009 take:
 - mean AI techs at T540 from 32 to 43-45, and civs with an Industrial-era tech from 0 to 3-7;
@@ -549,6 +739,19 @@ Measured over full 540-turn Standard games with 7 AIs at Regent (seeds 1-3), pat
 - AI governments at T540 from all Despotism to mostly Republic and Democracy.
 
 Wall time per game is unchanged at 74-78 s, and a seed replays byte-identically.
+
+Patch 0016 then takes, over the same games (seeds 1-3, with the patches through 0015 as the baseline):
+- mean techs of the AIs left at T540 from 37-42 to 58-65, the best from 43-49 to 60-66;
+- Universities from 32-43 to 70-104, Banks from 1-6 to 58-78, Stock Exchanges from 0 to 19-36, Factories from 0
+  to 3-10;
+- cities captured from 39-85 to 100-117 per game, and civs destroyed from 0-1 to 2-3.
+
+Wall time per game stays within the machine's noise (167-246 s before, 197-227 s after, on a shared machine).
+Patch 0017 re-measured on the same games (`autoplay` `engine_ai`, which declines the AIs' offers to the seat as
+before): seed 3 plays out identically; on seeds 1 and 2 a traded tech that kept the receiver's progress sends the
+game another way from then on, so the mean AI techs at T540 go from 42.4 to 36.9 and from 36.7 to 43.0 (39.7 to
+40.0 over the three seeds). In 200-turn games (Small with 6 civs on seed 1, Standard with 8 on seed 2) the mean
+AI techs at T200 are 24.0 and 23.3 before, 24.0 and 23.4 after. Wall time is unchanged.
 
 ## Round 2 additions (from the post-playtest audit)
 
@@ -562,7 +765,7 @@ Implemented. These extend the sections above; folding them in is still to do.
 - `hurry {city}`: buys the current production with gold (or population, where the government uses forced labour).
   - Before acting, it uses `GetHurryProductionDetails`; refusals give `cannot_hurry` with the engine's reason and the cost.
   - Result: `{"message", "gold_cost", "pop_cost", "city"}`.
-- **Trades stay auto-declined.** Every declined offer is an `auto` entry, `trade_declined`, that says what was offered.
+- **Trades** were auto-declined; they are now made with `propose_trade` and `accept_trade` (see Trades above).
 - **Defenders keep order.** Under Despotism, each military unit in a city suppresses one unhappy citizen (up to 2). `state` reports it and the disorder hints say so.
 
 ### Who decides

@@ -62,6 +62,10 @@ ITEMS = {  # name: (kind, cost, required tech)
     "Wealth": ("wealth", 0, None),
 }
 POP_COST = {"Settler": 2, "Worker": 1}
+EFFECTS = {  # city_info's effects of a building option (the fake's buildings add no percentages)
+    "Barracks": ["veteran land units", "upkeep 1"], "Granary": ["keeps half its food on growth", "upkeep 1"],
+    "Temple": ["1 unhappy made content", "+2 culture", "upkeep 1"], "Walls": ["+50% defence up to size 6"],
+}
 ORDERS = {
     "Settler": ["settle", "found_city", "goto", "hold", "disband"],
     "Worker": ["auto_work", "goto", "build_road", "build_mine", "irrigate", "hold", "disband"],
@@ -182,6 +186,8 @@ class Game:
         self.met = False
         self.government, self.anarchy_until, self.revolution_target = "Despotism", None, None
         self.wars, self.talks_from, self.barbarian_killed = set(), {}, False
+        # Greece's side of trades: its techs and treasury, and an offer it stands by (set with _game).
+        self.greece_known, self.greece_gold, self.trade_offer = ["Alphabet", "Masonry", "Ceremonial Burial"], 60, None
         self.battles = []  # known_map's, every one the seat's own attack
         self.threats_seen = set()
         self.risk_seen = set()
@@ -277,7 +283,7 @@ class Game:
             science, luxury = self.rates["science"] * (1 + c["size"]) // 6, self.rates["luxury"] * c["size"] // 4
             corrupt = 0 if "Palace" in c["buildings"] else 1
             out[c["id"]] = {"total": tax + science + luxury + corrupt, "taxes": tax, "science": science,
-                            "luxury": luxury, "corrupt": corrupt, "wealth": 0}
+                            "luxury": luxury, "corrupt": corrupt, "wealth": 0, "from_buildings": 0}
         return out
 
     def finance(self) -> dict:
@@ -324,7 +330,9 @@ class Game:
                 "defenders": self.defenders(c), "riot_risk": self.riot_risk(c), "capped": self.capped(c),
                 "shields_lost_last_turn": c["lost"], "buildings": c["buildings"],
                 "food_eaten": 2 * c["size"], "commerce": self.commerce()[c["id"]],
-                "shields": {"total": spt or 1 + c["size"], "useful": spt, "corrupt": 0 if spt else 1 + c["size"]},
+                "shields": {"total": spt or 1 + c["size"], "useful": spt, "corrupt": 0 if spt else 1 + c["size"],
+                            "from_buildings": 0},
+                "bonus": {"science": 0, "tax": 0, "luxury": 0, "shields": 0},
                 "maintenance": self.maintenance(c)}
 
     def city(self, key):
@@ -337,6 +345,7 @@ class Game:
     def options(self, c) -> list:
         spt = self.spt(c)
         return [{"name": n, "kind": k, "cost": cost, "turns": ceil_div(cost, spt) if cost and spt else None}
+                | ({"effects": EFFECTS[n]} if k == "building" else {})
                 for n, (k, cost, tech) in ITEMS.items() if tech is None or tech in self.known]
 
     # ---- research ----
@@ -386,10 +395,14 @@ class Game:
         return self.turn >= self.turn_limit
 
     def race(self) -> dict:
-        you = {"civ": self.civ, "you": True, "score": self.score()["total"], "land": 0.04, "pop": 0.05}
-        greece = {"civ": "Greece", "you": False, "score": you["score"] + 5, "land": 0.05, "pop": 0.06}
+        you = {"civ": self.civ, "you": True, "score": self.score()["total"], "land": 0.04, "pop": 0.05,
+               "culture": self.turn}
+        greece = {"civ": "Greece", "you": False, "score": you["score"] + 5, "land": 0.05, "pop": 0.06,
+                  "culture": 2 * self.turn}
         return {"civs_left": 4, "rank": 2, "domination": 0.667, "you": you, "leader": greece,
-                "nearest_domination": greece}
+                "nearest_domination": greece, "nearest_culture": greece, "culture_runner_up": you,
+                "best_city": {"civ": "Greece", "you": False, "name": "Athens", "culture": self.turn},
+                "culture_goal": 100_000, "city_culture_goal": 20_000}
 
     def state(self) -> dict:
         r = self.research
@@ -411,7 +424,8 @@ class Game:
             "cities": [self.city_view(c) for c in self.cities.values()],
             "units": [self.unit_view(u) for u in self.units.values()],
             "rivals": [{"civ": o, "met": o == "Greece" and self.met, "at_war": o in self.wars,
-                        "peace_price": self.peace_price(o), "cities_seen": 1 if o == "Greece" else 0}
+                        "peace_price": self.peace_price(o), "cities_seen": 1 if o == "Greece" else 0,
+                        "trade_offered": self.trade_offer if o == "Greece" and o not in self.wars else None}
                        for o in self.opponents],
             "blockers": self.blockers(), "decisions": json.loads(json.dumps(self.decisions)),
             "last_events": self.last_events,
@@ -431,7 +445,67 @@ class Game:
                 "refuses_talks_until": (self.talks_from[civ] if war and self.turn < self.talks_from.get(civ, 0)
                                         else None),
                 "peace_price": self.peace_price(civ), "government": "Despotism", "military_vs_yours": 1.5,
-                "score": {"total": 30 + self.turn, "cities": 1, "pop": 2, "tiles": 9, "techs": 3}, "at_war_with": []}
+                "score": {"total": 30 + self.turn, "cities": 1, "pop": 2, "tiles": 9, "techs": 3}, "at_war_with": [],
+                "gold": self.greece_gold,
+                "techs_for_you": None if war else self.tradeable(self.greece_known, self.known),
+                "techs_for_them": None if war else self.tradeable(self.known, self.greece_known),
+                "trade_offered": self.trade_offer if self.trade_offer and not war else None, "you_offered_trade": None}
+
+    # ---- trades: Greece values a tech at its cost, and takes a trade worth at least as much to it as it gives ----
+
+    @staticmethod
+    def tradeable(have, lack) -> list:
+        return [{"name": t, "you_value": TECHS[t][0], "they_value": TECHS[t][0]} for t in have if t not in lack]
+
+    def deal(self, a) -> tuple[str, dict, dict]:
+        civ = self.met_civ(a["civ"])
+        if civ in self.wars:
+            raise Refused("not_at_peace", f"You are at war with {civ}; make peace first.")
+        sides = {"give": (self.known, self.greece_known, self.gold), "get": (self.greece_known, self.known,
+                                                                            self.greece_gold)}
+        offer = {}
+        for side, (have, lack, gold) in sides.items():
+            options = [t for t in have if t not in lack]
+            techs = a.get(f"{side}_techs") or []
+            if bad := [t for t in techs if t not in options]:
+                raise Refused("unknown_tech", f"{bad[0]} cannot be traded that way; it can be: {', '.join(options)}.",
+                              options)
+            if a.get(f"{side}_gold", 0) > gold:
+                raise Refused("not_enough_gold", f"Only {gold} gold to give, not {a[f'{side}_gold']}.")
+            offer[side] = {"techs": techs, "gold": a.get(f"{side}_gold", 0)}
+        return civ, offer["give"], offer["get"]
+
+    def quote_trade(self, a) -> dict:
+        civ, give, get = self.deal(a)
+        value = {k: sum(TECHS[t][0] for t in o["techs"]) + o["gold"] for k, o in (("give", give), ("get", get))}
+        short = max(0, value["get"] - value["give"])
+        balanced = f'give_gold={give["gold"] + short}, get_techs={json.dumps(get["techs"])}'
+        return {"civ": civ, "agent": False, "you_give": give, "you_get": get, "you_value_give": value["give"],
+                "you_value_get": value["get"], "they_value_give": value["give"], "they_value_get": value["get"],
+                "accepts": short == 0, "gold_to_balance": short, "gold_they_would_add": 0,
+                "suggest": None if short == 0 else f'diplomacy(action="propose_trade", civ="{civ}", {balanced})'}
+
+    def make_trade(self, civ, give, get) -> dict:
+        self.known += get["techs"]
+        self.greece_known += give["techs"]
+        self.gold += get["gold"] - give["gold"]
+        self.greece_gold += give["gold"] - get["gold"]
+        return {"message": f"Traded with {civ}.", "civ": self.civ_view(civ), "gold": self.gold}
+
+    def propose_trade(self, a) -> dict:
+        q = self.quote_trade(a)
+        if not q["accepts"]:
+            raise Refused("refused", f"{q['civ']} wants {q['gold_to_balance']} gold more.", suggest=q["suggest"])
+        return self.make_trade(q["civ"], q["you_give"], q["you_get"])
+
+    def answer_trade(self, a, accept: bool) -> dict:
+        civ = self.met_civ(a["civ"])
+        offer, self.trade_offer = self.trade_offer, None
+        if offer is None:
+            raise Refused("no_offer", f"{civ} has no trade offer standing for you.")
+        if accept:
+            return self.make_trade(civ, offer["you_give"], offer["you_get"])
+        return {"message": f"Declined {civ}'s offer.", "civ": self.civ_view(civ)}
 
     def met_civ(self, name) -> str:
         met = ["Greece"] if self.met else []
@@ -868,11 +942,12 @@ class Game:
         cities.append({"id": 1000, "x": athens[0], "y": athens[1], "name": "Athens", "owner": 1, "size": 2,
                        "capital": True, "production": "Warrior", "era": 0, "walls": False})
         units = [{"id": int(u["id"][1:]), "x": u["pos"][0], "y": u["pos"][1], "owner": 0, "type": u["type"],
-                  "hp": u["hp"], "hp_max": UNIT_STATS[u["type"]][1], "fortified": u["status"] == "fortified"}
+                  "hp": u["hp"], "hp_max": UNIT_STATS[u["type"]][1], "fortified": u["status"] == "fortified",
+                  "aboard": None}
                  for u in self.units.values()]
         if b := self.barbarian():
             units.append({"id": 1000, "x": b[0], "y": b[1], "owner": len(civs) - 1, "type": "Warrior", "hp": 3,
-                          "hp_max": 3, "fortified": False})
+                          "hp_max": 3, "fortified": False, "aboard": None})
         return {"schema": 2, "turn": self.turn, "turn_limit": self.turn_limit, "seed": self.seed,
                 "map": {"width": WIDTH, "height": HEIGHT, "wrap_x": True},
                 "seats": [{"index": index[c], "civ": c, "label": self.labels.get(c)} for c in self.seats],
@@ -1029,6 +1104,12 @@ class Game:
             return self.declare_war(a)
         if cmd == "propose_peace":
             return self.propose_peace(a)
+        if cmd == "quote_trade":
+            return self.quote_trade(a)
+        if cmd == "propose_trade":
+            return self.propose_trade(a)
+        if cmd in ("accept_trade", "decline_trade"):
+            return self.answer_trade(a, cmd == "accept_trade")
         if cmd == "hurry":
             return self.hurry(a)
         if cmd == "techs":
