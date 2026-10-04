@@ -12,7 +12,7 @@ namespace CivBridge;
 sealed partial class Session {
 	static readonly string[] AllOrders =
 		["settle", "found_city", "goto", "explore", "auto_work", "fortify", "wake", "hold", "disband", "build_road", "build_mine", "irrigate", "clear_forest",
-		 "attack", "bombard", "upgrade"];
+		 "attack", "bombard", "upgrade", "board", "unload"];
 
 	static readonly Dictionary<string, string> Jobs = new() {
 		["build_road"] = C7Action.UnitBuildRoad,
@@ -56,6 +56,12 @@ sealed partial class Session {
 			case "upgrade":
 				message = Upgrade(u);
 				break;
+			case "board":
+				message = await Board(u, a.Has("x") || a.Has("y") ? TargetArg(a) : u.location);
+				break;
+			case "unload":
+				message = Unload(u);
+				break;
 			case "fortify":
 				if (!u.unitType.actions.Contains(UnitAction.Fortify)) throw Invalid(u, $"{Label(u)} cannot fortify.");
 				Stop(u);
@@ -65,7 +71,7 @@ sealed partial class Session {
 			case "wake":
 				string was = Status(u);
 				Stop(u);
-				message = was is "idle" or "done" ? $"{Label(u)} had no standing order." : $"{Label(u)} stopped ({was}) and awaits orders.";
+				message = was is "idle" or "done" or "aboard" ? $"{Label(u)} had no standing order." : $"{Label(u)} stopped ({was}) and awaits orders.";
 				break;
 			case "hold":
 				message = u.movementPoints.canMove ? $"{Label(u)} holds this turn." : $"{Label(u)} had no moves left anyway.";
@@ -74,6 +80,7 @@ sealed partial class Session {
 			case "disband":
 				if (!u.unitType.actions.Contains(UnitAction.Disband)) throw Invalid(u, $"{Label(u)} cannot be disbanded.");
 				string label = Label(u);
+				var cargo = Cargo(u);
 				Stop(u);
 				// In one of our cities the ruleset's script adds shields to what it builds (patches/0014).
 				City here = u.location.cityAtTile is { } c && c.owner == human ? c : null;
@@ -87,6 +94,7 @@ sealed partial class Session {
 				}
 				message = $"{label} was disbanded." + (here != null && here.shieldsStored > stored
 					? $" {here.name} gained {here.shieldsStored - stored} shields toward {here.itemBeingProduced?.name ?? "its production"}." : "")
+					+ CargoFate(cargo)
 					+ (human.defeated ? " You have no cities or settlers left: your civilization is defeated and the game is over." : "");
 				break;
 			default:
@@ -117,9 +125,11 @@ sealed partial class Session {
 		if (AttackTargets(u).Count > 0) list.Add("attack");
 		if (BombardTargets(u).Count > 0) list.Add("bombard");
 		if (u.canExplore()) list.Add("explore");
+		if (BoardTarget(u) != null) list.Add("board");
+		if (u.location.HasCity() && (u.IsLoaded() || Cargo(u).Count > 0)) list.Add("unload");
 		if (u.canAutomate()) list.Add("auto_work");
 		if (actions.Contains(UnitAction.Fortify) && !u.isFortified) list.Add("fortify");
-		if (Status(u) is not ("idle" or "done")) list.Add("wake");
+		if (Status(u) is not ("idle" or "done" or "aboard")) list.Add("wake");
 		if (moves) list.Add("hold");
 		if (actions.Contains(UnitAction.Disband)) list.Add("disband");
 		if (u.CanUpgrade()) list.Add("upgrade");
@@ -197,7 +207,12 @@ sealed partial class Session {
 	async Task<(string, JsonObject)> Goto(MapUnit u, Tile target) {
 		if (!u.unitType.actions.Contains(UnitAction.Goto)) throw Invalid(u, $"{Label(u)} cannot move on its own.");
 		if (target == u.location) throw new BridgeError("bad_target", $"{Label(u)} is already at {At(target)}.");
-		if (u.IsLandUnit() && !target.IsLand()) throw new BridgeError("bad_target", $"{At(target)} is {target.baseTerrainType.DisplayName}; {Label(u)} moves on land.");
+		if (u.IsLandUnit() && !target.IsLand()) {
+			bool ship = u.IsLoadable() && Ships(target, u).Any();
+			throw new BridgeError("bad_target", $"{At(target)} is {target.baseTerrainType.DisplayName}; {Label(u)} moves on land"
+				+ (ship ? $", but a ship of yours with room is there: board it with unit_order order=\"board\" from {(u.location.DistanceTo(target) == 1 ? "here" : "the shore next to it")}." : "."),
+				suggest: ship && u.location.DistanceTo(target) == 1 ? BoardCall(u, target) : null);
+		}
 		if (Occupant(target) is string who) throw Occupied(u, target, who);
 		TilePath p = Path(u, target) ?? throw NoPath(u, target);
 		var info = PathInfo(u, p);
@@ -233,6 +248,87 @@ sealed partial class Session {
 		if (!u.movementPoints.canMove) return "it has no moves left this turn";
 		int cost = u.UpgradeCost(target);
 		return human.gold < cost ? $"the upgrade to {target.name} costs {cost} gold and you have {human.gold}" : null;
+	}
+
+	/// <summary>Our ships on the tile with room for the unit, emptiest first (as the engine picks when a unit moves aboard).</summary>
+	static IEnumerable<MapUnit> Ships(Tile t, MapUnit u) =>
+		t.unitsOnTile.Where(s => s != u && s.owner == u.owner && s.CanTransport() && s.FreeCapacity() > 0).OrderByDescending(s => s.FreeCapacity());
+
+	/// <summary>The units aboard a ship (none for any other unit).</summary>
+	static List<MapUnit> Cargo(MapUnit ship) =>
+		ship.CanTransport() ? ship.location.unitsOnTile.Where(x => x != ship && x.IsLoadedIn(ship)).ToList() : [];
+
+	/// <summary>The ship a passenger is aboard, or null.</summary>
+	static MapUnit ShipOf(MapUnit u) => u.IsLoaded() ? u.location.unitsOnTile.FirstOrDefault(s => s.id == u.loadedOnUnitId) : null;
+
+	/// <summary>Where the unit can board a ship now: its own tile, or an adjacent water tile while it has moves; null if nowhere.</summary>
+	Tile BoardTarget(MapUnit u) {
+		if (!u.IsLoadable() || !u.IsLandUnit() || u.IsLoaded()) return null;
+		if (Ships(u.location, u).Any()) return u.location;
+		return u.movementPoints.canMove ? u.location.neighbors.Values.FirstOrDefault(t => Tile.IsTileValid(t) && t.IsWater() && Ships(t, u).Any()) : null;
+	}
+
+	string BoardCall(MapUnit u, Tile t) => $"unit_order(unit=\"{ids.Of(u)}\", order=\"board\", x={t.XCoordinate}, y={t.YCoordinate})";
+
+	/// <summary>
+	/// Puts a land unit aboard one of our ships: one on its own tile (in port, free), or one on an adjacent water tile, which
+	/// the unit steps onto (the engine boards it as it enters, at the cost of its moves). A ship moves its passengers with it;
+	/// they leave it with goto or settle to a land tile next to it, or with unload in a city.
+	/// </summary>
+	async Task<string> Board(MapUnit u, Tile target) {
+		if (!u.IsLoadable() || !u.IsLandUnit()) throw Invalid(u, $"{Label(u)} cannot go aboard a ship; only land units can.");
+		if (ShipOf(u) is MapUnit aboard) throw Invalid(u, $"{Label(u)} is already aboard {Label(aboard)}.");
+		if (target != u.location && u.location.DistanceTo(target) != 1)
+			throw new BridgeError("bad_target", $"{At(target)} is not next to {Label(u)} at {At(u.location)}; a unit boards a ship on its own tile or an adjacent one.");
+		if (target != u.location && target.IsLand())
+			throw new BridgeError("bad_target", $"{At(target)} is land; a unit boards from the shore onto a ship on an adjacent water tile, or in port on its own tile"
+				+ (target.HasCity() ? $": goto {target.cityAtTile.name} first, then board there." : "."));
+		MapUnit ship = Ships(target, u).FirstOrDefault();
+		if (ship == null) {
+			bool full = target.unitsOnTile.Any(s => s.owner == u.owner && s.CanTransport());
+			Tile other = BoardTarget(u);
+			throw new BridgeError("no_transport", $"{(full ? "Every ship of yours" : "No ship of yours")} at {At(target)} {(full ? "is full" : "is there to board")}."
+				+ (other != null ? $" One with room is at {At(other)}." : " Build a Galley (Map Making) in a coastal city, or sail one here."),
+				suggest: other != null ? BoardCall(u, other) : null);
+		}
+		if (target == u.location) {
+			Stop(u);
+			u.BoardTransport(ship);
+			DrainUi();
+			return $"{Label(u)} is aboard {Label(ship)} at {At(u.location)} ({Cargo(ship).Count}/{ship.unitType.capacity}); the ship carries it from now on.";
+		}
+		if (!u.movementPoints.canMove)
+			throw new BridgeError("no_moves", $"{Label(u)} has no moves left this turn; board {Label(ship)} next turn.", suggest: "end_turn()");
+		if (Occupant(target) is string who) throw Occupied(u, target, who);
+		Stop(u);
+		await u.Move(u.location.DirectionTo(target), true);
+		DrainUi();
+		if (ShipOf(u) is not MapUnit on) return $"{Label(u)} could not board {Label(ship)} at {At(target)}; it is still at {At(u.location)}.";
+		return $"{Label(u)} went aboard {Label(on)} at {At(on.location)} ({Cargo(on).Count}/{on.unitType.capacity}), which took its moves; the ship carries it from now on.";
+	}
+
+	/// <summary>Puts a ship's passengers ashore (or one passenger) in a city. At sea a passenger leaves by goto or settle to land.</summary>
+	string Unload(MapUnit u) {
+		var off = u.CanTransport() ? Cargo(u) : u.IsLoaded() ? [u] : [];
+		if (off.Count == 0) throw Invalid(u, u.CanTransport() ? $"{Label(u)} carries no one." : $"{Label(u)} is not aboard a ship.");
+		if (!u.location.HasCity())
+			throw Invalid(u, $"Units go ashore with unload only in a city; at sea, order each passenger to goto or settle a land tile next to the ship.");
+		foreach (MapUnit x in off) {
+			orders.Remove(x);
+			if (ShipOf(x) is MapUnit ship) x.UnboardTransport(ship);
+			else x.loadedOnUnitId = null;
+		}
+		DrainUi();
+		return $"{string.Join(", ", off.Select(Label))} went ashore in {u.location.cityAtTile.name} and await{(off.Count == 1 ? "s" : "")} orders.";
+	}
+
+	/// <summary>What happened to a disbanded ship's passengers (patches/0020): lost with it at sea, ashore in a city.</summary>
+	string CargoFate(List<MapUnit> cargo) {
+		if (cargo.Count == 0) return "";
+		var lost = cargo.Where(x => !Alive(x)).ToList();
+		var saved = cargo.Where(Alive).ToList();
+		return (lost.Count > 0 ? $" {string.Join(", ", lost.Select(Label))} aboard {(lost.Count == 1 ? "was" : "were")} lost with it." : "")
+			+ (saved.Count > 0 ? $" {string.Join(", ", saved.Select(Label))} went ashore." : "");
 	}
 
 	// Both check feasibility before Stop(u), so a refused order leaves the unit's orders as they were.
@@ -374,7 +470,8 @@ sealed partial class Session {
 			["origin"] = new JsonObject { ["x"] = origin.XCoordinate, ["y"] = origin.YCoordinate },
 			["sites"] = Json.Array(RankSites(origin, u, top), s => SiteJson(origin, u, s.tile, s.score)),
 			["nearby"] = Json.Array(NearbySites(origin), s => SiteJson(origin, u, s.tile, s.score)),
-			["note"] = "sites ranks known sites on the unit's continent at least 2 tiles from any city, best first; "
+			["note"] = "sites ranks known sites on the unit's continent (for a unit aboard a ship, on the landmasses along the ship's waters) "
+				+ "at least 2 tiles from any city, best first; "
 				+ "nearby lists every legal site within 4 tiles (cities need one empty tile between them)",
 		};
 	}
@@ -393,10 +490,23 @@ sealed partial class Session {
 	/// <summary>The engine AI's settler scoring, minus sites another settler of ours is already heading to.</summary>
 	List<(Tile tile, float score)> RankSites(Tile origin, MapUnit unit, int top) {
 		var taken = orders.Where(kv => kv.Value.Kind == "settle" && kv.Key != unit).Select(kv => kv.Value.Target).ToList();
-		return SettlerLocationAI.GetScoredSettlerCandidates(origin, human)
+		return (origin.IsLand() ? SettlerLocationAI.GetScoredSettlerCandidates(origin, human) : SitesAlongTheShore(origin))
 			.Where(kv => !taken.Any(t => t.DistanceTo(kv.Key) <= 2) && FoundSite(kv.Key) == null)
 			.OrderByDescending(kv => kv.Value).ThenBy(kv => kv.Key.YCoordinate).ThenBy(kv => kv.Key.XCoordinate)
 			.Take(top).Select(kv => (kv.Key, kv.Value)).ToList();
+	}
+
+	/// <summary>
+	/// For a unit aboard a ship: the engine's settler scores of known sites on every landmass that the ship's body of water
+	/// touches (GetScoredSettlerCandidates only takes the start's own landmass), with the engine's spacing of two tiles.
+	/// </summary>
+	Dictionary<Tile, float> SitesAlongTheShore(Tile origin) {
+		var known = human.tileKnowledge.AllKnownTiles().ToList();
+		var landmasses = known.Where(t => t.IsWater() && t.continent == origin.continent)
+			.SelectMany(t => t.neighbors.Values).Where(n => Tile.IsTileValid(n) && n.IsLand()).Select(n => n.continent).ToHashSet();
+		static bool Crowded(Tile t) => t.HasCity() || t.neighbors.Values.Any(n => n.HasCity() || n.neighbors.Values.Any(nn => nn.HasCity()));
+		var candidates = known.Where(t => t.IsLand() && landmasses.Contains(t.continent) && !Crowded(t)).ToList();
+		return (Dictionary<Tile, float>)ScoreTiles.Invoke(null, [origin, human, candidates, HumanUnits().Where(x => x.unitType.isSettler).ToList()]);
 	}
 
 	JsonObject SiteJson(Tile origin, MapUnit u, Tile t, float score) {
@@ -448,7 +558,9 @@ sealed partial class Session {
 
 	BridgeError NoPath(MapUnit u, Tile t) {
 		var sites = u.unitType.isSettler ? RankSites(u.location, u, 5) : [];
-		return new BridgeError("no_path", $"{Label(u)} has no route from {At(u.location)} to {At(t)}.",
+		bool overseas = u.IsLandUnit() && t.IsLand() && u.location.IsLand() && t.continent != u.location.continent;
+		return new BridgeError("no_path", $"{Label(u)} has no route from {At(u.location)} to {At(t)}."
+			+ (overseas ? " That is across the water: board a ship (unit_order order=\"board\"), sail the ship next to it, then goto or settle from the ship." : ""),
 			u.unitType.isSettler ? sites.Select(s => (JsonNode)SiteJson(u.location, u, s.tile, s.score)) : null,
 			sites.Count > 0 ? SettleCall(u, sites[0].tile) : null);
 	}

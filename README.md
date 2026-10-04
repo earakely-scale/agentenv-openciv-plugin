@@ -392,7 +392,7 @@ call to make instead. Full contract: [docs/tools.md](docs/tools.md).
 | `list_units` | One line per unit: position, moves, status, valid orders, whether it can found a city here |
 | `view_map` | ASCII map of explored tiles around a point, a unit or a city, plus notable things with distance and direction |
 | `find_city_sites` | Ranked city sites with travel time and yields, and every legal site nearby |
-| `unit_order` | `settle`, `found_city`, `goto`, `explore`, `auto_work`, `fortify`, worker jobs, `attack` (with the estimated chance to win), `bombard` and `upgrade` (in a city, for gold) |
+| `unit_order` | `settle`, `found_city`, `goto`, `explore`, `auto_work`, `fortify`, worker jobs, `attack` (with the estimated chance to win), `bombard`, `upgrade` (in a city, for gold), and `board` and `unload` to carry land units by ship |
 | `unit_orders` | Orders for many units in one call, by id or by group (`"idle:Worker"`, `"all:Warrior"`) |
 | `city_info` | Growth, production, mood and what each city can build |
 | `set_production` | Choose what a city builds, or many cities (`"all"`, `"pending"`), and a queue to follow after it |
@@ -406,14 +406,14 @@ call to make instead. Full contract: [docs/tools.md](docs/tools.md).
 | `message` | Talk to the other agents' leaders, one or all of them: alliances, threats, deals. They read it in their next reply and brief, and the live view and recordings show it |
 
 **What the game covers.** Agents found and place cities and choose what they build and research; set the science and
-luxury rates and buy production; move, automate, fortify, attack and bombard; change government; and declare war or
-make peace; a city that falls in war is captured (one of size 1 is destroyed); and trade techs and gold with the
-AIs (which judge a trade by their own values) and with each other. The score (10 × cities + 3 × citizens + 1 ×
-tiles + 4 × techs) rewards growth. Any civilization, an agent's or the AI's, wins as in Civ III by conquest (the
-last one left), domination (two thirds of the world's land and of its population) or the top score at the turn
-limit, and the game ends there. The engine still makes some choices
-itself (what a city builds after finishing something, the next tech); those picks are reported and block the turn
-until the agent changes or accepts them. [docs/full-game.md](docs/full-game.md) lists what a full game still lacks.
+luxury rates and buy production; move, automate, fortify, attack and bombard, and carry units by ship; change
+government; and declare war or make peace; a city that falls in war is captured (one of size 1 is destroyed); and
+trade techs and gold with the AIs (which judge a trade by their own values) and with each other. The score (10 ×
+cities + 3 × citizens + 1 × tiles + 4 × techs) rewards growth. Any civilization, an agent's or the AI's, wins as in
+Civ III by conquest (the last one left), domination (two thirds of the world's land and of its population) or the top
+score at the turn limit, and the game ends there. The engine still makes some choices itself (what a city builds after
+finishing something, the next tech); those picks are reported and block the turn until the agent changes or accepts
+them. [docs/full-game.md](docs/full-game.md) lists what a full game still lacks.
 
 ## The player agents
 
@@ -622,8 +622,9 @@ This repository is licensed under the Apache License 2.0 ([LICENSE](LICENSE), [N
   units tell an observer each step they take, the palace moves when the capital falls, a unit disbanded in a city
   adds its shields, a tech got in a trade leaves the research queue without hanging the turn and keeps the
   progress on what else was being researched, buildings multiply a city's science, gold and shields (and Wall Street
-  pays interest), the standalone ruleset keeps the 76 land and sea units the engine can play with their upgrades, and
-  units upgrade in a city for gold.
+  pays interest), the standalone ruleset keeps the 76 land and sea units the engine can play with their upgrades,
+  units upgrade in a city for gold, a ship lost at sea takes its passengers with it, and the AI explores by sea and
+  ferries settlers overseas.
 - The image also contains Blast (Apache-2.0), Serilog (Apache-2.0), MoonSharp (BSD-3-Clause), ini-parser (MIT), the
   .NET runtime (MIT) and a static FFmpeg build (GPL-3.0-or-later); it carries their licences in
   `/opt/civbridge/licenses/`. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

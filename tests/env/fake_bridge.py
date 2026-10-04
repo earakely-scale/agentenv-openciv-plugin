@@ -938,11 +938,12 @@ class Game:
         cities.append({"id": 1000, "x": athens[0], "y": athens[1], "name": "Athens", "owner": 1, "size": 2,
                        "capital": True, "production": "Warrior", "era": 0, "walls": False})
         units = [{"id": int(u["id"][1:]), "x": u["pos"][0], "y": u["pos"][1], "owner": 0, "type": u["type"],
-                  "hp": u["hp"], "hp_max": UNIT_STATS[u["type"]][1], "fortified": u["status"] == "fortified"}
+                  "hp": u["hp"], "hp_max": UNIT_STATS[u["type"]][1], "fortified": u["status"] == "fortified",
+                  "aboard": None}
                  for u in self.units.values()]
         if b := self.barbarian():
             units.append({"id": 1000, "x": b[0], "y": b[1], "owner": len(civs) - 1, "type": "Warrior", "hp": 3,
-                          "hp_max": 3, "fortified": False})
+                          "hp_max": 3, "fortified": False, "aboard": None})
         return {"schema": 2, "turn": self.turn, "turn_limit": self.turn_limit, "seed": self.seed,
                 "map": {"width": WIDTH, "height": HEIGHT, "wrap_x": True},
                 "seats": [{"index": index[c], "civ": c, "label": self.labels.get(c)} for c in self.seats],

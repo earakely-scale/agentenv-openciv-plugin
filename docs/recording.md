@@ -21,7 +21,8 @@ command returns the same snapshot on demand.
   "tiles": [[13, 9, "grassland", "forest", 0, 1, 1, null, ["road"], 0]],
   "cities": [{"id": "city-1", "x": 12, "y": 10, "name": "Rome", "owner": 1, "size": 3, "capital": true, "production": "Warrior",
               "era": 0, "walls": false}],
-  "units": [{"id": "Settler-4", "x": 14, "y": 10, "owner": 1, "type": "Settler", "hp": 1, "hp_max": 1, "fortified": false}],
+  "units": [{"id": "Settler-4", "x": 14, "y": 10, "owner": 1, "type": "Settler", "hp": 1, "hp_max": 1, "fortified": false,
+             "aboard": null}],
   "moves": [{"seq": 57, "unit": "Settler-4", "owner": 1, "type": "Settler", "path": [[12, 10], [13, 11], [14, 10]], "seen": 1}],
   "battles": [{"id": 3, "seq": 58, "turn": 11, "kind": "attack",
                "attacker": {"owner": 1, "type": "Warrior", "x": 14, "y": 12, "hp_before": 3, "hp_after": 3, "hp_max": 3},
@@ -47,7 +48,7 @@ command returns the same snapshot on demand.
   to where this one has it (units carried aboard ships aside). The `world` command has the same as the last
   snapshot, and what happened since.
 - **`players`:** includes the barbarians. `color` is RGB, derived from the civ's primary colour index. `is_human` marks every civ an agent plays (one, or one per seat), and `label` the seat's label from `new_game`. Every player, seat or AI, also has (2) its `gold`, its `government`'s name, the tech it is `research`ing (null if none), the player indices it is `at_war` with and the ones it has met (`contacts`), both ascending and without the barbarians.
-- **`cities`, `units`:** (2) `id` is the engine's own id as a string (`"city-1"`, `"Settler-4"`): unique in the game, kept for the city's or unit's life and through saves. It is not the `c1`/`u1` id a seat's commands use. A city's `production` is the name of what it builds, or null.
+- **`cities`, `units`:** (2) `id` is the engine's own id as a string (`"city-1"`, `"Settler-4"`): unique in the game, kept for the city's or unit's life and through saves. It is not the `c1`/`u1` id a seat's commands use. A city's `production` is the name of what it builds, or null. A unit's `aboard` is the engine id of the ship carrying it, or null.
 - **`events`:** the human player's events from the turn that just ended. In a game with seats, every seat's, each with `"civ"`.
 - **Several agents:** the renderers outline and bold every seat, name each as `civ (label)` in the scoreboard and on the chart, title the frame `Rome (Opus) vs Greece (Sonnet) vs …`, and prefix each action and event with its seat.
 - **Cost:** reading a snapshot never draws from the engine RNG.

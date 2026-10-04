@@ -1,0 +1,89 @@
+The AI explores by sea: it never built a boat. ChooseProducible let a sea unit through only when the unit would get an ExplorerAI (a check that also added a phantom exploration target every time it was scored) and then gave it no value, so a Curragh scored about 7 against an Archer's 19 and was never built; in six 200-turn Continents and Archipelago games no AI built one. A coastal city now builds a ship while the ocean next to it has unknown tiles bordering what its civ knows (ExplorerAI.HasOceanToExplore, which changes nothing), the civ is at peace, and the civ's ships, built or being built, number fewer than min(4, 1 + cities / 6); such a ship gets +15, which the cheap Curragh wins. ExplorerAI also took an unreachable target for a reachable one (no route gives an empty path of length 0, not null) and let a ship pick targets on any water: a boat on a lake accepted explore and never moved. A ship now explores only the body of water it is on, or in port those next to it, and an unreachable target is skipped.
+
+--- a/C7Engine/AI/UnitAI/ExplorerAI.cs
++++ b/C7Engine/AI/UnitAI/ExplorerAI.cs
+@@ -19,7 +19,10 @@
+ 		public static ExplorerAIData? MaybeMakeAiData(MapUnit unit, Player player) {
+ 			HashSet<Tile> borderTiles = player.tileKnowledge.borderTiles;
+ 
+-			IEnumerable<Tile> candidates = borderTiles.Where(x => (x.IsLand() && unit.IsLandUnit()) || (!x.IsLand() && !unit.IsLandUnit()));
++			// A ship explores only the waters it is on (or, in port, those next
++			// to it): a boat on a lake has none of the ocean to explore.
++			HashSet<int> waters = unit.IsLandUnit() ? null : WaterBodies(unit.location);
++			IEnumerable<Tile> candidates = borderTiles.Where(x => (x.IsLand() && unit.IsLandUnit()) || (!x.IsLand() && !unit.IsLandUnit() && waters.Contains(x.continent)));
+ 			ExplorerAIData? result = PickBestTileToExplore(unit, CalculateExplorationScores(player, unit, candidates));
+ 
+ 			if (result == null) {
+@@ -35,6 +38,24 @@
+ 			return result;
+ 		}
+ 
++		/// <summary>The bodies of water a ship at this tile can sail: the one it is on, or in port those next to it.</summary>
++		public static HashSet<int> WaterBodies(Tile tile) {
++			if (tile.IsWater()) {
++				return new HashSet<int> { tile.continent };
++			}
++			return tile.neighbors.Values.Where(n => n != Tile.NONE && n.IsWater()).Select(n => n.continent).ToHashSet();
++		}
++
++		/// <summary>
++		/// Whether some unknown tile borders what the player knows of the ocean
++		/// next to this port (lakes aside), so a ship built there would have
++		/// something to explore. Unlike MaybeMakeAiData it changes nothing.
++		/// </summary>
++		public static bool HasOceanToExplore(Player player, Tile port) {
++			HashSet<int> oceans = port.neighbors.Values.Where(n => n != Tile.NONE && n.IsWater() && !n.isFreshWater).Select(n => n.continent).ToHashSet();
++			return oceans.Count > 0 && player.tileKnowledge.borderTiles.Any(t => t.IsWater() && oceans.Contains(t.continent));
++		}
++
+ 		UnitAI.MoveResult UnitAI.PlayTurnImpl(Player player, MapUnit unit) {
+ 			if (data == null) {
+ 				return UnitAI.Result.Error;
+@@ -139,8 +160,9 @@
+ 				result.destination = p.Key;
+ 				result.pathToDestination = algorithm.PathFrom(unit.location, result.destination, unit);
+ 
+-				// If we can't reach the destination, go to the next candidate.
+-				if ((result.pathToDestination?.PathLength() ?? -1) == -1) {
++				// If we can't reach the destination, go to the next candidate. No
++				// route gives an empty path (length 0), not null.
++				if ((result.pathToDestination?.PathLength() ?? -1) <= 0) {
+ 					continue;
+ 				}
+ 
+--- a/C7Engine/AI/ChooseProducible.cs
++++ b/C7Engine/AI/ChooseProducible.cs
+@@ -89,10 +89,6 @@
+ 
+ 			float score = 0;
+ 
+-			// Create a fake version of this unit so we can check what AI we
+-			// would give it.
+-			MapUnit temp = unit.GetInstance(EngineStorage.gameData.GenerateID(unit.name), unit, player, location: city.location);
+-
+ 			////////////////////////////////////////////////////////////////////
+ 			///
+ 			/// Raw score adjustments based on unit stats.
+@@ -121,11 +117,19 @@
+ 					return int.MinValue;
+ 				}
+ 
+-				// Don't built a naval unit if we wouldn't explore with it. We
+-				// don't yet handle using ships as transports or naval warfare.
+-				if (!(PlayerAI.GetAIForUnit(temp, player) is ExplorerAI)) {
++				// Build a ship to explore the ocean while some of it is unknown,
++				// a few at a time: every sea unit we have or are building counts,
++				// so lost or idle ships are not rebuilt over and over. We don't
++				// yet handle naval warfare.
++				if (atWar || !ExplorerAI.HasOceanToExplore(player, city.location)) {
++					return int.MinValue;
++				}
++				int ships = player.units.Count(u => u.IsWaterUnit())
++					+ player.cities.Count(c => c != city && c.itemBeingProduced is UnitPrototype p && p.categories.Contains("Sea"));
++				if (ships >= Math.Min(PlayerAI.MAX_WATER_EXPLORERS, 1 + player.cities.Count / 6)) {
+ 					return int.MinValue;
+ 				}
++				score += 15;
+ 			}
+ 
+ 			////////////////////////////////////////////////////////////////////

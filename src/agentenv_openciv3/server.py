@@ -86,8 +86,8 @@ class UnitOrderSpec(BaseModel):
     unit: str = Field(description='A unit id ("u7"), or a group: "idle" (every unit waiting for orders), "idle:Worker" '
                                   '(those of a type) or "all:Warrior" (every unit of a type).')
     order: str = Field(description="As unit_order takes it: fortify, auto_work, explore, goto, settle, hold, upgrade, "
-                                   "...")
-    x: int | None = Field(default=None, description="Target x, for goto, settle, attack and bombard.")
+                                   "board, ...")
+    x: int | None = Field(default=None, description="Target x, for goto, settle, attack, bombard and board.")
     y: int | None = Field(default=None, description="Target y.")
 Coord = Annotated[int | None, Field(description="Map coordinate; x+y is always even.")]
 Rate = Annotated[int | None, Field(ge=0, le=10, description="Tenths of commerce, 0-10; omit to keep the current one.")]
@@ -891,8 +891,11 @@ class OpenCiv3Env(AgentEnvEnvironment):
                 "explore, auto_work. Now: found_city (on this tile), fortify (a military unit fortified in a city "
                 "also keeps an unhappy citizen content), wake, hold (skip this turn), disband, build_road, build_mine, "
                 "irrigate, clear_forest, attack (an adjacent enemy unit or city, x,y; only civs you are at war "
-                "with), bombard (x,y in range, for units that can) and upgrade (in one of your cities, for gold, to "
-                "the best unit of its line the city can build; uses its moves)."))],
+                "with), bombard (x,y in range, for units that can), upgrade (in one of your cities, for gold, to "
+                "the best unit of its line the city can build; uses its moves), board (a land unit boards your ship "
+                "on its tile, or on the adjacent water tile x,y; the ship then carries it) and unload (in a city, a "
+                "ship's passengers go ashore). At sea a passenger lands with goto or settle to a land tile next to its "
+                "ship."))],
             x: Coord = None, y: Coord = None):
         """Order one of your units. Standing orders keep working on later turns without further calls, so prefer
         them: settle for settlers, explore for one scout, auto_work for workers; keep a military unit in every city.

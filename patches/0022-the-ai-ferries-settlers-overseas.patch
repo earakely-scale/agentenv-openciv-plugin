@@ -1,0 +1,689 @@
+The AI ferries settlers overseas: no AI unit ever crossed water. Settler sites were limited to the settler's own landmass (SettlerLocationAI, "TODO: handle settling other continents"), so on Archipelago maps good islands stayed empty and AI growth stalled, and nothing loaded units onto ships. Now a settler on a landmass weighs the best known site overseas (on another landmass, outside other civs' borders, with water one of our ports on its landmass touches within two tiles) against the best one at home, and takes it when it scores more than twice as much. It walks to that port and waits there; a free ship of ours on those waters is sent for it, or the port builds the cheapest ship that can carry units. A new FerryAI fetches it, boards it and its escort if that is with it, sails to a landing (a water tile within three tiles of the site, next to its landmass) and waits up to three turns while they step ashore; the settler then walks to its site without waiting for an escort. AI plans are not saved, so a ship found with cargo and no plan finishes the crossing of the overseas settler aboard or takes its cargo to the nearest of our ports it can reach (or, with none, to the nearest shore it can reach) and puts it ashore, and a passenger stays aboard, fortified, until its ship lands it, so nothing re-plans at sea or spins the turn. ChooseProducible counts up to two sites overseas once the home landmass has fewer sites left than the civ has cities, then wants a settler or two for them, and gives a ship that can carry units +40 in a port where a settler waits for one and none is free or being built. A unit the AI told to hold where it stood (DefenderAI in place) kept that plan while it had no moves left, and when it was then carried off its post (an escort that boarded in port and sailed, or a unit of the seat moved by the player's orders before autoplay) it had no path back: TryToMoveAlongPath threw on the null path and ended its player's turn, every turn. It now plans again. A settler of a civ with no city left settled where it stood, which aboard a ship was the water; it now looks for a site ashore like any settler at sea.
+
+--- a/C7Engine/AI/ChooseProducible.cs
++++ b/C7Engine/AI/ChooseProducible.cs
+@@ -16,7 +16,8 @@
+ 			int numberOfReachableOpenCitySpots,
+ 			bool inExpansionPhase,
+ 			bool canAffordAnotherUnit,
+-			bool scienceUnderfunded
++			bool scienceUnderfunded,
++			bool overseas
+ 		);
+ 
+ 		public static IProducible Choose(City city, Player player) {
+@@ -117,6 +118,12 @@
+ 					return int.MinValue;
+ 				}
+ 
++				// A settler waits in this port for a ship, and none is free or
++				// being built.
++				if (FerryAI.IsTransport(unit) && FerryAI.FerryWanted(player, city)) {
++					return score + 40;
++				}
++
+ 				// Build a ship to explore the ocean while some of it is unknown,
+ 				// a few at a time: every sea unit we have or are building counts,
+ 				// so lost or idle ships are not rebuilt over and over. We don't
+@@ -184,6 +191,12 @@
+ 					return int.MinValue;
+ 				}
+ 
++				// Sites are left only overseas: build a settler or two for
++				// ships to carry there.
++				if (stats.overseas && SettlersUnderConstruction(player) + player.units.Count(u => u.unitType.isSettler) < 2) {
++					score += populationCostPenalty + 25;
++				}
++
+ 				// If there are more open spots than we have cities we are still
+ 				// aggressively expanding. Negate the population penalty, and
+ 				// weight settlers more heavily if there are way more open spots.
+@@ -337,6 +350,13 @@
+ 			ProducibleStats stats = new() {
+ 				numberOfReachableOpenCitySpots = NumberOfReachableOpenCitySpots(city),
+ 			};
++			// With the home landmass filling up, count a couple of sites
++			// overseas, if ships can take settlers there.
++			if (stats.numberOfReachableOpenCitySpots < city.owner.cities.Count && FerryAI.CanGetTransport(city.owner)) {
++				int overseas = Math.Min(2, SettlerLocationAI.CountOverseasSites(city.location, city.owner));
++				stats.numberOfReachableOpenCitySpots += overseas;
++				stats.overseas = overseas > 0;
++			}
+ 			stats.inExpansionPhase = city.owner.cities.Count < 5 || stats.numberOfReachableOpenCitySpots > city.owner.cities.Count * 2;
+ 			stats.canAffordAnotherUnit = CanAffordAnotherUnit(city.owner, stats.inExpansionPhase);
+ 			stats.scienceUnderfunded = ScienceIsUnderfunded(city.owner);
+--- a/C7Engine/AI/PlayerAI.cs
++++ b/C7Engine/AI/PlayerAI.cs
+@@ -185,6 +185,14 @@
+ 					continue;
+ 				}
+ 
++				// A passenger stays aboard, fortified, while its ship carries it
++				// (it was woken above or by a re-evaluation): at sea it has
++				// nothing to do, and a plan made there could only fail.
++				if (unit.IsLoaded() && FerryAI.StaysAboard(unit)) {
++					unit.isFortified = true;
++					continue;
++				}
++
+ 				// For each unit, if there's already an AI task assigned, it will attempt to complete its goal.
+ 				// It may fail due to conditions having changed since that goal was assigned; in that case it will
+ 				// get a new task to try to complete.
+@@ -239,6 +247,12 @@
+ 				return new DefenderAI(DefenderAI.MakeAiDataForDefendInPlace(unit, player));
+ 			}
+ 
++			// A ship that can carry units ferries settlers overseas, and puts
++			// ashore any cargo it has without a plan.
++			if (unit.CanTransport() && FerryAI.MaybeMakeAiData(unit, player) is FerryAIData ferryData) {
++				return new FerryAI(ferryData);
++			}
++
+ 			// Special case: we're at war.
+ 			if (IsInAnyWar(player, EngineStorage.gameData.players)) {
+ 				// Priority 1: ensure we don't have any unguarded cities.
+--- a/C7Engine/AI/UnitAI/DefenderAI.cs
++++ b/C7Engine/AI/UnitAI/DefenderAI.cs
+@@ -51,6 +51,11 @@
+ 					log.Information("Fortifying " + unit + " at " + data.destination);
+ 				}
+ 				return C7GameData.UnitAI.Result.Done;
++			} else if (data.pathToDestination == null) {
++				// Told to hold where it stood, then carried off its post (aboard
++				// a ship, or by the player's own orders) before it fortified:
++				// with no path back, plan again.
++				return C7GameData.UnitAI.Result.Error;
+ 			} else {
+ 				log.Debug("Moving defender towards " + data.destination);
+ 				return this.TryToMoveAlongPath(unit, ref data.pathToDestination);
+--- a/C7Engine/AI/UnitAI/SettlerAI.cs
++++ b/C7Engine/AI/UnitAI/SettlerAI.cs
+@@ -1,3 +1,4 @@
++using System.Linq;
+ using C7Engine.Pathing;
+ using C7GameData;
+ using C7GameData.AIData;
+@@ -8,15 +9,44 @@
+ 		private static ILogger log = Log.ForContext<SettlerAI>();
+ 		public SettlerAIData data;
+ 
++		// Turns a settler waits in port for a ship before it looks again.
++		private const int MAX_PORT_WAIT = 30;
++
+ 		public static SettlerAIData MakeAiData(MapUnit unit, Player player) {
+ 			SettlerAIData settlerAiData = new SettlerAIData();
+ 			settlerAiData.goal = SettlerAIData.SettlerGoal.BUILD_CITY;
+ 			//If it's the starting settler, have it settle in place.  Otherwise, use an AI to find a location.
+-			if (player.cities.Count == 0 && unit.location.cityAtTile == null) {
++			// (Not at sea: a civ that lost its last city while its settler was
++			// aboard looks for a site ashore, as below.)
++			if (player.cities.Count == 0 && unit.location.cityAtTile == null && !unit.location.IsWater()) {
+ 				settlerAiData.destination = unit.location;
+ 				log.Information("No cities yet!  Set AI for unit to settler AI with destination of " + settlerAiData.destination);
++			} else if (unit.location.IsWater()) {
++				// Aboard a ship with no plan for us (after a load): a site on
++				// the land next to the ship, or none; then the ship takes us
++				// back to port (FerryAI) and we look again from there.
++				Tile shore = unit.location.neighbors.Values.FirstOrDefault(n => n != Tile.NONE && n.IsLand()) ?? Tile.NONE;
++				settlerAiData.destination = shore == Tile.NONE ? Tile.NONE : SettlerLocationAI.FindSettlerLocation(shore, player);
++				if (settlerAiData.destination != Tile.NONE) {
++					settlerAiData.landed = true;
++					settlerAiData.pathToDestination = PathingAlgorithmChooser.GetAlgorithm(unit).PathFrom(unit.location, settlerAiData.destination, unit);
++				}
+ 			} else {
+-				settlerAiData.destination = SettlerLocationAI.FindSettlerLocation(unit.location, player);
++				settlerAiData.destination = SettlerLocationAI.FindSettlerLocation(unit.location, player, out float homeScore);
++				if (FerryAI.CanGetTransport(player)) {
++					// A site overseas when it is clearly better than what is
++					// left at home (often marginal, or in a rival's borders).
++					(Tile site, Tile port, float overseasScore) = SettlerLocationAI.FindOverseasLocation(unit.location, player);
++					if (site != Tile.NONE && overseasScore > 2 * homeScore) {
++						settlerAiData.destination = site;
++						settlerAiData.overseas = true;
++						settlerAiData.port = port;
++						settlerAiData.pathToDestination = unit.location == port ? TilePath.EmptyPath(port)
++							: PathingAlgorithmChooser.GetAlgorithm(unit).PathFrom(unit.location, port, unit);
++						log.Information($"Set AI for unit {unit.id} of {unit.owner.civilization.name} to sail from {port} and build a city at {site}");
++						return settlerAiData;
++					}
++				}
+ 				if (settlerAiData.destination == Tile.NONE) {
+ 					//This is possible if all tiles within 4 tiles of a city are either not land, or already claimed
+ 					//by another colonist.  Longer-term, the AI shouldn't be building settlers if that is the case,
+@@ -39,6 +69,12 @@
+ 		}
+ 
+ 		public void UpdateOnDeath() {
++			// A ship coming for us or carrying us no longer needs to.
++			if (data.ferry != null && data.ferry.currentAI is FerryAI ferryAi && ferryAi.data.settler?.currentAI == this) {
++				ferryAi.data.settler = null;
++			}
++			data.ferry = null;
++
+ 			// When we're destroyed, clear out our reference to the unit we're
+ 			// being escorted by, and clear our their reference to us.
+ 			if (data.escort != null && data.escort.currentAI is EscortAI escortAi) {
+@@ -50,17 +86,26 @@
+ 		C7GameData.UnitAI.MoveResult UnitAI.PlayTurnImpl(Player player, MapUnit unit) {
+ 			switch (data.goal) {
+ 				case SettlerAIData.SettlerGoal.BUILD_CITY:
++					if (data.destination == Tile.NONE) {
++						// Aboard with nowhere to go: the ship takes us to port.
++						unit.movementPoints.onConsumeAll();
++						return C7GameData.UnitAI.Result.Error;
++					}
+ 					if (IsInvalidCityLocation(data.destination)) {
+ 						log.Information("Seeking new destination for settler " + unit.id + " headed to " + data.destination);
+ 						return C7GameData.UnitAI.Result.Error;
+ 					}
+ 
++					if (data.overseas) {
++						return PlayOverseas(player, unit);
++					}
++
+ 					if (unit.location == data.destination) {
+ 						log.Information("Building city with " + unit);
+ 						//TODO: This should use a message, and the message handler should cause the disbanding to happen.
+ 						CityInteractions.BuildCity(unit.location, player, unit.owner.GetNextCityName());
+ 						unit.RemoveFromPlay();
+-					} else if (data.escort == null) {
++					} else if (data.escort == null && !data.landed) {
+ 						log.Information($"Settler {unit.id} is waiting for an escort");
+ 						unit.movementPoints.onConsumeAll();
+ 						return C7GameData.UnitAI.Result.InProgress;
+@@ -84,7 +129,34 @@
+ 			return C7GameData.UnitAI.Result.Done;
+ 		}
+ 
+-		private static bool IsInvalidCityLocation(Tile tile) {
++		// Every branch moves the settler, spends its moves or ends the plan: a
++		// passenger woken at sea must not spin UnitAI.PlayTurn.
++		private C7GameData.UnitAI.MoveResult PlayOverseas(Player player, MapUnit unit) {
++			if (unit.IsLoaded()) {
++				// The ship carries us.
++				unit.movementPoints.onConsumeAll();
++				return C7GameData.UnitAI.Result.InProgress;
++			}
++			if (unit.location == data.port) {
++				// Wait in port for a ship, have one sent or built; give up after a while.
++				int turn = EngineStorage.gameData.turn;
++				if (data.waitingSince < 0) {
++					data.waitingSince = turn;
++				}
++				if (turn - data.waitingSince > MAX_PORT_WAIT) {
++					log.Information($"Settler {unit.id} gives up waiting for a ship at {data.port}");
++					data.overseas = false;
++					return C7GameData.UnitAI.Result.Error;
++				}
++				FerryAI.Request(player, unit, this);
++				unit.movementPoints.onConsumeAll();
++				return C7GameData.UnitAI.Result.InProgress;
++			}
++			// Walk to the port; at home no escort is needed.
++			return this.TryToMoveAlongPath(unit, ref data.pathToDestination);
++		}
++
++		internal static bool IsInvalidCityLocation(Tile tile) {
+ 			if (tile.cityAtTile != null) {
+ 				return true;
+ 			}
+--- a/C7Engine/AI/UnitAI/SettlerLocationAI.cs
++++ b/C7Engine/AI/UnitAI/SettlerLocationAI.cs
+@@ -9,12 +9,18 @@
+ 
+ 		//Figures out where to plant Settlers
+ 		public static Tile FindSettlerLocation(Tile start, Player player) {
++			return FindSettlerLocation(start, player, out _);
++		}
++
++		// The best site and its score (0 if there is none).
++		public static Tile FindSettlerLocation(Tile start, Player player, out float score) {
+ 			Dictionary<Tile, float> scores = GetScoredSettlerCandidates(start, player);
++			score = 0;
+ 			if (scores.Count == 0 || scores.Values.Max() <= 0) {
+ 				return Tile.NONE;   //nowhere to settle
+ 			}
+ 
+-			Tile result = scores.MaxBy(t => t.Value).Key;
++			(Tile result, score) = scores.MaxBy(t => t.Value);
+ 			return result;
+ 		}
+ 
+@@ -26,6 +32,55 @@
+ 			return scores;
+ 		}
+ 
++		/// <summary>The ocean bodies (lakes aside) within a tile of this one.</summary>
++		public static HashSet<int> OceanBodies(Tile t) {
++			return t.neighbors.Values.Where(n => n != Tile.NONE && n.IsWater() && !n.isFreshWater).Select(n => n.continent).ToHashSet();
++		}
++
++		// Our cities on the start's landmass that have the ocean next to them,
++		// with the bodies of water each can send a ship on.
++		private static List<(Tile port, HashSet<int> oceans)> Ports(Tile start, Player player) {
++			return player.cities.Where(c => c.location.continent == start.continent)
++				.Select(c => (c.location, OceanBodies(c.location))).Where(p => p.Item2.Count > 0).ToList();
++		}
++
++		// Known sites on other landmasses, outside other civs' borders, with
++		// the ocean one of those ports touches within two tiles, so a ship can
++		// land a settler near them.
++		private static IEnumerable<Tile> OverseasCandidates(Tile start, Player player, HashSet<int> oceans) {
++			return player.tileKnowledge.AllKnownTiles().Where(t => t.IsLand() && t.continent != start.continent && t.IsAllowCities()
++				&& !IsInvalidCityLocation(t) && (t.OwningPlayer() == null || t.OwningPlayer() == player)
++				&& t.GetTilesWithinRankDistance(2).Any(w => w != Tile.NONE && w.IsWater() && oceans.Contains(w.continent)));
++		}
++
++		/// <summary>
++		/// The best known site on another landmass that a ship can reach from one
++		/// of our ports on the start's landmass, the port nearest it and its
++		/// score; (NONE, NONE, 0) if there is none.
++		/// </summary>
++		public static (Tile site, Tile port, float score) FindOverseasLocation(Tile start, Player player) {
++			List<(Tile port, HashSet<int> oceans)> ports = Ports(start, player);
++			if (ports.Count == 0) {
++				return (Tile.NONE, Tile.NONE, 0);
++			}
++			HashSet<int> oceans = ports.SelectMany(p => p.oceans).ToHashSet();
++			Dictionary<Tile, float> scores = AssignTileScores(start, player, OverseasCandidates(start, player, oceans),
++				player.units.FindAll(u => u.unitType.name == "Settler"));
++			if (scores.Count == 0 || scores.Values.Max() <= 0) {
++				return (Tile.NONE, Tile.NONE, 0);
++			}
++			(Tile site, float score) = scores.MaxBy(t => t.Value);
++			HashSet<int> near = site.GetTilesWithinRankDistance(2).Where(w => w != Tile.NONE && w.IsWater()).Select(w => w.continent).ToHashSet();
++			Tile port = ports.Where(p => p.oceans.Overlaps(near)).MinBy(p => p.port.DistanceTo(site)).port;
++			return (site, port, score);
++		}
++
++		/// <summary>How many known sites overseas our ships could take a settler to from the start's landmass.</summary>
++		public static int CountOverseasSites(Tile start, Player player) {
++			HashSet<int> oceans = Ports(start, player).SelectMany(p => p.oceans).ToHashSet();
++			return oceans.Count == 0 ? 0 : OverseasCandidates(start, player, oceans).Count();
++		}
++
+ 		private static Dictionary<Tile, float> AssignTileScores(Tile startTile, Player player, IEnumerable<Tile> candidates, List<MapUnit> playerSettlers) {
+ 			Dictionary<Tile, float> scores = new();
+ 			var memo = new Dictionary<string, float>();
+--- a/C7Engine/C7GameData/AIData/SettlerAIData.cs
++++ b/C7Engine/C7GameData/AIData/SettlerAIData.cs
+@@ -25,8 +25,19 @@
+ 		public TilePath pathToDestination;
+ 		public MapUnit escort;
+ 
++		// A site overseas: the settler walks to `port`, a ship (FerryAI,
++		// `ferry` once one has the job) carries it and its escort to a
++		// landing next to `destination`, and once put ashore (`landed`) it
++		// walks there without waiting for an escort. `waitingSince` is the
++		// turn it began to wait in port.
++		public bool overseas;
++		public Tile port = Tile.NONE;
++		public MapUnit ferry;
++		public bool landed;
++		public int waitingSince = -1;
++
+ 		public override string ToString() {
+-			return goal + " at " + destination;
++			return goal + " at " + destination + (overseas ? " overseas from " + port : "");
+ 		}
+ 	}
+ }
+--- /dev/null
++++ b/C7Engine/AI/UnitAI/FerryAI.cs
+@@ -0,0 +1,332 @@
++using System.Collections.Generic;
++using System.Linq;
++using C7Engine.Pathing;
++using C7GameData;
++using C7GameData.AIData;
++using Serilog;
++
++namespace C7Engine {
++	/// <summary>
++	/// A ship that carries units: it fetches a settler waiting in port for a
++	/// ship (SettlerAI, overseas) with its escort, sails to a landing next to
++	/// the settler's site and waits there while they step ashore. A ship found
++	/// with cargo and no plan (after a load, or a plan that failed) finishes
++	/// the crossing of the overseas settler aboard, or else takes its cargo to
++	/// the nearest of our ports and puts it ashore.
++	/// </summary>
++	public class FerryAI : UnitAI {
++		private static ILogger log = Log.ForContext<FerryAI>();
++		public FerryAIData data;
++
++		// Turns a ship waits at a landing for its cargo to step ashore, before
++		// it takes whoever is left back to port.
++		private const int UNLOAD_TURNS = 3;
++
++		public FerryAI(FerryAIData d) {
++			data = d;
++		}
++
++		/// <summary>Whether ships could carry a settler for this player: it has one that can, or can build one, and has a port on the ocean.</summary>
++		public static bool CanGetTransport(Player player) {
++			bool ship = player.units.Any(u => u.CanTransport())
++				|| EngineStorage.gameData.unitPrototypes.Any(t => IsTransport(t) && t.producibleBy.Contains(player.civilization) && player.HasRequiredTechnology(t));
++			return ship && player.cities.Any(c => c.location.NeighborsOcean());
++		}
++
++		public static bool IsTransport(UnitPrototype t) {
++			return t.IsSeaUnit() && t.capacity > 0 && t.actions.Contains(UnitAction.Unload);
++		}
++
++		public static List<MapUnit> Cargo(MapUnit ship) {
++			return ship.location.unitsOnTile.Where(u => u != ship && u.IsLoadedIn(ship)).ToList();
++		}
++
++		/// <summary>
++		/// Whether a passenger stays aboard, fortified, this turn: until its ship
++		/// is at a landing putting its cargo ashore, or in one of our cities. At
++		/// sea a passenger has nothing to do, and re-planning there could only fail.
++		/// </summary>
++		public static bool StaysAboard(MapUnit passenger) {
++			MapUnit ship = passenger.location.unitsOnTile.FirstOrDefault(u => passenger.IsLoadedIn(u));
++			if (ship == null || passenger.location.HasCity()) {
++				return false;
++			}
++			return !(ship.currentAI is FerryAI ferry && ferry.data.unloadingSince >= 0 && ship.location == ferry.data.landing);
++		}
++
++		// Overseas settlers that wait for a ship: none has the job, or the one
++		// that had it was lost or has another plan.
++		private static IEnumerable<(MapUnit settler, SettlerAI ai)> Waiting(Player player) {
++			foreach (MapUnit u in player.units) {
++				if (u.currentAI is SettlerAI s && s.data.overseas && !u.IsLoaded() && !HasFerry(s)) {
++					yield return (u, s);
++				}
++			}
++		}
++
++		private static bool HasFerry(SettlerAI s) {
++			return s.data.ferry != null && s.data.ferry.hitPointsRemaining > 0 && s.data.ferry.currentAI is FerryAI f && f.data.settler?.currentAI == s;
++		}
++
++		private static bool Idle(MapUnit ship) {
++			return ship.CanTransport() && Cargo(ship).Count == 0 && !(ship.currentAI is FerryAI f && (f.data.settler != null || f.data.sailing));
++		}
++
++		/// <summary>
++		/// For a settler waiting in port: sends it a free ship, or has the port
++		/// build one when none is free or being built.
++		/// </summary>
++		public static void Request(Player player, MapUnit settler, SettlerAI ai) {
++			if (HasFerry(ai) || Summon(player, settler, ai)) {
++				return;
++			}
++			City port = ai.data.port.cityAtTile;
++			if (port == null || port.owner != player || !FerryWanted(player, port)) {
++				return;
++			}
++			UnitPrototype ship = port.ListProductionOptions(EngineStorage.gameData).OfType<UnitPrototype>().Where(IsTransport)
++				.MinBy(t => port.TurnsToProduce(t));
++			if (ship != null) {
++				log.Information($"{port.name} builds a {ship.name} to ferry {settler} (it was building {port.itemBeingProduced?.name})");
++				port.SetItemBeingProduced(ship);
++			}
++		}
++
++		/// <summary>
++		/// Gives the job of carrying a settler waiting at its port to one of our
++		/// empty ships on the waters of that port, if one is free; returns
++		/// whether one was.
++		/// </summary>
++		private static bool Summon(Player player, MapUnit settler, SettlerAI ai) {
++			HashSet<int> oceans = SettlerLocationAI.OceanBodies(ai.data.port);
++			MapUnit ship = player.units.Where(u => Idle(u) && ExplorerAI.WaterBodies(u.location).Overlaps(oceans))
++				.OrderBy(u => u.location.DistanceTo(ai.data.port)).FirstOrDefault();
++			if (ship == null) {
++				return false;
++			}
++			ai.data.ferry = ship;
++			ship.Wake();
++			ship.currentAI = new FerryAI(new FerryAIData { settler = settler, port = ai.data.port });
++			log.Information($"{ship} will ferry {settler} from {ai.data.port} to {ai.data.destination}");
++			return true;
++		}
++
++		/// <summary>Whether this port should build a ship: a settler waits there and no ship is free or being built for it.</summary>
++		public static bool FerryWanted(Player player, City city) {
++			return Waiting(player).Any(w => w.ai.data.port == city.location)
++				&& !player.units.Any(Idle)
++				&& !player.cities.Any(c => c.itemBeingProduced is UnitPrototype p && IsTransport(p));
++		}
++
++		public static FerryAIData MaybeMakeAiData(MapUnit ship, Player player) {
++			List<MapUnit> cargo = Cargo(ship);
++			if (cargo.Count > 0) {
++				// Finish the crossing of the overseas settler aboard.
++				foreach (MapUnit u in cargo) {
++					if (u.currentAI is SettlerAI s && s.data.overseas && !SettlerAI.IsInvalidCityLocation(s.data.destination)) {
++						Tile landing = Landing(s.data.destination, ship);
++						if (landing != Tile.NONE) {
++							s.data.ferry = ship;
++							return new FerryAIData { settler = u, port = s.data.port, landing = landing, sailing = true };
++						}
++					}
++				}
++				return Ashore(ship, player);
++			}
++
++			// Fetch a settler waiting at a port on our waters.
++			HashSet<int> waters = ExplorerAI.WaterBodies(ship.location);
++			foreach ((MapUnit settler, SettlerAI s) in Waiting(player)) {
++				if (SettlerLocationAI.OceanBodies(s.data.port).Overlaps(waters)) {
++					s.data.ferry = ship;
++					log.Information($"{ship} will ferry {settler} from {s.data.port} to {s.data.destination}");
++					return new FerryAIData { settler = settler, port = s.data.port };
++				}
++			}
++			return null;
++		}
++
++		// A plan to put the cargo ashore: in the nearest of our ports the ship
++		// can reach, or else on the nearest shore it can reach.
++		private static FerryAIData Ashore(MapUnit ship, Player player) {
++			PathingAlgorithm algorithm = PathingAlgorithmChooser.GetAlgorithm(ship);
++			HashSet<int> waters = ExplorerAI.WaterBodies(ship.location);
++			if (ship.location.HasCity()) {
++				return new FerryAIData { port = ship.location };
++			}
++			foreach (City c in player.cities.Where(c => ExplorerAI.WaterBodies(c.location).Overlaps(waters)).OrderBy(c => c.location.DistanceTo(ship.location)).Take(3)) {
++				TilePath path = algorithm.PathFrom(ship.location, c.location, ship);
++				if (path.PathLength() > 0) {
++					return new FerryAIData { port = c.location, path = path };
++				}
++			}
++			Tile shore = NearestShore(ship, player);
++			return shore == Tile.NONE ? null : new FerryAIData { landing = shore, sailing = true };
++		}
++
++		// The nearest water tile on the ship's waters, its own tile first, next
++		// to land the cargo can step onto (no city, no foreign unit), that the
++		// ship can reach. With no port left on its waters (all lost, or the
++		// civ has none) this is where the cargo goes ashore.
++		private static Tile NearestShore(MapUnit ship, Player player) {
++			PathingAlgorithm algorithm = PathingAlgorithmChooser.GetAlgorithm(ship);
++			HashSet<Tile> seen = new() { ship.location };
++			Queue<Tile> frontier = new(seen);
++			int tried = 0;
++			while (frontier.Count > 0 && tried < 4) {
++				Tile t = frontier.Dequeue();
++				if (t.unitsOnTile.All(u => u.owner == player)
++					&& t.neighbors.Values.Any(n => n != Tile.NONE && n.IsLand() && !n.HasCity() && n.unitsOnTile.All(u => u.owner == player))) {
++					if (t == ship.location || algorithm.PathFrom(ship.location, t, ship).PathLength() > 0) {
++						return t;
++					}
++					++tried;
++				}
++				foreach (Tile n in t.neighbors.Values) {
++					if (n != Tile.NONE && n.IsWater() && seen.Add(n)) {
++						frontier.Enqueue(n);
++					}
++				}
++			}
++			return Tile.NONE;
++		}
++
++		/// <summary>
++		/// Where a ship puts a settler ashore for a site: a water tile on its
++		/// waters within three tiles of the site, next to the site's landmass,
++		/// with no foreign unit on it, the nearest the site it can reach.
++		/// </summary>
++		public static Tile Landing(Tile site, MapUnit ship) {
++			HashSet<int> waters = ExplorerAI.WaterBodies(ship.location);
++			PathingAlgorithm algorithm = PathingAlgorithmChooser.GetAlgorithm(ship);
++			IEnumerable<Tile> landings = site.GetTilesWithinRankDistance(3)
++				.Where(t => t != Tile.NONE && t.IsWater() && waters.Contains(t.continent) && t.unitsOnTile.All(u => u.owner == ship.owner)
++					&& t.neighbors.Values.Any(n => n != Tile.NONE && n.IsLand() && n.continent == site.continent))
++				.OrderBy(t => t.DistanceTo(site));
++			foreach (Tile t in landings.Take(4)) {
++				if (t == ship.location || algorithm.PathFrom(ship.location, t, ship).PathLength() > 0) {
++					return t;
++				}
++			}
++			return Tile.NONE;
++		}
++
++		public void UpdateOnDeath() {
++			if (data.settler?.currentAI is SettlerAI s && s.data.ferry != null && s.data.ferry.currentAI == this) {
++				s.data.ferry = null;
++			}
++		}
++
++		public string SummarizePlan() {
++			return "FerryAI: " + data;
++		}
++
++		// The settler's plan still needs this ship.
++		private bool SettlerNeedsUs() {
++			return data.settler != null && data.settler.hitPointsRemaining > 0 && data.settler.currentAI is SettlerAI s
++				&& (s.data.overseas || (s.data.landed && data.settler.IsLoaded()));
++		}
++
++		// Moves along the path to `to`, finding one first; Error if there is no route.
++		private UnitAI.MoveResult SailTo(MapUnit ship, Tile to) {
++			if (data.path == null || data.path.destination != to || data.path.PathLength() <= 0) {
++				data.path = PathingAlgorithmChooser.GetAlgorithm(ship).PathFrom(ship.location, to, ship);
++				if (data.path.PathLength() <= 0) {
++					log.Information($"{ship} has no route from {ship.location} to {to}");
++					return UnitAI.Result.Error;
++				}
++			}
++			return this.TryToMoveAlongPath(ship, ref data.path);
++		}
++
++		// Every branch moves the ship, spends its moves or ends the plan, so
++		// UnitAI.PlayTurn never spins.
++		UnitAI.MoveResult UnitAI.PlayTurnImpl(Player player, MapUnit ship) {
++			List<MapUnit> cargo = Cargo(ship);
++			if (data.unloadingSince >= 0) {
++				// At the landing: wait while the cargo steps ashore, a few turns at most.
++				if (cargo.Count == 0) {
++					return UnitAI.Result.Done;
++				}
++				if (EngineStorage.gameData.turn - data.unloadingSince >= UNLOAD_TURNS) {
++					log.Information($"{ship} gives up landing {cargo.Count} units at {ship.location}");
++					if (data.settler?.currentAI is SettlerAI s && data.settler.IsLoaded()) {
++						s.data.landed = false;
++					}
++					return UnitAI.Result.Error;
++				}
++				ship.movementPoints.onConsumeAll();
++				return UnitAI.Result.InProgress;
++			}
++			if (data.settler == null && cargo.Count == 0) {
++				return UnitAI.Result.Done;
++			}
++			if (data.settler != null && !SettlerNeedsUs()) {
++				// The settler was lost or has another plan: put whoever is aboard ashore.
++				if (cargo.Count == 0) {
++					return UnitAI.Result.Error;
++				}
++				FerryAIData ashore = Ashore(ship, player);
++				if (ashore == null) {
++					return UnitAI.Result.Error;
++				}
++				data = ashore;
++			}
++			SettlerAI settlerAi = data.settler?.currentAI as SettlerAI;
++
++			if (!data.sailing) {
++				if (ship.location != data.port) {
++					return SailTo(ship, data.port);
++				}
++				if (data.settler == null) {
++					// Home with no plan: everyone goes ashore in port.
++					foreach (MapUnit u in cargo) {
++						u.UnboardTransport(ship);
++					}
++					return UnitAI.Result.Done;
++				}
++				if (data.settler.location != data.port || !settlerAi.data.overseas) {
++					// Wait in port for the settler.
++					ship.movementPoints.onConsumeAll();
++					return UnitAI.Result.InProgress;
++				}
++				foreach (MapUnit u in new[] { data.settler, settlerAi.data.escort }) {
++					if (u != null && u.hitPointsRemaining > 0 && u.location == ship.location && !u.IsLoaded() && ship.FreeCapacity() > 0) {
++						u.BoardTransport(ship);
++					}
++				}
++				data.landing = Landing(settlerAi.data.destination, ship);
++				if (data.landing == Tile.NONE) {
++					log.Information($"{ship} finds no landing for {settlerAi.data.destination}");
++					foreach (MapUnit u in Cargo(ship)) {
++						u.UnboardTransport(ship);
++					}
++					settlerAi.data.overseas = false;
++					return UnitAI.Result.Error;
++				}
++				data.sailing = true;
++				data.path = null;
++				log.Information($"{ship} sails from {ship.location} with {Cargo(ship).Count} units for {data.landing}");
++			}
++
++			if (ship.location != data.landing) {
++				return SailTo(ship, data.landing);
++			}
++
++			// Arrived: wake the cargo, which steps ashore on its own turns; the
++			// settler walks to its site without waiting for an escort.
++			foreach (MapUnit u in Cargo(ship)) {
++				u.Wake();
++			}
++			if (settlerAi != null) {
++				settlerAi.data.overseas = false;
++				settlerAi.data.landed = true;
++				settlerAi.data.ferry = null;
++				settlerAi.data.pathToDestination = PathingAlgorithmChooser.GetAlgorithm(data.settler).PathFrom(ship.location, settlerAi.data.destination, data.settler);
++			}
++			data.unloadingSince = EngineStorage.gameData.turn;
++			ship.movementPoints.onConsumeAll();
++			return UnitAI.Result.InProgress;
++		}
++	}
++}
+--- /dev/null
++++ b/C7Engine/C7GameData/AIData/FerryAIData.cs
+@@ -0,0 +1,21 @@
++namespace C7GameData.AIData {
++	public class FerryAIData : UnitAIData {
++		// The overseas settler the ship carries, or null to put whoever is
++		// aboard ashore at `port` or, failing a port, at `landing`.
++		public MapUnit settler;
++		public Tile port = Tile.NONE;
++		// The water tile next to the land where the cargo goes ashore.
++		public Tile landing = Tile.NONE;
++		public TilePath path;
++		// The cargo is aboard and the ship heads for `landing`.
++		public bool sailing;
++		// The ship is at `landing` and waits for its cargo to step ashore,
++		// since this turn.
++		public int unloadingSince = -1;
++
++		public override string ToString() {
++			string cargo = settler == null ? "cargo" : "settler " + settler.id;
++			return unloadingSince >= 0 ? $"putting {cargo} ashore at {landing}" : sailing ? $"carrying {cargo} to {landing}" : $"fetching {cargo} at {port}";
++		}
++	}
++}

@@ -111,8 +111,10 @@ The human player's full situation. Result:
 }
 ```
 
-- `status` is one of `idle`, `fortified`, `exploring`, `auto_work`, `goto`, `settle`,
-  `working:<job>` (e.g. `working:build_road`), `done` (no moves left this turn).
+- `status` is one of `idle`, `fortified`, `aboard` (carried by a ship, see `board`), `exploring`, `auto_work`,
+  `goto`, `settle`, `working:<job>` (e.g. `working:build_road`), `done` (no moves left this turn).
+- A unit aboard a ship has `aboard`, the ship's id. A ship that can carry units has `capacity` (Galley 2,
+  Caravel 3, Galleon 4) and `cargo`, the ids of the units aboard. Neither key is there otherwise.
 - `target` is `{"x", "y", "dist", "dir"}` for `goto`/`settle`, else null.
 - `orders` lists the orders `unit_order` would accept for this unit right now. A unit with moves next to an
   enemy also has `attack_targets` (see `unit_order`).
@@ -128,7 +130,8 @@ The human player's full situation. Result:
   `revolution_target` is the one a revolution under way ends in. `rivals[].peace_price` is the gold that civ asks for peace while at war (null at peace, or
   while it refuses to talk). `rivals[].trade_offered` is the trade that civ offers the seat while it stands and can
   still be made (as in `diplomacy`), else null.
-- `needs_orders` is true when the unit can move, is not under a standing order, and is not fortified.
+- `needs_orders` is true when the unit can move, is not under a standing order, is not fortified and is not aboard
+  a ship.
 - `blockers` lists what stops `end_turn`: `no_research` (has a city, nothing being researched),
   `no_production` (a city producing nothing), `idle_unit` (one per unit with `needs_orders`). A `disorder` blocker
   (a city in civil disorder, or that riots when the turn ends) also has `now` (in disorder already), `unhappy` and
@@ -184,8 +187,8 @@ explored are returned. Result:
 ```
 
 `overlay` is the overlay terrain (e.g. `Forest`, `Hills`, `Jungle`) or null. `units` lists only
-units on visible tiles; `id` is present for the player's own units. `resource` is null unless the
-player knows about it.
+units on visible tiles; `id` is present for the player's own units, and `aboard` (the ship's id) for those of them
+aboard a ship. `resource` is null unless the player knows about it.
 
 ### `known_map`
 Args: none. Everything the seat knows of the world, for drawing it (the play page polls it after every action, so
@@ -298,7 +301,8 @@ Args: `unit` (a Settler id; default: the first settler, else the capital), `top`
 Result: `{"origin": {"x", "y"}, "sites": [{"x", "y", "score", "dist", "dir", "turns", "terrain",
 "river", "coastal", "yield": {"food", "shields", "commerce"}}], "note": "only sites on the unit's
 continent are scored"}`. `turns` is the estimated travel time for the unit (null without a unit);
-`yield` sums the 3x3 area around the site.
+`yield` sums the 3x3 area around the site. For a unit aboard a ship, `sites` ranks the sites on every landmass
+along the ship's body of water instead.
 
 ### `unit_order`
 Args: `unit` (id), `order`, and `x`, `y` where the order needs a target.
@@ -318,6 +322,13 @@ Args: `unit` (id), `order`, and `x`, `y` where the order needs a target.
 | `attack` | x, y | Attack the adjacent tile: the top defender of a civ at war with you (barbarians always are), or move into an undefended enemy city, which is captured: it loses a citizen, its palace, small wonders and what it was building, and one of size 1 is destroyed (patch 0011). |
 | `bombard` | x, y | Bombard a tile in range (`bombard` units): an enemy unit, city or improvement, at war. |
 | `upgrade` | — | In one of your cities: the unit becomes the furthest unit along its civ's upgrade chain that the city can build now (tech known, a coastal city for ships, strategic resources connected), for `max(1, shield difference) × 3` gold (patch 0019). It keeps its id, experience, hit points and fortification, has no moves left this turn, and any other standing order (goto, explore) ends. Refused (`invalid_order`, with the reason) outside your cities, when nothing in its line can be built there (naming the next unit and what it needs), with no moves left, or without the gold. |
+| `board` | x, y optional | A land unit goes aboard one of your ships with room: on its own tile (in port; free), or on the adjacent water tile (x,y), which it steps onto at the cost of its moves. The ship then carries it, and it is `aboard`. |
+| `unload` | — | In a city only: a ship's passengers go ashore (or, ordered to a passenger, that one). At sea a passenger lands with `goto` or `settle` to a land tile next to its ship, which takes its moves. |
+
+Ships: a Galley (Map Making) carries 2 land units, a Caravel 3, a Galleon 4; a Curragh carries none. `goto` sails
+a ship (it may enter your own cities), and its passengers go with it. A ship lost at sea, sunk or disbanded, takes
+its passengers with it (patch 0020); in a city they go ashore. `disband`'s message names them. The engine has no
+coast-only rule for the Galley: it sails the open ocean safely.
 
 `attack_targets` on a unit: `[{"x", "y", "dir", "owner", "defender": "Spearman 3/3 hp"|null, "city": name|null,
 "win_chance": 0.62}]`. The chance comes from the engine's own strengths: each combat round the attacker wins
@@ -333,8 +344,11 @@ An `upgrade` reports `"u5 Archer is now a Longbowman (60 gold; 40 left). It has 
 
 Error codes: `unknown_unit`, `invalid_order` (alternatives = the unit's valid orders),
 `cannot_found` (alternatives = top city sites; suggest = a `settle` call), `bad_target` (off map,
-`x+y` odd, or not explored; for `attack` and `bombard`, alternatives = the unit's targets), `no_path`, `no_moves`,
-`at_peace` (attacking a civ you are at peace with; suggest = declare war), `game_over`.
+`x+y` odd, or not explored; for `attack` and `bombard`, alternatives = the unit's targets; for `board`, a tile
+not next to the unit or land; a land unit's `goto` to a water tile with your ship on it suggests `board`), `no_path`
+(a land unit's route across water says to board a ship), `no_moves`, `no_transport` (`board`: no ship of yours with
+room there; suggest = boarding one nearby, if any), `at_peace` (attacking a civ you are at peace with; suggest =
+declare war), `game_over`.
 
 Standing orders are carried out at the start of each human turn (multi-turn `goto`/`settle`, explore,
 auto_work, worker jobs). When one cannot make progress, `end_turn` reports an event (e.g.
@@ -680,6 +694,29 @@ submodule itself stays untouched):
    unit is obsolete in a city exactly when it could upgrade there: `UnitPrototype.IsUnitObsolete` follows the civ's
    own chain, without the "siblings" that made the Archer obsolete at Feudalism (through the Medieval Infantry)
    before it could upgrade at Invention. The bridge's `upgrade` order and the units' `upgrade` field use it.
+20. `0020-cargo-goes-down-with-its-ship.patch`: `GameData.RemoveUnit` left a lost ship's passengers on the water,
+   still aboard a ship that no longer existed. A ship lost at sea (sunk, disbanded, or disbanded by patch 0007's
+   broke AI) now takes its passengers with it, as in Civ III; one lost in a city puts them ashore, awake. As one
+   removal can now take several units, a destroyed civ's units are removed from a copy of its list (by index, the
+   engine threw once a passenger listed before its ship had gone with it, and a captured last city stayed on its
+   tile), a broke human seat stops disbanding when it has no units left, and the broke AI spares a loaded ship at sea
+   as it spares settlers and workers.
+21. `0021-the-ai-explores-by-sea.patch`: the AI builds a few ships to explore the ocean. A coastal city builds one
+   while unknown tiles border what its civ knows of the ocean next to it (`ExplorerAI.HasOceanToExplore`, which,
+   unlike the check it replaces, changes nothing), the civ is at peace and its ships, built or being built, number
+   fewer than min(4, 1 + cities / 6); the ship gets +15, which the cheap Curragh wins. `ExplorerAI` skips
+   unreachable targets (no route is an empty path, length 0, not null) and a ship explores only its own body of
+   water, so a boat on a lake refuses `explore`.
+22. `0022-the-ai-ferries-settlers-overseas.patch`: the AI settles other landmasses. A settler weighs the best known site
+   overseas (reachable by sea from one of its civ's ports on its landmass, outside other civs' borders) against the best
+   one at home and takes it when it scores more than twice as much; it waits in that port, a free ship is sent or the
+   port builds one, and a new `FerryAI` carries it and its escort to a landing next to the site. A ship found with cargo
+   and no plan (after a load) finishes the crossing or puts its cargo ashore in port (with no port it can reach, on the
+   nearest shore it can reach), and passengers stay aboard, fortified, until landed (a settler of a civ with no city
+   left founds its city ashore, not where it stood on the water). A unit told to hold where it stood that is carried off
+   its post before it fortifies (an escort whose ship sails, or a seat unit moved by `goto` before `autoplay`) plans
+   again; it used to throw on its missing path and end its player's turn. Wars across water, amphibious attack and naval
+   combat are not done (`docs/full-game.md`).
 
 Measured over full 540-turn Standard games with 7 AIs at Regent (seeds 1-3), patches 0005-0009 take:
 - mean AI techs at T540 from 32 to 43-45, and civs with an Industrial-era tech from 0 to 3-7;

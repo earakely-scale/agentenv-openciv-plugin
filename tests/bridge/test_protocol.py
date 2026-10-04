@@ -885,15 +885,16 @@ def test_cities_change_hands(launch, tmp_path):
     b.call("new_game", seed=CAPTURE_SEED, opponents=5, barbarians="Raging", turn_limit=400)
     prev = b.call("world")
     taken = []
-    for _ in range(240):
+    for _ in range(390):
         b.call("autoplay", turns=1, policy="engine_ai")
         world, state = b.call("world"), b.call("state")
         check_cities_and_borders(world)
         me = next(p["index"] for p in world["players"] if p["is_human"])
-        before = {c["name"]: c for c in prev["cities"]}
+        # By id: two civs can found cities of the same name.
+        before = {c["id"]: c for c in prev["cities"]}
         kinds = {e["kind"] for e in state["last_events"]}
         for c in world["cities"]:
-            was = before.get(c["name"])
+            was = before.get(c["id"])
             if was is None or was["owner"] == c["owner"]:
                 continue
             taken.append((world["turn"], c["name"], was["owner"], c["owner"]))
