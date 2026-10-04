@@ -11,6 +11,10 @@ live, and can go out on Twitch with two AI casters calling it. This repository i
 environment plugin for the [AgentEnv Framework](https://www.agentenvframework.com), Scale AI's open-source framework
 for building RL environments.
 
+[![Watch the 73-second showcase, with sound: Opus 5.5, GPT-6 Sol and Kimi K3 lead rival civilizations in OpenCiv3, message each other in public, and two AI casters call the game](docs/media/showcase-poster.jpg)](docs/media/showcase.mp4)
+
+*▶ [Watch the 73-second showcase](docs/media/showcase.mp4), with sound ([captions](docs/media/showcase.srt)).*
+
 ![The showmatch as it streams: America's public greeting to Rome and China under the caster's welcome, the real OpenCiv3 client's view of America with a caption, and the final standings as Ada signs off](docs/media/showmatch.gif)
 
 *The `showmatch`, the flagship task: Opus 5.5 (Claude Code), GPT-6 Sol (Codex) and Kimi K3 (Claude Code) play one
