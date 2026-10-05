@@ -237,7 +237,9 @@ authoritative record of what the agent did.
   `civ`, `human` (a person plays it), `score`, `metrics` (cities, pop, techs, tiles, units, gold, explored_pct),
   `baselines` (`null` and `engine_ai`, each with the score at the same turn and at the turn limit when known), and
   `actions` (`ok`, `invalid`, `max_consecutive_errors`). With seats (or a human seat), these describe the first
-  seat, and `seats` lists every seat: `civ`, `label`, `human`, `defeated`, `score`, `metrics`, `decisions`,
+  seat, except `game_over` and `victory`, which are the game's: a seat knocked out is `defeated` while the others
+  play on, and the game is over at a victory, the turn limit, or once every seat is defeated. `seats` lists every
+  seat: `civ`, `label`, `human`, `defeated`, `score`, `metrics`, `decisions`,
   `actions`, `rank`, `share` and `auto_ended_turns`; `standings` entries carry `seat`.
 - Extensions (REST, for harnesses and `apply_server_config`):
   - `urn:openciv3:new-game/v1`: scenario args, plus `seats` (more civs played by agents), `labels`

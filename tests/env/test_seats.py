@@ -105,6 +105,25 @@ async def test_the_last_agent_standing_wins_and_the_game_ends(env_vars, monkeypa
         await env.close()
 
 
+async def test_a_seat_knocked_out_is_not_the_end_of_the_game(seats):
+    """A defeated seat's own state says game over, since the game is over for it, while the others play on: the
+    live view, the play page's status and data/get keep the game going until a victory or the turn limit."""
+    env, tools = seats
+    await tools["Egypt"]("unit_order", unit="u2", order="disband")
+    await tools["Egypt"]("unit_order", unit="u1", order="disband")
+    await settle({civ: tools[civ] for civ in ("Rome", "Greece")})
+    texts = await asyncio.gather(*(tools[civ]("end_turn", skip_idle=True) for civ in ("Rome", "Greece")))
+    assert all(text.startswith("TURN T0 → T1") for text in texts)
+    [part] = await env.data_get()
+    assert [s["defeated"] for s in part.data["seats"]] == [False, False, True]
+    assert env.seats[2].last_state["game_over"]   # over for Egypt
+    assert not part.data["game_over"] and part.data["victory"] is None
+    live = env._live_now()
+    assert (live["game_over"], live["victory"], live["turn"]) == (False, None, 1)
+    assert env._game_over() == (False, None)
+    assert (await tools["Rome"]("get_turn_brief")).startswith("T1/10")
+
+
 async def test_end_turn_waits_for_every_seat(seats):
     env, tools = seats
     await settle(tools)
