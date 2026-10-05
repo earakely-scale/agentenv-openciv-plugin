@@ -157,11 +157,14 @@ speaks, a ticker under the map with the newest note of each seat still in the ga
 by seat, a note not shown yet before the others), and the timeline. The top bar has the broadcast's title and the
 turn's year.
 
-**The score bug** sits over the top of the map while the map is shown: each seat (up to six; two face each other
-across the year and the turn) with its name and civ, rank and score, cities, people, techs, army, gold and great
-wonders, its shares of the land and of the people against domination's two thirds (a mark on each bar), its culture
-once a civ has a tenth of the cultural victory's 100,000 (or a city a tenth of a city's 20,000), and its turn as it goes: thinking (or playing) for how long
-with how many tool calls, or ended and after how long, and its newest action. In the last 25 turns it counts them down.
+**The score bug** sits over the top of the map while the map is shown, with the year and the turn. One to four seats
+get a card each (two face each other across the year): its name and civ, rank and score, cities, people, techs, army,
+gold and great wonders, its shares of the land and of the people against domination's two thirds (a mark on each bar),
+its culture once a civ has a tenth of the cultural victory's 100,000 (or a city a tenth of a city's 20,000), and its
+turn as it goes: thinking (or playing) for how long with how many tool calls, or ended and after how long, and its
+newest action. Five to twelve seats get a ladder in the order of the standings, a chip a seat in one row of up to six
+or two: its name and score, rank and civ, shares of the land and people, and its turn (a dot and the clock while it
+thinks, a tick once it has ended); past twelve, the last are counted ("+3 more"). In the last 25 turns it counts them down.
 
 **The director** cuts between shots. The data's new turns and new messages queue them; a shot holds the screen for at
 least 6 s before a more important one cuts in, a queued shot is dropped after 45 s, and full-screen cards are at least
@@ -179,7 +182,7 @@ at least 6 s left.
 | `war_declared` | A card splitting the screen between the two sides' colours, then the camera on their border (or their closest cities) |
 | A new leader | "X TAKES THE LEAD" (4 s), then a spotlight on it, once it has led two turns running (and if it still leads when the card's turn comes); at most one every 45 s, after turn 5 |
 | `peace_signed` | Like a war, in peace colours |
-| Two seats meet (`contact`) | Like a war, "Meet", then their border |
+| Two seats meet (`contact`) | Like a war, "Meet", then their border; in a game of up to four seats (with more, there are too many pairs: the feed has them) |
 | A seat's great wonder (`wonder_built`) | A card in its colour ("Opus 5.5 completes a wonder: The Pyramids"), then the camera on the city with a caption; an AI's wonder only the camera and the caption |
 | A seat's trade (`trade`) | Both sides' colours, "Trade", and what each gave, then their border |
 | A landing by a seat or on a seat's land (`landing`) | The camera on the beach, with a caption |

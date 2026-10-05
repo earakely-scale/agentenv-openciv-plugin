@@ -340,6 +340,48 @@ def test_the_stream_tells_the_later_games_stories(later, tmp_path):
     assert all(f["markup"] == 0 for f in frames)
 
 
+@pytest.mark.parametrize("seats", [2, 4, 5, 9, 12, 13])
+def test_the_score_bug_shows_every_seat(seats, tmp_path):
+    """Two seats face each other, three or four get a card each, five to twelve a ladder by score in one or two rows,
+    and past twelve the last are counted: every seat's name and score is on screen, in the order of the standings."""
+    record = tmp_path / "record"
+    lines = [{"id": 1, "cmd": "new_game", "args": {"seed": 3, "turn_limit": 8}},
+             {"id": 2, "cmd": "autoplay", "args": {"turns": 2, "policy": "settler_bot"}}]
+    subprocess.run([sys.executable, str(FAKE), "--record", str(record)], check=True, capture_output=True, text=True,
+                   timeout=60, input="".join(json.dumps(x) + "\n" for x in lines))
+    snaps = recording.load_snapshots(record)
+    for s in snaps:   # `seats` civs, each a seat named model-k with a score of its own
+        base, barbs = s["players"][1], s["players"][-1]
+        players = [dict(base, index=k, civ=f"Civ{k}", label=f"model-{k}", is_human=True,
+                        score=dict(base["score"], total=100 + 7 * k)) for k in range(seats)]
+        s["players"] = [*players, dict(barbs, index=seats)]
+        s["seats"] = [{"index": k, "civ": f"Civ{k}", "label": f"model-{k}"} for k in range(seats)]
+        for c in s["cities"]:
+            c["owner"] = 0
+        s["units"] = [u for u in s["units"] if u["owner"] == 0]
+        s["tiles"] = [[*r[:4], 0 if r[4] >= 0 else -1, *r[5:]] for r in s["tiles"]]
+    doc = MatchData.from_snapshots(snaps).document()
+    page = tmp_path / "bug.html"
+    page.write_text(probed(viewer.page(doc), TEXT + """
+      setTimeout(() => { const d = $("#duel");
+        $("#probe").textContent = JSON.stringify({hidden: d.hidden, cls: d.className, text: text(d),
+          names: $$("#duel .nm").map(e => e.textContent), more: text($("#duel .more")),
+          fits: $$("#duel .side, #duel .chip").every(e => { const r = e.getBoundingClientRect();
+            return r.right <= innerWidth && r.bottom <= innerHeight / 3 && r.width > 0; })}); }, 1500);"""),
+                    encoding="utf-8")
+    got = run(page.as_uri() + "?stream", 5000, tmp_path)
+    shown = min(seats, 11 if seats > 12 else 12)
+    best_first = [f"model-{k}" for k in reversed(range(seats))]
+    assert not got["hidden"] and got["fits"], got
+    assert got["cls"] == (f"duel n{seats}" if seats <= 4 else "duel ladder"), got
+    if seats > 4:
+        assert got["names"] == best_first[:shown], got
+        assert all(str(100 + 7 * int(n.split("-")[1])) in got["text"] for n in best_first[:shown])
+    else:
+        assert sorted(got["names"]) == sorted(best_first)
+    assert got["more"] == (f"+{seats - shown} more" if seats > shown else None)
+
+
 def test_the_director_holds_shots_by_priority_and_skips_the_backlog(doc, tmp_path):
     probe = """
       const loop = () => ({key: "loop", prio: 9, ms: 15000});
