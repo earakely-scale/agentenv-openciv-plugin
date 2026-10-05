@@ -1241,7 +1241,8 @@ class OpenCiv3Env(AgentEnvEnvironment):
                      for p in sorted(world.get("players", []), key=lambda p: -p["score"]["total"])]
         s = states[self.seats[0].civ]
         summary = {
-            "turn": s["turn"], "turn_limit": s["turn_limit"], "game_over": s["game_over"], "defeated": s["defeated"],
+            "turn": s["turn"], "turn_limit": s["turn_limit"], "game_over": self._game_over()[0],
+            "defeated": s["defeated"],
             "seed": self.game["seed"], "civ": s["civ"], "human": self.seats[0].human,
             **self._seat_summary(self.seats[0], s),
             "baselines": self.baselines.summary(s["turn"]) if self.baselines and not self.multi
@@ -1459,10 +1460,9 @@ class OpenCiv3Env(AgentEnvEnvironment):
             return {"turn": None, "game_over": False, "victory": None, "client": self.client,
                     "recording": self.record, "min_turn_seconds": pace, "broadcast": show, "messages": [], "seats": []}
         now, turn = time.monotonic(), self.turn
-        states = [s.last_state for s in self.seats if s.last_state]
-        victory = next((st["victory"] for st in states if st.get("victory")), None)
+        over, victory = self._game_over()
         return {
-            "turn": turn, "game_over": victory is not None or any(st.get("game_over") for st in states),
+            "turn": turn, "game_over": over,
             "victory": victory, "client": self.client, "recording": self.record, "min_turn_seconds": pace,
             "broadcast": show, "messages": [{k: m[k] for k in ("from", "to", "text", "seconds")} for m in self.messages
                          if m["turn"] == turn],
@@ -1598,9 +1598,14 @@ class OpenCiv3Env(AgentEnvEnvironment):
                                    extra={} if extra is None else extra, done=done, failed=failed)
 
     def _game_over(self) -> tuple[bool, dict | None]:
+        """Whether the game is over for everyone, and its victory. A seat's state says game over once that seat is
+        defeated, while the others play on: the game is over at a victory or the turn limit, which a seat still in
+        the game reports, or once every seat is defeated."""
         states = [s.last_state for s in self.seats if s.last_state]
         victory = next((st["victory"] for st in states if st.get("victory")), None)
-        return victory is not None or any(st.get("game_over") for st in states), victory
+        over = (victory is not None or any(st.get("game_over") and not st.get("defeated") for st in states)
+                or all((s.last_state or {}).get("defeated") for s in self.seats))
+        return over, victory
 
     def _waiting_for(self, seat: Seat) -> list[str]:
         """The seats still playing the turn, once `seat` has ended it."""

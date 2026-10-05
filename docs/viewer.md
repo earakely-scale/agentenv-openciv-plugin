@@ -120,7 +120,7 @@ the turns it hasn't seen; a recording embeds the whole document.
 returns. Before the first game, `game` is null, `turns` is empty, and so are `seats` and `messages`.
 
 ```jsonc
-{"turn": 57, "game_over": false, "victory": null, "client": true, "recording": true,
+{"turn": 57, "game_over": false, "victory": null, "client": true, "recording": true,   // over: for every seat
  "min_turn_seconds": 15,                                          // the broadcast pace: no turn ends sooner; 0: none
  "broadcast": {"title": "OpenCiv3 Showmatch", "casters": {}},     // the task's (tools.md, The broadcast); null: none
  "messages": [{"from": "Rome", "to": ["Greece"], "text": "Join me against Carthage.",
