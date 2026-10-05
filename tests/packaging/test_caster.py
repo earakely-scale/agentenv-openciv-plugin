@@ -229,9 +229,9 @@ def test_the_casters_open_call_the_events_and_sign_off(fake):
     assert '"Battle of the Labs"' in first and "claude-opus (Rome), gpt-sol (Greece)" in first
     assert "1. claude-opus (Rome): 40" in first and "1300 gold" in first and "2 military units" in first
     assert "still thinking, 41 s so far; 4 tool calls, 1 failed" in first
-    assert "YOUR LINE: you are Max, line 1 of 3. You open this exchange." in first
+    assert "YOUR LINE: you are Max, line 1 of 3, 6 to 16 words. You open this exchange." in first
     # a line at a time, each caster answering the other's actual line
-    assert 'YOUR LINE: you are Ada, line 2 of 3. Max just said: "Line 1: Rome leads."' in second
+    assert 'YOUR LINE: you are Ada, line 2 of 3, at most 22 words. Max just said: "Line 1: Rome leads."' in second
     assert 'Ada just said: "Line 2: Rome leads."\nYours is the last line of this exchange: answer Ada' in third
     systems = [b["messages"][0]["content"] for b in fake.chats[:3]]
     assert systems[0].startswith("You are Max, the play-by-play caster") and systems[0] == systems[2]
@@ -257,7 +257,8 @@ def test_the_casters_open_call_the_events_and_sign_off(fake):
 
     asked = len(fake.prompts)
     assert [line["kind"] for line in beat(c, clock)] == ["color"] * 2   # the events were called once
-    assert "you are Ada, line 1 of 2" in fake.prompts[asked] and "The angle: the race at the top" in fake.prompts[asked]
+    assert "you are Ada, line 1 of 2, at most 22 words" in fake.prompts[asked]
+    assert "The angle: the race at the top" in fake.prompts[asked]
     assert "Line 4: Rome leads." in fake.prompts[asked].split("RECENT LINES")[1]   # it remembers what it said
 
     fake.turns.append(entry(4, scores={"1": [61, 2, 5, 12, 3, 0], "2": [20, 0, 0, 0, 1, 1]}))
@@ -888,6 +889,7 @@ def test_lines_are_cleaned_up_for_speech():
     assert lines == [{"speaker": "pbp", "text": "Rome strikes!", "focus": "Rome"},
                      {"speaker": "color", "text": " ".join(["word"] * 20) + ".", "focus": None}]
     assert caster.spoken(" ".join(["x"] * 40)) == " ".join(["x"] * 30) + "…"
+    assert caster.spoken("Max: Ada: Max, look at that army.") == "Max, look at that army."
     mixed_up = ('{"lines": [{"speaker": "Ada", "text": "Rome takes the lead, Ada."},'
                 ' {"speaker": "pbp", "text": "Max!"}]}')
     assert [line["text"] for line in caster.parse_lines(mixed_up, match)] == ["Rome takes the lead, Max.", "Ada!"]

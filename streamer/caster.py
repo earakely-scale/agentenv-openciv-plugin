@@ -554,7 +554,7 @@ class Caster:
             return Beat("event", "Call these moments from the board, the biggest first:\n"
                         + "\n".join(f"- {x.text}" for x in events)
                         + f"\n{pbp} calls it with energy; {color} answers with what it means, one number from the "
-                          "match.",
+                          "match. Between your lines, call every moment above.",
                         PBP, 2 if len(events) == 1 else 3, events)
         if messages := [x for x in self.pending if x.kind == "message"][-3:]:
             return Beat("message", "New diplomacy between the players, sent where everyone can see it:\n"
@@ -711,7 +711,8 @@ class Caster:
                 + (f"NOTEBOOK (what {self.casters[COLOR][0]}'s research found; use a point when it fits)\n{notebook}"
                    "\n\n" if notebook else "")
                 + f"RECENT LINES (oldest first)\n{recent or '(none: this is the opening)'}"
-                f"\n\nNOW\n{beat.task}\n\nYOUR LINE: you are {me}, line {i + 1} of {n}. {where}")
+                f"\n\nNOW\n{beat.task}\n\nYOUR LINE: you are {me}, line {i + 1} of {n}, "
+                f"{'6 to 16' if speaker == PBP else 'at most 22'} words. {where}")
 
     def system(self, speaker: str) -> str:
         role = "play-by-play" if speaker == PBP else "colour analyst"
@@ -1451,7 +1452,7 @@ def spoken(text, names: tuple[str, ...] = ("Max", "Ada")) -> str:
     text = MASKED.sub("bleep", str(text or ""))   # before its stars read as a stage direction
     text = BLOCKED.sub("bleep", re.sub(r"\*[^*]*\*|\[[^\]]*\]", "", text))
     prefix = "|".join(re.escape(name) for name in names)
-    text = " ".join(re.sub(rf"^\s*(?:{prefix})\s*:\s*", "", text).split())
+    text = " ".join(re.sub(rf"^(?:\s*(?:{prefix})\s*:)+\s*", "", text).split())   # "Max: Ada: …" too
     if len(text.split()) <= MAX_WORDS:
         return text
     kept: list[str] = []
