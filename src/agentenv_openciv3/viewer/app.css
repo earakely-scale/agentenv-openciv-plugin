@@ -291,7 +291,7 @@ body.stream .agentsview.dense .acard .mind .tx { -webkit-line-clamp: 1; }
   box-shadow: 0 40px 120px rgba(0,0,0,.55); }
 .moment .big { font: 900 156px/.92 var(--display); font-stretch: condensed; letter-spacing: -.01em; text-transform: uppercase;
   text-shadow: 0 6px 0 rgba(0,0,0,.2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.moment .big.long { font-size: 108px; }
+.moment .big.mid { font-size: 132px; } .moment .big.long { font-size: 108px; }
 .moment .what { font: 800 46px/1 var(--display); font-stretch: condensed; letter-spacing: .03em; text-transform: uppercase;
   color: rgba(255,255,255,.9); margin-top: 14px; }
 .moment .words { min-width: 0; }
@@ -302,7 +302,7 @@ body.stream .agentsview.dense .acard .mind .tx { -webkit-line-clamp: 1; }
 .moment .slab.pair { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); padding: 40px 100px;
   background: linear-gradient(104deg, var(--a) 0 50%, var(--b) 50% 100%); }
 .moment .party { min-width: 0; } .moment .party:last-child { text-align: right; }
-.moment .pair .big { font-size: 118px; } .moment .pair .big.long { font-size: 80px; }
+.moment .pair .big { font-size: 118px; } .moment .pair .big.mid { font-size: 96px; } .moment .pair .big.long { font-size: 80px; }
 .moment .pair .civ { font-size: 30px; color: rgba(255,255,255,.9); margin-top: 10px; }
 .moment .pair .vs { align-self: stretch; margin: -40px 36px; display: flex; align-items: center; padding: 0 52px;
   background: #0a0c10; transform: skewX(-14deg); }
@@ -388,7 +388,7 @@ body.stream .agentsview.dense .acard .mind .tx { -webkit-line-clamp: 1; }
 .duel { position: absolute; z-index: 7; left: 14px; right: 14px; top: 12px; display: grid; gap: 10px; pointer-events: none;
   grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr)); }
 .duel.n2 { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
-.duel.n1 { --cols: 2; } .duel.n3 { --cols: 4; } .duel.n4 { --cols: 5; } .duel.n5, .duel.n6 { --cols: 4; }
+.duel.n1 { --cols: 2; } .duel.n3 { --cols: 4; } .duel.n4 { --cols: 5; }
 .duel .side { min-width: 0; background: rgba(9,11,15,.9); border-top: 5px solid var(--a); border-radius: 4px 4px 10px 10px;
   padding: 8px 14px 9px; box-shadow: 0 10px 30px rgba(0,0,0,.45); }
 .duel .side.out { filter: saturate(.25) brightness(.7); }
@@ -408,6 +408,7 @@ body.stream .agentsview.dense .acard .mind .tx { -webkit-line-clamp: 1; }
 .duel .mid { align-self: start; text-align: center; background: rgba(9,11,15,.9); border-radius: 10px; padding: 10px 18px;
   box-shadow: 0 10px 30px rgba(0,0,0,.45); }
 .duel:not(.n2) .mid { grid-column: span 1; }
+.duel.ladder .mid { align-self: stretch; display: flex; flex-direction: column; justify-content: center; }
 .duel .yr { font: 800 26px/1 var(--display); color: var(--gold); white-space: nowrap; }
 .duel .tn { color: var(--text2); font-size: 14px; margin-top: 4px; white-space: nowrap; }
 .duel .left { color: var(--live); font-weight: 800; font-size: 14px; margin-top: 3px; white-space: nowrap; }
@@ -417,11 +418,26 @@ body.stream .agentsview.dense .acard .mind .tx { -webkit-line-clamp: 1; }
 .meter .track i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--a, var(--focus)); border-radius: 4px; }
 .meter .track b { position: absolute; left: 66.7%; top: -3px; bottom: -3px; width: 2px; background: #fff; opacity: .8; }
 .meter .mv { font-variant-numeric: tabular-nums; color: var(--text); min-width: 34px; text-align: right; }
-/* three seats or more: the civ moves to the stats line and the shares are numbers */
+/* five seats or more: the ladder, a chip a seat by score, in one row of up to six or two */
+.duel.ladder { grid-template-columns: auto minmax(0, 1fr); }
+.duel .rungs { display: grid; grid-template-columns: repeat(var(--cols, 6), minmax(0, 1fr)); gap: 8px; min-width: 0; }
+.duel .chip { min-width: 0; background: rgba(9,11,15,.9); border-left: 5px solid var(--a); border-radius: 4px 8px 8px 4px;
+  padding: 5px 10px 6px; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+.duel .chip.out { filter: saturate(.25) brightness(.7); }
+.duel .chip.more { display: flex; align-items: center; justify-content: center; color: var(--text2); border-left-color: var(--line2); }
+.duel .chip .ch { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.duel .chip .rk { color: var(--text); }
+.duel .chip .nm { font: 800 18px/1.15 var(--display); font-stretch: condensed; flex: 1; min-width: 0; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.duel .chip .sc { font: 800 19px/1 var(--display); font-variant-numeric: tabular-nums; }
+.duel .chip .cs { display: flex; gap: 8px; font-size: 12px; color: var(--text2); white-space: nowrap; min-width: 0; margin-top: 2px; }
+.duel .chip .cv { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+.duel .chip.busy .st { color: var(--gold); } .duel .chip.done .st { color: var(--good); }
+/* three or four seats: the civ moves to the stats line and the shares are numbers */
 .duel .cvb { display: none; }
-.duel:not(.n1):not(.n2) .cv { display: none; } .duel:not(.n1):not(.n2) .cvb { display: inline; color: var(--text); }
-.duel:not(.n1):not(.n2) .meter .track { display: none; } .duel:not(.n1):not(.n2) .meter { flex: none; }
-.duel:not(.n1):not(.n2) .meter .mv { min-width: 0; }
+:is(.duel.n3, .duel.n4) .cv { display: none; } :is(.duel.n3, .duel.n4) .cvb { display: inline; color: var(--text); }
+:is(.duel.n3, .duel.n4) .meter .track { display: none; } :is(.duel.n3, .duel.n4) .meter { flex: none; }
+:is(.duel.n3, .duel.n4) .meter .mv { min-width: 0; }
 body.stream.has-duel .chyron { top: calc(var(--duel-h, 130px) + 38px); }
 body.stream.has-duel .bubble { top: calc(var(--duel-h, 130px) + 40px); }
 body.stream.has-duel .clientpane:not(.big) { top: calc(var(--duel-h, 130px) + 40px); }

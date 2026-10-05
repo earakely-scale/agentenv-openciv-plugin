@@ -1699,7 +1699,8 @@ function eventShot(e) {
     return {key: `trade:${e.turn}:${e.owner}:${e.from}:${e.text}`, prio: mine && theirs ? 3 : 4, card: true, ms: 9000, run: () => {
       onMap(); card("trade", tradeCard(p, q, e), 5000); later(4600, () => onMap({box: borderBox(p.index, q.index), zoom: 2.2}));
     }};
-  if (e.kind === "contact" && q && mine && theirs)
+  // two seats meeting: a card in a game of up to four seats; with more there are too many pairs, so the feed has them
+  if (e.kind === "contact" && q && mine && theirs && M.seats.length <= 4)
     return {key: `contact:${e.owner}:${e.from}`, prio: 2, card: true, ms: 10000, run: () => {
       onMap(); card("contact", pairCard(p, q, null, e), 4500); later(4100, () => onMap({box: borderBox(p.index, q.index), zoom: 2.2}));
     }};
@@ -1757,7 +1758,7 @@ function leave(el) {
   overlayTimers[el.id] = [setTimeout(() => { el.hidden = true; }, 350)];
 }
 function card(kind, html, ms) { const el = $("#moment"); el.className = "moment card-" + kind; el.innerHTML = html; flash(el, ms); }
-const shout = p => `<div class="big${lab(p).length > 10 ? " long" : ""}">${lab(p)}</div>`;
+const shout = p => { const n = nm(p).length; return `<div class="big${n > 10 ? " long" : n > 6 ? " mid" : ""}">${lab(p)}</div>`; };
 const NUMBERS = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve"];
 function titleCard() {
   const seats = M.seats.length ? M.seats : M.civs, people = seats.filter(p => p.human).length, agents = seats.length - people;
@@ -1857,6 +1858,15 @@ function duelSide(p, ti, rk) {
       ${cultureCounts(ti) ? `<div class="cult" title="a cultural victory: ${CULTURE_GOAL.toLocaleString()} and twice the next civ's, or ${CITY_CULTURE_GOAL.toLocaleString()} in one city">Culture <b>${(st.culture || 0).toLocaleString()}</b></div>` : ""}</div>` : ""}
     <div class="now"><span class="st">${esc(now.state)}</span>${now.act ? `<span class="act">${esc(now.act)}</span>` : ""}</div></div>`;
 }
+// A seat on the ladder (five seats or more): rank, name, score, its shares of land and people, and its turn.
+function duelChip(p, ti, rk) {
+  const s = M.series[p.index][ti], st = M.stats(ti, p.index), now = seatNow(p);
+  const turn = now.cls === "busy" ? `● ${clock(M.liveSeat(p.index)?.seconds)}` : now.cls === "done" ? "✓" : now.cls === "out" ? "out" : "";
+  return `<div class="chip ${now.cls}" style="--a:${p.color}" title="${esc(`${nm(p)} · ${p.civ}: ${now.state}${now.act ? ` · ${now.act}` : ""}`)}">
+    <div class="ch"><span class="nm">${lab(p)}</span><span class="sc">${s[0]}</span></div>
+    <div class="cs"><span class="rk">${ordinal(rk[p.index])}</span><span class="cv">${esc(p.civ)}</span>${"land" in st
+      ? `<span>${pct(st.land)} · ${pct(st.pop)}</span>` : ""}<span class="st">${esc(turn)}</span></div></div>`;
+}
 function renderDuel() {
   const el = $("#duel");
   if (!el || !M.ready) return;
@@ -1867,10 +1877,18 @@ function renderDuel() {
   const rk = M.ranks(ti), left = M.limit - t.turn;
   const mid = `<div class="mid"><div class="yr">${esc(t.date || `Turn ${t.turn}`)}</div><div class="tn">turn ${t.turn} of ${M.limit}</div>
     ${left <= 25 && left > 0 ? `<div class="left">${left} turn${left === 1 ? "" : "s"} left</div>` : ""}</div>`;
-  const shown = seats.slice(0, 6);
-  el.className = `duel n${shown.length}`;
-  el.innerHTML = shown.length === 2 ? `${duelSide(shown[0], ti, rk)}${mid}${duelSide(shown[1], ti, rk)}`
-    : `${mid}${shown.map(p => duelSide(p, ti, rk)).join("")}`;
+  if (seats.length <= 4) {   // one to four seats: a card each, two facing each other across the year
+    el.className = `duel n${seats.length}`;
+    el.innerHTML = seats.length === 2 ? `${duelSide(seats[0], ti, rk)}${mid}${duelSide(seats[1], ti, rk)}`
+      : `${mid}${seats.map(p => duelSide(p, ti, rk)).join("")}`;
+  } else {   // more: a ladder by score, a chip a seat in one or two rows (up to twelve; then the rest are counted)
+    const order = seats.slice().sort((a, b) => rk[a.index] - rk[b.index]), cap = order.length > 12 ? 11 : 12;
+    const chips = order.slice(0, cap).map(p => duelChip(p, ti, rk));
+    if (order.length > cap) chips.push(`<div class="chip more">+${order.length - cap} more</div>`);
+    el.className = "duel ladder";
+    el.style.setProperty("--cols", Math.min(6, Math.ceil(chips.length / (chips.length > 6 ? 2 : 1))));
+    el.innerHTML = `${mid}<div class="rungs">${chips.join("")}</div>`;
+  }
   document.body.style.setProperty("--duel-h", `${el.offsetHeight}px`);   // the chyron and bubble go below it
 }
 // The race card: each seat (and an AI that leads the table) against each victory, with its score over the game.
@@ -1890,7 +1908,7 @@ function raceCard() {
       <div class="rm">${"land" in st ? meter("Land", st.land) + meter("People", st.pop) : ""}
         ${culture ? `<div class="meter"><span class="ml">Culture</span><span class="track"><i style="width:${Math.min(100, 100 * (st.culture || 0) / CULTURE_GOAL).toFixed(1)}%"></i></span>
           <span class="mv">${(st.culture || 0).toLocaleString()}</span></div>` : ""}</div>
-      <div class="rx">${s[1]} cities · ${s[4]} techs${st.military != null ? ` · ${st.military} army` : ""}${st.wonders ? ` · ${st.wonders} wonders` : ""}</div></div>`;
+      <div class="rx">${s[1]} cities · ${s[4]} techs${st.military != null ? ` · ${st.military} army` : ""}${st.wonders ? ` · ${st.wonders} wonder${st.wonders > 1 ? "s" : ""}` : ""}</div></div>`;
   };
   return `<div class="race"><h1>The race <span>${esc(t.date || "")} · turn ${t.turn} of ${M.limit}${left > 0 ? ` · ${left} to go` : ""}</span></h1>
     <p class="how">Two thirds of the land and of the people win by domination${culture ? `; ${CULTURE_GOAL.toLocaleString()} culture and twice the next civ's, or ${CITY_CULTURE_GOAL.toLocaleString()} in one city, by culture` : ""}; the last civ standing, by conquest; the top score at turn ${M.limit}, on score.</p>
