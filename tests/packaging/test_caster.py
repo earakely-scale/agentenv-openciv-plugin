@@ -95,6 +95,7 @@ class Fake:
         self.speech: list[dict] = []
         self.chat_failures = self.speech_failures = 0
         self.reject_tools = False      # an endpoint that turns tool calls down
+        self.reject_forced = False     # one that takes tools, but not a forced call
         self.script: list = []         # replies (or functions of the request) to give first, in order
         self.content: str | None = None    # a plain-text reply instead of a say call
         self.said = 0
@@ -149,6 +150,10 @@ class Fake:
                     if fake.reject_tools and "tools" in body:
                         fake.chats.append(body)
                         return self.reply(400, b'{"error": "this model does not support tools"}', "text/plain")
+                    if fake.reject_forced and "tool_choice" in body:
+                        fake.chats.append(body)
+                        return self.reply(400, b'{"error": "tool_choice is not supported with thinking"}',
+                                          "text/plain")
                     reply = {"choices": [{"message": fake.chat(body), "finish_reason": "stop"}]}
                     return self.reply(200, json.dumps(reply).encode(), "application/json")
                 fake.speech.append(body)
@@ -404,7 +409,7 @@ def test_failures_are_survived_and_the_key_is_never_printed(fake, capsys):
     until_quiet(c, clock)
     c.tick()
     assert len(c.lines) == 4 and c.lines[3]["audio"] == "audio/4.wav"
-    assert [m["content"] for m in fake.chats[-1]["messages"] if m["role"] == "tool"] == [
+    assert [m["content"].split("\n")[0] for m in fake.chats[-1]["messages"] if m["role"] == "tool"] == [
         "error: an empty line; call say with your line as its text"] * 2
     fake.data_down = True   # the env is gone: nothing to talk about
     until_quiet(c, clock)
@@ -574,6 +579,7 @@ def test_a_caster_looks_the_match_up_before_it_speaks(fake):
     c = new_caster(fake, clock)
     fake.start([entry(t) for t in range(1, 13)], turn=12)
     beat(c, clock)
+    c.call_seconds = c.voice_seconds = 0.5   # time for a round of lookups
 
     def answered(body: dict) -> dict:   # the lookups' answers come back under their ids, in order
         answers = [m for m in body["messages"] if m["role"] == "tool"]
@@ -585,6 +591,9 @@ def test_a_caster_looks_the_match_up_before_it_speaks(fake):
         assert "tool_choice" not in body
         return say("Forty points, Max, and it hasn't moved in ten turns.", "Rome")
 
+    until_quiet(c, clock)
+    c.speaking_until += 3
+
     fake.script = [calls(("civ", {"civ": "claude-opus"}), ("trend", {"stat": "score", "civs": ["Rome"]}),
                          ident="look"), answered]
     lines = beat(c, clock)
@@ -594,33 +603,62 @@ def test_a_caster_looks_the_match_up_before_it_speaks(fake):
 
 
 def test_live_lookups_stop_when_the_audio_would_run_dry(fake, capsys):
+    """A round of lookups only while the audio queued outlasts it, the line after it and its voicing: the casters'
+    running estimates of a call's time and a voicing's."""
     clock = Clock()
     c = new_caster(fake, clock)
     fake.start([entry(1)], turn=1)
     look = calls(("standings", {}))
-    fake.script = [look] * caster.LOOKUP_ROUNDS   # a caster that would look things up forever
-    c.tick()
-    forced = fake.chats[caster.LOOKUP_ROUNDS]
-    assert forced["tool_choice"] == {"type": "function", "function": {"name": "say"}}
-    assert not any("tool_choice" in b for b in fake.chats[:caster.LOOKUP_ROUNDS])
-    assert len(c.lines) == 1   # it spoke when it had to
+    fake.script = [look]
+    c.tick()   # nothing queued: it must speak at once
+    assert fake.chats[0]["tool_choice"] == {"type": "function", "function": {"name": "say"}}
+    assert len(c.lines) == 1 and len(fake.chats) == 2
 
-    def slow(body):   # a lookup that takes the time the queued audio had left
-        clock.now += caster.LOOKUP_SECONDS + 1
+    c.call_seconds = c.voice_seconds = 1.0
+    c.writing_seconds = 40   # so the next line is due at once
+    c.speaking_until = clock.now + 30   # plenty queued: up to LOOKUP_ROUNDS rounds, then a forced say
+    fake.script = [look] * caster.LOOKUP_ROUNDS
+    chats = len(fake.chats)
+    c.tick()
+    asked = fake.chats[chats:]
+    assert [("tool_choice" in b) for b in asked] == [False] * caster.LOOKUP_ROUNDS + [True]
+    assert asked[-1]["messages"][-1]["content"].endswith(
+        "(You are live and out of time: call say with your line now.)")
+    assert len(c.lines) == 2
+
+    def slow(body):   # a lookup that takes most of what was queued
+        clock.now = c.speaking_until - 2.5
         return look
 
+    c.speaking_until, c.writing_seconds = clock.now + 30, 40
     chats = len(fake.chats)
     fake.script = [slow]
     c.tick()
-    assert "tool_choice" not in fake.chats[chats] and "tool_choice" in fake.chats[chats + 1]
-    assert len(c.lines) == 2
+    assert [("tool_choice" in b) for b in fake.chats[chats:]] == [False, True]   # no time for another round
+    assert len(c.lines) == 3
 
+    c.speaking_until, c.writing_seconds = clock.now + 30, 40
     fake.script = [look] * (caster.LOOKUP_ROUNDS + 1)   # it won't speak even then: the line fails, and is retried
     c.tick()
-    assert len(c.lines) == 2 and f"no line after {caster.LOOKUP_ROUNDS + 1} calls" in capsys.readouterr().out
+    assert len(c.lines) == 3 and f"no line after {caster.LOOKUP_ROUNDS + 1} calls" in capsys.readouterr().out
     clock.now += caster.RETRY_SECONDS
     c.tick()
-    assert len(c.lines) == 3
+    assert len(c.lines) == 4
+
+
+def test_a_model_without_a_forced_say_is_asked_instead(fake, capsys):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(1)], turn=1)
+    fake.reject_forced = True
+    c.tick()   # nothing queued, so the line is forced: refused, then asked without the force
+    assert c.lines[0]["text"] == "Line 1: Rome leads." and c.no_force == {c.models["pbp"]}
+    assert c.no_tools == set() and c.research_due()   # tools still work, research too
+    assert "tool_choice" in fake.chats[0] and "tool_choice" not in fake.chats[1] and "tools" in fake.chats[1]
+    until_quiet(c, clock)
+    c.tick()
+    assert len(c.lines) == 2 and not any("tool_choice" in b for b in fake.chats[2:])   # never forced again
+    assert capsys.readouterr().out.count("turned a forced say down") == 1
 
 
 def test_bad_lookups_get_errors_back_not_exceptions(fake):
@@ -639,6 +677,7 @@ def test_bad_lookups_get_errors_back_not_exceptions(fake):
         return say("Still standing.")
 
     fake.script = [*bad, answered]
+    c.speaking_until, c.call_seconds, c.voice_seconds, c.writing_seconds = clock.now + 60, 0.5, 0.5, 60
     c.tick()
     assert [m["tool_call_id"] for m in replies[0]] == [  # every call is answered, in order
         *(f"bad_{n}" for n in range(4)), *(f"worse_{n}" for n in range(4)), *(f"many_{n}" for n in range(5))]
@@ -652,7 +691,7 @@ def test_bad_lookups_get_errors_back_not_exceptions(fake):
     assert answers[6] == "error: no city 'Atlantis'; the biggest: Roma, Athens"
     assert answers[7] == "error: the arguments must be an object"
     assert answers[8].startswith("Turn 2:\n1. claude-opus (Rome): 40")
-    assert answers[12] == f"error: at most {caster.LOOKUPS_AT_ONCE} lookups at a time"
+    assert answers[12].startswith(f"error: at most {caster.LOOKUPS_AT_ONCE} lookups at a time")
     assert c.lines[-1]["text"] == "Still standing."
 
 
@@ -743,9 +782,9 @@ def test_an_endpoint_without_tools_gets_lines_from_the_data(fake, capsys):
     fake.start([entry(1)], turn=1)
     beat(c, clock)
     assert [line["text"] for line in c.lines] == ["Line 1: Rome leads.", "Line 2: Rome leads.", "Line 3: Rome leads."]
-    assert not c.tools_ok and not c.research_due()
-    assert sum("tools" in b for b in fake.chats) == 1   # asked once
-    assert fake.chats[1]["messages"][0]["content"].endswith(caster.SAY_JSON)
+    assert c.no_tools == {c.models["pbp"], c.models["color"]} and not c.research_due()
+    assert sum("tools" in b for b in fake.chats) == 2   # asked once with a forced say, once without
+    assert fake.chats[2]["messages"][0]["content"].endswith(caster.SAY_JSON) and "tools" not in fake.chats[2]
     printed = capsys.readouterr().out
     assert printed.count("the endpoint turned tools down") == 1 and "does not support tools" in printed
 
@@ -771,6 +810,8 @@ def test_the_lookups_tell_the_story_of_the_game(fake):
         t["cities"] = [[10, 12, "Roma", 1, 4, 1, "Legion", 0], [30, 8, "Athens", 1, 1, 0, None, 1]]
     turns[7]["events"] = [event("wonder_built", 1, "claude-opus completed The Pyramids in Roma", city="Roma",
                                 wonder="The Pyramids")]
+    turns[6]["battles"] = [fight(1, 2, "a", city=3)]
+    turns[6]["events"] = [event("city_destroyed", 2, "gpt-sol lost Sparta; it was razed", x=40, y=4)]   # the loser
     turns[7]["actions"] = {"1": [{"text": "c1 builds Legion", "ok": True}]}
     fake.start(turns, turn=8, messages=[{"from": "Greece", "to": "all", "text": "Rome is lying.", "seconds": 3.0}])
     beat(c, clock)
@@ -778,25 +819,26 @@ def test_the_lookups_tell_the_story_of_the_game(fake):
     rome = c.lookup("civ", {"civ": "Rome"})
     for fact in ("claude-opus (Rome), turn 8: score 56, 1 of 2", "2 cities, pop 3: Roma 4 (capital) building Legion, "
                  "Athens 1", "Army: 2 Warrior", "1300 gold", "Great wonders: The Pyramids",
-                 "Record: 0 cities founded, 1 taken, 0 lost, 0 razed", "At war with gpt-sol (Greece) since turn 3",
+                 "Record: 0 cities founded, 1 taken, 0 lost, 1 razed", "At war with gpt-sol (Greece) since turn 3",
                  'Plan (set turn 3): "Take Athens by turn 10."', 'Note, turn 3: "Legions to Athens."',
                  "Messages: 0 sent, 2 received", "Tool calls: 48, 8 failed"):
         assert fact in rome, (fact, rome)
     greece = c.lookup("civ", {"civ": "gpt-sol"})
     assert 'Messages: 2 sent, 0 received; turn 2: "Peace, or you lose Roma."; turn 8: "Rome is lying."' in greece
+    assert "Record: 0 cities founded, 0 taken, 2 lost" in greece   # one taken from it, one razed
     battles = c.lookup("battles", {"civ": "Rome"})
-    assert battles.startswith("3 battles, turns 5 to 6:\nclaude-opus (Rome): 1 attacks lost, 1 defences held, "
-                              "1 attacks won, 1 cities taken; wins by Legion 2")
+    assert battles.startswith("4 battles, turns 5 to 7:\nclaude-opus (Rome): 1 attacks lost, 1 defences held, "
+                              "2 attacks won, 1 cities taken, 1 cities razed; wins by Legion 3")
     assert "- turn 6: claude-opus (Rome)'s Legion attacked gpt-sol (Greece)'s Hoplite at (30,8): the attacker won, " \
            "city taken" in battles
-    assert c.lookup("battles", {"since_turn": 7}) == "No battles since turn 7 in the data"
-    assert c.lookup("battles", {"civ": "Rome", "other": "Greece"}).startswith("3 battles")   # theirs with each other
+    assert c.lookup("battles", {"since_turn": 8}) == "No battles since turn 8 in the data"
+    assert c.lookup("battles", {"civ": "Rome", "other": "Greece"}).startswith("4 battles")   # theirs with each other
     assert c.lookup("battles", {"civ": "Greece", "other": "Barbarians"}) == (
         "No battles for gpt-sol (Greece) with Barbarians (the game's own AI) in the data")
     assert c.lookup("city", {"city": "Roma"}) == "error: city needs name; it takes name, got city"   # its arguments
     assert c.lookup("events", {"kind": "city_captured", "turns": 3}).startswith(
         "(ignored turns: events takes civ, kind, since_turn, until_turn)\n1 events:")
-    assert c.lookup("events", {"since_turn": 4, "until_turn": 7}) == (
+    assert c.lookup("events", {"since_turn": 4, "until_turn": 6}) == (
         "1 events:\n- turn 6: claude-opus took Athens from gpt-sol")
     assert c.lookup("city", {"name": "athens"}) == (
         "Athens: claude-opus (Rome)'s, size 1\nFirst seen turn 1, gpt-sol (Greece)'s\n"
@@ -821,6 +863,95 @@ def test_the_lookups_tell_the_story_of_the_game(fake):
     assert c.lookup("said", {"query": "Carthage"}) == "The desk hasn't said that yet"
     fake.meta["unit_types"] = ["Warrior"] * 2000
     assert len(c.lookup("trend", {"stat": "pop"})) <= caster.TOOL_CHARS
+
+
+def test_a_failed_outro_is_never_started_again(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(1)], turn=1)
+    beat(c, clock)
+    fake.live["game_over"] = True
+    clock.now += caster.POLL_SECONDS
+    c.tick()
+    assert c.lines[-1]["kind"] == "outro"
+    fake.chat_failures = caster.LINE_FAILS
+    for _ in range(caster.LINE_FAILS + 3):
+        clock.now += caster.RETRY_SECONDS
+        c.tick()
+    assert c.finished and [line["kind"] for line in c.lines].count("outro") == 1   # the result is called once
+
+
+def test_a_new_game_starts_the_desk_afresh(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(1)], turn=1)
+    beat(c, clock)
+    assert c.lookup("said", {"query": "rome"}).startswith("3 lines")
+    fake.game, fake.turns = "g-2", [entry(1)]
+    clock.now += caster.POLL_SECONDS
+    c.tick()
+    assert "RECENT LINES (oldest first)\n(none: this is the opening)" in fake.prompts[-1]   # not the old game's
+    assert c.lookup("said", {"query": "Line 2"}) == "The desk hasn't said that yet"
+    assert c.jot("g-2", 9, {"point": "From a turn not played yet."}).startswith("jotted")
+    c.begin(caster.Beat("color", "", caster.COLOR, 2))
+    assert c.notebook == []   # a point from a turn after this one is another game's
+
+
+def test_the_lookups_tell_cities_of_one_name_apart(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    turns = [entry(t) for t in range(1, 6)]
+    for t in turns:   # Greece's Roma (id 7) beside Rome's; Rome's is lost after turn 3
+        t["cities"].append([40, 4, "Roma", 2, 1, 0, None, 7])
+    for t in turns[3:]:
+        t["cities"] = [x for x in t["cities"] if x[7] != 0]
+    fake.start(turns, turn=5)
+    beat(c, clock)
+    said = c.lookup("city", {"name": "Roma"})
+    assert said.startswith("Roma: gpt-sol (Greece)'s, size 1\nFirst seen turn 1, gpt-sol (Greece)'s")
+    assert "\n\nRoma: gone since turn 4: last claude-opus (Rome)'s, size 3" in said
+
+
+def test_none_is_no_civ(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.players.append({"index": 3, "civ": "Egypt", "label": None, "barbarian": False, "seat": None})
+    fake.start([entry(1)], turn=1)
+    c.tick()
+    for nothing in ("none", "None", "null", "", None, 3, ["Rome"]):
+        assert c.match.civ_named(nothing) is None, nothing   # an AI civ without a label is no match for "none"
+    assert c.lookup("civ", {"civ": "None"}).startswith("error: no civ 'None'; the civs: claude-opus (Rome)")
+    assert c.lookup("civ", {"civ": "Barbarians"}).startswith("Barbarians (the game's own AI) has no score")
+
+
+def test_the_voices_kept_stay_bounded(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    beat_ = caster.Beat("color", "", caster.COLOR, 2)
+    for n in range(caster.AUDIO_KEPT * 3):
+        c.publish(beat_, {"speaker": "pbp", "text": "Hi.", "focus": None}, streamed_wav(0.1) if n % 7 else None)
+    assert len(c.audio) <= caster.AUDIO_KEPT and min(c.audio) > c.line_count - caster.AUDIO_KEPT
+
+
+def test_a_key_with_a_control_character_is_refused_not_printed(tmp_path):
+    import os
+    import subprocess
+    env = {**os.environ, "CAST_BASE_URL": "http://127.0.0.1:9", "CAST_API_KEY": "sk-se\ncret-123"}
+    out = subprocess.run([sys.executable, str(CASTER), "--data", "http://127.0.0.1:9/live"], env=env,
+                         capture_output=True, text=True, timeout=30)
+    assert out.returncode == 2 and "control character" in out.stderr and "cret-123" not in out.stdout + out.stderr
+
+
+def test_research_jots_are_not_lookups(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(1), entry(2)], turn=2)
+    beat(c, clock)
+    fake.script = [calls(*[("jot", {"point": f"Point {n}."}) for n in range(caster.LOOKUPS_AT_ONCE)],
+                         ("standings", {}))]
+    c.research_once()
+    answers = [m["content"] for m in fake.chats[-1]["messages"] if m["role"] == "tool"]
+    assert answers[-1].startswith("Turn 2:")   # the lookup is answered, whatever the jots before it
 
 
 def test_the_research_and_the_poll_share_the_match_safely(fake):

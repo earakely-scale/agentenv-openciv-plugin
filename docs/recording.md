@@ -212,13 +212,16 @@ contacts and messages, in order), `turn_now` (who is still thinking and what eac
 city's story) and `said` (what the desk has already said, for callbacks); it speaks with `say`. A lookup it gets
 wrong answers with an error it can read (a civ or city the game hasn't, the arguments the lookup takes), never stops
 the line. A live line looks
-things up only while the audio already queued lasts (at least 5 s, at most three rounds), then must speak. Breaking
+things up a round at a time while the audio already queued outlasts one more round, the line and its voicing (by the
+running times of its calls; at most three rounds), then must speak: it is told it is out of time, and its last call
+forces `say` (or, for a model that turns a forced call down, asks for it). Breaking
 news (an elimination, a city taken or razed, a war) cuts into a beat under way, and a line that asks the other caster
 a question gets its answer, up to four lines a beat. In the background, every 45 s at most and once a turn, the analyst
 researches the game with the same tools and jots talking points into a notebook both casters see, each for two beats
 or 15 turns. The casters' calls use the task's caster `model` (default `anthropic/claude-haiku-4-5`), or a caster's
 own (`play_by_play.model`, `analyst.model`: say, a fast model for the play-by-play and a stronger one for the
-analysis); an endpoint that turns tool calls down gets lines written from the data alone, as before. Each line is
+analysis); a model the endpoint turns tool calls down for writes its lines from the data alone, as before, and does
+no research. Each line is
 voiced by the `tts_model` (default `openai/gpt-4o-mini-tts`) in its caster's voice, levelled to the same loudness, and
 published at once, so the page plays it while the next is written. It paces itself to the audio: the next line is
 written so that it lands as the last one ends, so the talk runs on without piling up. The endpoint is agent-env's

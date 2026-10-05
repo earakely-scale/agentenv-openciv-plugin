@@ -12,8 +12,8 @@ captions:
 
 It paces itself to the audio: the next line of a beat (the intro, the biggest new events, the players' messages and
 notes, analysis, and the outro at GAME OVER) is written so that it lands when about LEAD_SECONDS of speech are left,
-and a live line looks things up only while the audio already queued lasts. Stdlib only, as it runs in the streamer
-image's system Python; the key never appears in what it prints."""
+and a live line looks things up only while the audio already queued outlasts the lookup, the line and its voicing.
+Stdlib only, as it runs in the streamer image's system Python; the key never appears in what it prints."""
 
 from __future__ import annotations
 
@@ -61,8 +61,8 @@ MAX_TOKENS = 1500       # a call's reply: a line or a lookup, after whatever thi
 WORDS_PER_SECOND = 2.5  # a line's length when its audio failed
 CHAT_SECONDS = 45       # a model call's timeout
 LOOKUP_ROUNDS = 3       # a live line's rounds of lookups before it must speak
-LOOKUP_SECONDS = 5      # a live line may look things up for at least this long, more while queued audio lasts
-VOICE_SECONDS = 3       # kept for voicing a line out of the time its lookups may take
+CALL_SECONDS = 2.0      # a model call's time and a line's voicing, until measured (a running average after that)
+VOICE_SECONDS = 1.5
 LOOKUPS_AT_ONCE = 4     # tool calls answered in one round
 MAX_LINES = 4           # a beat's lines, counting the answers to questions it asks
 LINE_FAILS = 3          # failed lines in a row that end a beat
@@ -315,11 +315,18 @@ class Match:
     def who_civ(self, civ: str) -> str:
         return next((self.who(p["index"]) for p in self.civs if p["civ"] == civ), civ)
 
-    def civ_named(self, name) -> str | None:
-        """The civ a line's `focus` names, by civ or label; None for anything else."""
-        name = str(name or "").strip().lower()
-        return next((p["civ"] for p in self.civs
-                     if name in (p["civ"].lower(), str(p.get("label")).lower(), str(p.get("name")).lower())), None)
+    def civ_named(self, name, players: list[dict] | None = None) -> str | None:
+        """The civ a line's `focus` names, by civ, label or name; None for anything else ("none" too)."""
+        p = self.named(name, self.civs if players is None else players)
+        return p["civ"] if p else None
+
+    @staticmethod
+    def named(name, players: list[dict]) -> dict | None:
+        name = name.strip().lower() if isinstance(name, str) else ""
+        if name in ("", "none", "null"):
+            return None
+        return next((p for p in players if name in {str(p[k]).lower() for k in ("civ", "label", "name") if p.get(k)}),
+                    None)
 
     def leader(self, entry: dict) -> int | None:
         """The player with the top score in a turn entry; None while the top score is tied."""
@@ -371,7 +378,10 @@ class Caster:
         self.retry_at = 0.0
         self.writing_seconds = 0.0   # how long the last line took to write and voice
         self.data_down = False
-        self.tools_ok = True         # until the endpoint turns tools down: then the casters write from the DATA
+        self.no_tools: set[str] = set()   # models the endpoint turned tools down for: they write from the DATA
+        self.no_force: set[str] = set()   # models that take tools but not a forced say
+        self.call_seconds, self.voice_seconds = CALL_SECONDS, VOICE_SECONDS
+        self.game_line = 0           # the last line before this game's first: RECENT LINES and `said` start after it
         self.researched_at = float("-inf")
         self.researched_turn: int | None = None
         self.start(None)
@@ -391,6 +401,7 @@ class Caster:
         self.beat: Beat | None = None
         with self.lock:
             self.notebook: list[dict] = []
+            self.game_line = getattr(self, "line_count", 0)
 
     @property
     def names(self) -> tuple[str, str]:
@@ -398,7 +409,10 @@ class Caster:
         return self.casters[PBP][0], self.casters[COLOR][0]
 
     def log(self, message: str) -> None:
-        print(message.replace(self.api_key, "<cast key>") if self.api_key else message, flush=True)
+        if self.api_key:
+            for form in (self.api_key, repr(self.api_key)[1:-1]):
+                message = message.replace(form, "<cast key>")
+        print(message, flush=True)
 
     # ---- the loop ----
 
@@ -660,7 +674,8 @@ class Caster:
             self.topics_used[beat.topic] = self.beats
         with self.lock:
             turn = self.match.turn
-            self.notebook = [p for p in self.notebook if p["beats"] < POINT_BEATS and p["turn"] >= turn - POINT_TURNS]
+            self.notebook = [p for p in self.notebook if p["beats"] < POINT_BEATS
+                             and turn - POINT_TURNS <= p["turn"] <= turn]
             beat.points = list(self.notebook)
             for p in self.notebook:
                 p["beats"] += 1
@@ -676,6 +691,7 @@ class Caster:
             beat.fails += 1
             if beat.fails >= LINE_FAILS:
                 beat.count = len(beat.lines)   # it ends where it got to, and the desk moves on
+                self.finished = beat.kind == "outro"   # the broadcast's last lines are never started again
             return
         beat.fails = 0
         wav = self.voice(line)
@@ -692,8 +708,7 @@ class Caster:
         speaker = beat.speaker
         me = self.casters[speaker][0]
         other = self.casters[COLOR if speaker == PBP else PBP][0]
-        with self.lock:
-            recent = "\n".join(f"{line['name']}: {line['text']}" for line in self.lines[-MEMORY:])
+        recent = self.recent()
         with self.data:
             data = self.summary()
         points = beat.points
@@ -714,30 +729,57 @@ class Caster:
                 f"\n\nNOW\n{beat.task}\n\nYOUR LINE: you are {me}, line {i + 1} of {n}, "
                 f"{'6 to 16' if speaker == PBP else 'at most 22'} words. {where}")
 
-    def system(self, speaker: str) -> str:
+    def game_lines(self) -> list[dict]:
+        """This game's lines so far."""
+        with self.lock:
+            return [line for line in self.lines if line["id"] > self.game_line]
+
+    def recent(self) -> str:
+        return "\n".join(f"{line['name']}: {line['text']}" for line in self.game_lines()[-MEMORY:])
+
+    def system(self, speaker: str, tools: bool = True) -> str:
         role = "play-by-play" if speaker == PBP else "colour analyst"
         me = CASTERS[speaker][0]
-        text = (f"You are {me}, the {role} caster on {DESK}\n\n{STYLE}\n\n"
-                + (LIVE if self.tools_ok else SAY_JSON))
+        text = f"You are {me}, the {role} caster on {DESK}\n\n{STYLE}\n\n" + (LIVE if tools else SAY_JSON)
         return renamed(text, self.casters)
 
+    def time_to_look(self) -> bool:
+        """Whether the audio queued outlasts one more lookup, the line after it and its voicing."""
+        return self.clock() + 2 * self.call_seconds + self.voice_seconds <= self.speaking_until
+
     def write(self, beat: Beat) -> dict | None:
-        """The beat's next line, from its speaker's agent: lookups while the audio queued lasts (at least
-        LOOKUP_SECONDS, at most LOOKUP_ROUNDS rounds), then its line. None if the calls failed."""
+        """The beat's next line, from its speaker's agent: a round of lookups at a time while the audio queued
+        outlasts it (at most LOOKUP_ROUNDS), then its line. None if the calls failed."""
         speaker = beat.speaker
-        messages = [{"role": "system", "content": self.system(speaker)},
+        model = self.models[speaker]
+        tools = model not in self.no_tools
+        messages = [{"role": "system", "content": self.system(speaker, tools)},
                     {"role": "user", "content": self.prompt(beat)}]
-        start = self.clock()
-        deadline = start + max(LOOKUP_SECONDS, self.speaking_until - start - VOICE_SECONDS)
-        tools = self.tools_ok
+        round_ = 0
         try:
-            for round_ in range(LOOKUP_ROUNDS + 1):
-                body = {"model": self.models[speaker], "max_tokens": MAX_TOKENS, "messages": messages}
+            while round_ <= LOOKUP_ROUNDS:
+                body = {"model": model, "max_tokens": MAX_TOKENS, "messages": messages}
+                last = round_ == LOOKUP_ROUNDS or not self.time_to_look()
                 if tools:
                     body["tools"] = [*LOOKUPS, SAY]
-                    if round_ == LOOKUP_ROUNDS or self.clock() >= deadline:
+                    if last and model not in self.no_force:
                         body["tool_choice"] = {"type": "function", "function": {"name": "say"}}
-                message = self.chat(body)
+                try:
+                    message = self.chat(body)
+                except urllib.error.HTTPError as e:
+                    why = failure(e)
+                    if not (tools and e.code == 400 and re.search(r"\btools?\b|tool_choice|function", why, re.I)):
+                        raise ValueError(why) from None
+                    if "tool_choice" in body:   # tools, but not a forced say: it is asked to speak instead
+                        self.no_force.add(model)
+                        self.log(f"caster: {model} turned a forced say down ({why}); its casters are asked instead")
+                        continue
+                    if round_:
+                        raise ValueError(why) from None
+                    self.no_tools.add(model)
+                    self.log(f"caster: the endpoint turned tools down for {model} ({why}); its caster writes from "
+                             "the DATA alone")
+                    return self.write(beat)
                 calls = message.get("tool_calls") or []
                 said = next((c for c in calls if (c.get("function") or {}).get("name") == "say"), None)
                 if said is not None:
@@ -747,28 +789,26 @@ class Caster:
                     except ValueError as e:   # nothing to say: it says why, and the caster tries again
                         if round_ == LOOKUP_ROUNDS:
                             raise
-                        messages += [{"role": "assistant", "content": message.get("content"), "tool_calls": [said]},
-                                     {"role": "tool", "tool_call_id": said.get("id") or "call_say",
-                                      "content": f"error: {e}; call say with your line as its text"}]
-                        continue
-                if not calls:
-                    return self.line_of(speaker, message.get("content"), message)
-                messages.append({"role": "assistant", "content": message.get("content"), "tool_calls": calls})
-                messages += self.answers(calls)
+                        calls, answers = [said], [{"role": "tool", "tool_call_id": said.get("id") or "call_say",
+                                                   "content": f"error: {e}; call say with your line as its text"}]
+                else:
+                    if not calls:
+                        return self.line_of(speaker, message.get("content"), message)
+                    answers = self.answers(calls)
+                round_ += 1
+                if tools and (round_ == LOOKUP_ROUNDS or not self.time_to_look()):
+                    answers[-1]["content"] += "\n(You are live and out of time: call say with your line now.)"
+                messages += [{"role": "assistant", "content": message.get("content"), "tool_calls": calls}, *answers]
             raise ValueError(f"no line after {LOOKUP_ROUNDS + 1} calls")
-        except urllib.error.HTTPError as e:
-            why = failure(e)
-            if tools and e.code == 400 and re.search(r"\btools?\b|function", why, re.IGNORECASE):
-                self.tools_ok = False
-                self.log(f"caster: the endpoint turned tools down ({why}); the casters write from the DATA alone")
-                return self.write(beat)
-            self.log(f"caster: the {beat.kind} beat's line failed, retrying in {RETRY_SECONDS} s: {why}")
         except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError, http.client.HTTPException) as e:
             self.log(f"caster: the {beat.kind} beat's line failed, retrying in {RETRY_SECONDS} s: {failure(e)}")
         return None
 
     def chat(self, body: dict) -> dict:
+        began = self.clock()
         reply = json.loads(self.post("/v1/chat/completions", body, CHAT_SECONDS))
+        if "jot" not in {t["function"]["name"] for t in body.get("tools") or ()}:   # a live call
+            self.call_seconds += 0.3 * (self.clock() - began - self.call_seconds)
         message = reply["choices"][0]["message"]
         if not isinstance(message, dict):
             raise ValueError("the reply has no message")
@@ -826,6 +866,7 @@ class Caster:
     def voice(self, line: dict) -> bytes | None:
         """The line spoken, as a WAV file; None if the speech call failed."""
         _, voice, style = self.casters[line["speaker"]]
+        began = self.clock()
         try:
             wav = leveled(fixed_wav(self.post("/v1/audio/speech", {
                 "model": self.tts_model, "voice": voice, "input": line["text"], "instructions": style,
@@ -833,6 +874,7 @@ class Caster:
         except (OSError, ValueError, http.client.HTTPException) as e:
             self.log(f"caster: no voice for a line, captions only: {failure(e)}")
             return None
+        self.voice_seconds += 0.3 * (self.clock() - began - self.voice_seconds)
         return wav
 
     def post(self, path: str, body: dict, timeout: float) -> bytes:
@@ -849,7 +891,8 @@ class Caster:
             ident = self.line_count
             if wav:
                 self.audio[ident] = wav
-                self.audio.pop(ident - AUDIO_KEPT, None)
+            for old in [k for k in self.audio if k <= ident - AUDIO_KEPT]:
+                del self.audio[old]
             line.update(id=ident, name=self.casters[line["speaker"]][0], audio=f"audio/{ident}.wav" if wav else None,
                         seconds=round(seconds, 2), turn=self.match.turn, kind=beat.kind)
             self.lines.append({k: line[k] for k in ("id", "speaker", "name", "text", "audio", "seconds", "turn",
@@ -871,8 +914,9 @@ class Caster:
 
     def research_due(self) -> bool:
         m = self.match
-        return (self.tools_ok and m.started and not m.over and self.introduced and not self.data_down
-                and self.clock() - self.researched_at >= RESEARCH_SECONDS and m.turn != self.researched_turn)
+        return (self.models[COLOR] not in self.no_tools and m.started and not m.over and self.introduced
+                and not self.data_down and self.clock() - self.researched_at >= RESEARCH_SECONDS
+                and m.turn != self.researched_turn)
 
     def research_once(self) -> int:
         """One session of the analyst digging through the match; returns the points it jotted."""
@@ -880,8 +924,8 @@ class Caster:
         with self.data:
             game, turn, data = self.match.game, self.match.turn, self.summary()
         self.researched_turn = turn
+        recent = self.recent()
         with self.lock:
-            recent = "\n".join(f"{line['name']}: {line['text']}" for line in self.lines[-MEMORY:])
             notebook = "\n".join(f"- turn {p['turn']}: {p['point']}" for p in self.notebook)
         analyst = CASTERS[COLOR][0]
         messages = [{"role": "system", "content": renamed(f"You are {analyst}, the colour analyst on {DESK}\n\n"
@@ -894,19 +938,25 @@ class Caster:
                 message = self.chat({"model": self.models[COLOR], "max_tokens": MAX_TOKENS, "messages": messages,
                                      "tools": [*LOOKUPS, JOT]})
             except (OSError, ValueError, KeyError, IndexError, TypeError, http.client.HTTPException) as e:
-                self.log(f"caster: research call failed: {failure(e)}")
+                why = failure(e)
+                if isinstance(e, urllib.error.HTTPError) and e.code == 400 and re.search(r"\btools?\b|function", why,
+                                                                                         re.I):
+                    self.no_tools.add(self.models[COLOR])   # no research without tools
+                self.log(f"caster: research call failed: {why}")
                 break
             calls = message.get("tool_calls") or []
             if not calls:
                 break
             messages.append({"role": "assistant", "content": message.get("content"), "tool_calls": calls})
+            looked = 0
             for n, call in enumerate(calls):
                 fn = call.get("function") or {}
                 if fn.get("name") == "jot":
                     answer = self.jot(game, turn, arguments(call))
                     jotted += answer.startswith("jotted")
                 else:
-                    answer = (self.lookup(fn.get("name"), fn.get("arguments")) if n < LOOKUPS_AT_ONCE
+                    looked += 1
+                    answer = (self.lookup(fn.get("name"), fn.get("arguments")) if looked <= LOOKUPS_AT_ONCE
                               else f"error: at most {LOOKUPS_AT_ONCE} lookups at a time")
                 messages.append({"role": "tool", "tool_call_id": call.get("id") or f"call_{n}", "content": answer})
         return jotted
@@ -915,11 +965,10 @@ class Caster:
         point = " ".join(str(args.get("point") or "").split())[:POINT_CHARS]
         if not point:
             return "error: jot needs a point"
-        with self.data:
+        with self.data, self.lock:   # a new game can't begin between the check and the jot
             if self.match.game != game:
                 return "error: that game is over; a new one has begun"
             civ = self.match.civ_named(args.get("civ"))
-        with self.lock:
             self.notebook.append({"turn": turn, "civ": civ, "point": point, "beats": 0})
             del self.notebook[:-NOTEBOOK]
             return f"jotted ({len(self.notebook)} in the notebook)"
@@ -959,9 +1008,7 @@ class Caster:
 
     def civ_of(self, name) -> dict:
         """A player by civ, label or name, the barbarians too."""
-        key = str(name or "").strip().lower()
-        found = next((p for p in self.match.players
-                      if key in (p["civ"].lower(), str(p.get("label")).lower(), str(p.get("name")).lower())), None)
+        found = self.match.named(name, self.match.players)
         if found is None:
             civs = ", ".join(self.match.who(p["index"]) for p in self.match.civs)
             raise Unknown(f"no civ {name!r}; the civs: {civs}")
@@ -1047,10 +1094,11 @@ class Caster:
             elif e["kind"] == "city_captured":
                 record["taken"] += e.get("owner") == index
                 record["lost"] += e.get("from") == index
-            elif e["kind"] == "city_destroyed":
-                record["razed"] += e.get("owner") == index
-        out.append(f"Record: {record['founded']} cities founded, {record['taken']} taken, {record['lost']} lost, "
-                   f"{record['razed']} razed")
+            elif e["kind"] == "city_destroyed":   # its owner is the civ that lost it
+                record["lost"] += e.get("owner") == index
+        record["razed"] = sum(1 for t in m.turns for b in t.get("battles") or () if b[4] == 3 and b[6] == index)
+        out.append(f"Record: {record['founded']} cities founded, {record['taken']} taken, {record['lost']} lost"
+                   + (f", {record['razed']} razed" if record["razed"] else ""))
         wars = self.war_starts()
         if st.get("at_war"):
             out.append("At war with " + ", ".join(
@@ -1223,14 +1271,22 @@ class Caster:
         if not seen:
             biggest = sorted(m.turns[-1].get("cities") or (), key=lambda c: -c[4])[:8]
             raise Unknown(f"no city {name!r}; the biggest: {', '.join(c[2] for c in biggest)}")
-        ident = seen[-1][1][7] if len(seen[-1][1]) > 7 else None
-        if ident is not None:   # the newest city of that name: an older one may have been lost and refounded
-            seen = [(t, c) for t, c in seen if len(c) > 7 and c[7] == ident]
+        cities: dict = {}   # by engine id: two civs may have cities of one name, and a lost city may be refounded
+        for t, c in seen:
+            cities.setdefault(c[7] if len(c) > 7 and c[7] is not None else "name", []).append((t, c))
+        stories = sorted(cities.values(), key=lambda story: -story[-1][0])
+        out = [self.city_story(story) for story in stories[:3]]
+        if len(stories) > 3:
+            out.append(f"…and {len(stories) - 3} more of that name")
+        return "\n\n".join(out)
+
+    def city_story(self, seen: list[tuple[int, list]]) -> str:
+        m = self.match
         turn, c = seen[-1]
-        here = turn == m.turns[-1]["turn"]
-        out = [f"{c[2]}: " + (f"{m.who(c[3])}'s, size {c[4]}" + (", the capital" if c[5] else "")
-                              + (f", building {c[6]}" if c[6] else "") if here else
-                              f"gone since turn {turn}: last {m.who(c[3])}'s, size {c[4]}")]
+        gone = next((t["turn"] for t in m.turns if t["turn"] > turn), None)
+        out = [f"{c[2]}: " + (f"gone since turn {gone}: last {m.who(c[3])}'s, size {c[4]}" if gone is not None else
+                              f"{m.who(c[3])}'s, size {c[4]}" + (", the capital" if c[5] else "")
+                              + (f", building {c[6]}" if c[6] else ""))]
         out.append(f"First seen turn {seen[0][0]}, {m.who(seen[0][1][3])}'s")
         owner = seen[0][1][3]
         for t, x in seen[1:]:
@@ -1239,16 +1295,17 @@ class Caster:
                 owner = x[3]
         picks = sorted({round(k * (len(seen) - 1) / 7) for k in range(8)})
         out.append("Size: " + ", ".join(f"turn {seen[k][0]}: {seen[k][1][4]}" for k in picks))
+        at = {(x[0], x[1]) for _, x in seen}
         wonders = [f"{e.get('wonder')} (turn {t['turn']})" for t in m.turns for e in t.get("events") or ()
-                   if e["kind"] == "wonder_built" and str(e.get("city", "")).lower() == key]
+                   if e["kind"] == "wonder_built" and str(e.get("city", "")).lower() == c[2].lower()
+                   and (e.get("x") is None or (e.get("x"), e.get("y")) in at)]
         if wonders:
             out.append(f"Great wonders: {', '.join(wonders)}")
         return "\n".join(out)
 
     def look_said(self, query="") -> str:
         words = str(query).lower().split()
-        with self.lock:
-            lines = [x for x in self.lines if all(w in f"{x['name']} {x['text']}".lower() for w in words)]
+        lines = [x for x in self.game_lines() if all(w in f"{x['name']} {x['text']}".lower() for w in words)]
         if not lines:
             return "The desk hasn't said that yet" if words else "The desk hasn't said anything yet"
         head = f"{len(lines)} lines" + (", the latest 8:" if len(lines) > 8 else ":")
@@ -1570,7 +1627,10 @@ def main() -> int:
                         '"style", "model": that caster\'s own}}; what it leaves out keeps its default')
     p.add_argument("--title", help="the broadcast's title, for the intro")
     args = p.parse_args()
-    base_url, api_key = os.environ.get("CAST_BASE_URL", ""), os.environ.get("CAST_API_KEY", "")
+    base_url, api_key = os.environ.get("CAST_BASE_URL", "").strip(), os.environ.get("CAST_API_KEY", "").strip()
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in api_key):
+        print("caster: CAST_API_KEY has a control character in it", file=sys.stderr)
+        return 2
     if not base_url or not api_key:
         print("caster: set CAST_BASE_URL (the endpoint, e.g. https://your-litellm-proxy) and CAST_API_KEY",
               file=sys.stderr)
