@@ -188,6 +188,8 @@ def fake():
     f.server.shutdown()
 
 
+SPEAKERS = (caster.PBP, caster.COLOR)
+
 class Clock:
     def __init__(self):
         self.now = 1_000_000.0
@@ -245,7 +247,7 @@ def test_the_casters_open_call_the_events_and_sign_off(fake):
     systems = [b["messages"][0]["content"] for b in fake.chats[:3]]
     assert systems[0].startswith("You are Max, the play-by-play caster") and systems[0] == systems[2]
     assert systems[1].startswith("You are Ada, the colour analyst caster")
-    assert all(tools_of(b) == {*caster.LOOKUP_ARGS, "say"} for b in fake.chats[:3])
+    assert all(tools_of(b) == {"say"} for b in fake.chats[:3])   # the opening: nothing queued, it must speak
     assert [s["voice"] for s in fake.speech] == ["ash", "sage", "ash"]
     assert {s["response_format"] for s in fake.speech} == {"wav"}
     assert set(fake.auth) == {f"Bearer {KEY}"}
@@ -342,7 +344,7 @@ def test_the_casters_pace_themselves_to_their_audio(fake):
     c.tick()
     assert len(fake.prompts) == 3
     assert c.speaking_until == pytest.approx(clock.now + caster.LEAD_SECONDS - 0.5 + WAV_SECONDS + caster.GAP_SECONDS)
-    c.writing_seconds = 3   # a line that took 3 s to write and voice is started that much earlier
+    c.writing_seconds = dict.fromkeys(SPEAKERS, 3)   # a line that takes 3 s to write and voice starts that early
     clock.now = c.speaking_until - caster.LEAD_SECONDS - 2.5
     c.tick()
     assert len(fake.prompts) == 4 and c.lines[3]["kind"] == "color"
@@ -583,7 +585,8 @@ def test_a_caster_looks_the_match_up_before_it_speaks(fake):
     c = new_caster(fake, clock)
     fake.start([entry(t) for t in range(1, 13)], turn=12)
     beat(c, clock)
-    c.call_seconds = c.voice_seconds = 0.5   # time for a round of lookups
+    c.call_seconds, c.voice_seconds = dict.fromkeys(c.models.values(), 0.5), 0.5
+    c.speaking_until += 5   # a long line queued: time for a round of lookups
 
     def answered(body: dict) -> dict:   # the lookups' answers come back under their ids, in order
         answers = [m for m in body["messages"] if m["role"] == "tool"]
@@ -616,8 +619,8 @@ def test_live_lookups_stop_when_the_audio_would_run_dry(fake, capsys):
     assert fake.chats[0]["tool_choice"] == {"type": "function", "function": {"name": "say"}}
     assert len(c.lines) == 1 and len(fake.chats) == 2
 
-    c.call_seconds = c.voice_seconds = 1.0
-    c.writing_seconds = 40   # so the next line is due at once
+    c.call_seconds, c.voice_seconds = dict.fromkeys(c.models.values(), 1.0), 1.0
+    c.writing_seconds = dict.fromkeys(SPEAKERS, 40)   # so the next line is due at once
     c.speaking_until = clock.now + 30   # plenty queued: up to LOOKUP_ROUNDS rounds, then a forced say
     fake.script = [look] * caster.LOOKUP_ROUNDS
     chats = len(fake.chats)
@@ -632,14 +635,14 @@ def test_live_lookups_stop_when_the_audio_would_run_dry(fake, capsys):
         clock.now = c.speaking_until - 2.5
         return look
 
-    c.speaking_until, c.writing_seconds = clock.now + 30, 40
+    c.speaking_until, c.writing_seconds = clock.now + 30, dict.fromkeys(SPEAKERS, 40)
     chats = len(fake.chats)
     fake.script = [slow]
     c.tick()
     assert [("tool_choice" in b) for b in fake.chats[chats:]] == [False, True]   # no time for another round
     assert len(c.lines) == 3
 
-    c.speaking_until, c.writing_seconds = clock.now + 30, 40
+    c.speaking_until, c.writing_seconds = clock.now + 30, dict.fromkeys(SPEAKERS, 40)
     fake.script = [look] * (caster.LOOKUP_ROUNDS + 1)   # it won't speak even then: the line fails, and is retried
     c.tick()
     assert len(c.lines) == 3 and f"no line after {caster.LOOKUP_ROUNDS + 1} calls" in capsys.readouterr().out
@@ -663,6 +666,59 @@ def test_a_model_without_a_forced_say_is_asked_instead(fake, capsys):
     assert capsys.readouterr().out.count("turned a forced say down") == 1
 
 
+def test_a_model_that_cant_be_forced_gets_only_say_on_its_last_round(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(1)], turn=1)
+    fake.reject_forced = True
+    c.tick()   # nothing queued: forced, refused, then asked with say alone, so a lookup can't cost the line
+    assert "tool_choice" in fake.chats[0] and "tool_choice" not in fake.chats[1]
+    assert tools_of(fake.chats[1]) == {"say"} and len(c.lines) == 1
+    c.call_seconds, c.voice_seconds = dict.fromkeys(c.models.values(), 0.5), 0.5
+    c.speaking_until, c.writing_seconds = clock.now + 30, dict.fromkeys(SPEAKERS, 40)
+    fake.script = [calls(("standings", {}))] * caster.LOOKUP_ROUNDS
+    chats = len(fake.chats)
+    c.tick()   # time for every round of lookups, then say alone
+    asked = fake.chats[chats:]
+    assert [tools_of(b) == {"say"} for b in asked] == [False] * caster.LOOKUP_ROUNDS + [True]
+    assert not any("tool_choice" in b for b in asked) and len(c.lines) == 2
+
+
+def test_each_casters_model_keeps_its_own_timing(fake):
+    """A fast play-by-play model and a slow analyst: a line's lookups and its start go by its own caster's times."""
+    clock = Clock()
+    c = new_caster(fake, clock, models={"pbp": "fast/model", "color": "slow/model"})
+    fake.start([entry(1)], turn=1)
+
+    def taking(seconds):
+        def line(body):
+            clock.now += seconds
+            return say(f"A line from {body['model']}.")
+        return line
+
+    fake.script = [taking(1), taking(6), taking(1)]   # the intro: Max, Ada, Max
+    beat(c, clock)
+    assert c.call_seconds["fast/model"] < caster.CALL_SECONDS < c.call_seconds["slow/model"]
+    assert c.writing_seconds["pbp"] < 2 < 6 <= c.writing_seconds["color"]
+    c.call_seconds, c.voice_seconds = {"fast/model": 1.0, "slow/model": 6.0}, 1.0
+    c.speaking_until = clock.now + 10
+    assert c.time_to_look("fast/model") and not c.time_to_look("slow/model")
+    c.speaking_until = clock.now + 2 * 1.0 + 1.0 + caster.LANDING_SECONDS - 0.1
+    assert not c.time_to_look("fast/model")   # a line that looked something up still lands before the audio ends
+
+    c.writing_seconds = {"pbp": 1.0, "color": 6.0}
+    c.beat = caster.Beat("color", "Analysis.", caster.COLOR, 2)
+    c.speaking_until = clock.now + caster.LEAD_SECONDS + 3
+    chats = len(fake.chats)
+    c.tick()   # Ada's line takes 6 s, so it starts with 7 s queued
+    assert len(fake.chats) > chats
+    c.beat = caster.Beat("color", "Analysis.", caster.PBP, 2)
+    c.speaking_until = clock.now + caster.LEAD_SECONDS + 3
+    chats = len(fake.chats)
+    c.tick()   # Max's takes 1 s: not yet
+    assert len(fake.chats) == chats
+
+
 def test_bad_lookups_get_errors_back_not_exceptions(fake):
     clock = Clock()
     c = new_caster(fake, clock)
@@ -679,7 +735,8 @@ def test_bad_lookups_get_errors_back_not_exceptions(fake):
         return say("Still standing.")
 
     fake.script = [*bad, answered]
-    c.speaking_until, c.call_seconds, c.voice_seconds, c.writing_seconds = clock.now + 60, 0.5, 0.5, 60
+    c.speaking_until, c.call_seconds, c.voice_seconds, c.writing_seconds = (
+        clock.now + 60, dict.fromkeys(c.models.values(), 0.5), 0.5, dict.fromkeys(SPEAKERS, 60))
     c.tick()
     assert [m["tool_call_id"] for m in replies[0]] == [  # every call is answered, in order
         *(f"bad_{n}" for n in range(4)), *(f"worse_{n}" for n in range(4)), *(f"many_{n}" for n in range(5))]
@@ -867,6 +924,31 @@ def test_the_lookups_tell_the_story_of_the_game(fake):
     assert len(c.lookup("trend", {"stat": "pop"})) <= caster.TOOL_CHARS
 
 
+def test_a_beat_that_fails_before_it_says_anything_calls_nothing(fake):
+    """A beat that fails three times ends; one that never got a line out leaves its news and the intro for the next."""
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(1)], turn=1)
+
+    def blip():
+        fake.chat_failures = caster.LINE_FAILS
+        for _ in range(caster.LINE_FAILS):
+            until_quiet(c, clock)
+            c.tick()
+            clock.now += caster.RETRY_SECONDS
+
+    blip()   # before the opening
+    assert c.lines == [] and not c.introduced
+    assert [line["kind"] for line in beat(c, clock)] == ["intro"] * 3   # the show still opens
+    fake.turns.append(entry(2, events=[event("civ_destroyed", 1, "claude-opus destroyed gpt-sol", **{"from": 2})]))
+    fake.live["turn"] = 2
+    blip()   # before the elimination is called
+    assert len(c.lines) == 3
+    asked = len(fake.prompts)
+    lines = beat(c, clock)
+    assert lines[0]["kind"] == "event" and "destroyed gpt-sol" in now_part(fake.prompts[asked])
+
+
 def test_the_outro_rides_out_a_blip_but_is_never_started_again(fake):
     clock = Clock()
     c = new_caster(fake, clock)
@@ -901,7 +983,8 @@ def test_a_thinking_model_gets_its_thinking_back_and_a_bad_generation_is_no_refu
     thought = {**calls(("standings", {})), "reasoning_content": "Hmm.",
                "thinking_blocks": [{"type": "thinking", "thinking": "Hmm.", "signature": "sig"}]}
     fake.script = [thought]
-    c.speaking_until, c.call_seconds, c.voice_seconds, c.writing_seconds = clock.now + 30, 0.5, 0.5, 40
+    c.speaking_until, c.call_seconds, c.voice_seconds, c.writing_seconds = (
+        clock.now + 30, dict.fromkeys(c.models.values(), 0.5), 0.5, dict.fromkeys(SPEAKERS, 40))
     c.tick()
     echoed = fake.chats[-1]["messages"][2]
     assert echoed["thinking_blocks"] == thought["thinking_blocks"] and echoed["reasoning_content"] == "Hmm."
@@ -926,8 +1009,8 @@ def test_a_line_with_no_time_left_is_told_so_up_front(fake):
     fake.start([entry(1)], turn=1)
     c.tick()   # nothing queued
     assert fake.chats[0]["messages"][1]["content"].endswith(f"\n{caster.OUT_OF_TIME}")
-    c.call_seconds = c.voice_seconds = 0.5
-    c.speaking_until, c.writing_seconds = clock.now + 30, 40
+    c.call_seconds, c.voice_seconds = dict.fromkeys(c.models.values(), 0.5), 0.5
+    c.speaking_until, c.writing_seconds = clock.now + 30, dict.fromkeys(SPEAKERS, 40)
     c.tick()
     assert caster.OUT_OF_TIME not in fake.chats[-1]["messages"][1]["content"]
 

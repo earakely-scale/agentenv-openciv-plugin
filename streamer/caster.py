@@ -63,6 +63,7 @@ CHAT_SECONDS = 45       # a model call's timeout
 LOOKUP_ROUNDS = 3       # a live line's rounds of lookups before it must speak
 CALL_SECONDS = 2.0      # a model call's time and a line's voicing, until measured (a running average after that)
 VOICE_SECONDS = 1.5
+LANDING_SECONDS = 1.5   # a line lands this long before the audio runs out: the gap between lines and the page's poll
 LOOKUPS_AT_ONCE = 4     # tool calls answered in one round
 MAX_LINES = 4           # a beat's lines, counting the answers to questions it asks
 LINE_FAILS = 3          # failed lines in a row that end a beat
@@ -381,11 +382,12 @@ class Caster:
         self.speaking_until = 0.0
         self.polled_at = float("-inf")
         self.retry_at = 0.0
-        self.writing_seconds = 0.0   # how long the last line took to write and voice
+        self.writing_seconds: dict[str, float] = {}   # how long each caster's last line took to write and voice
         self.data_down = False
         self.no_tools: set[str] = set()   # models the endpoint turned tools down for: they write from the DATA
         self.no_force: set[str] = set()   # models that take tools but not a forced say
-        self.call_seconds, self.voice_seconds = CALL_SECONDS, VOICE_SECONDS
+        self.call_seconds: dict[str, float] = {}   # each model's live calls, a running average
+        self.voice_seconds = VOICE_SECONDS
         self.game_line = 0           # the last line before this game's first: RECENT LINES and `said` start after it
         self.researched_at = float("-inf")
         self.researched_turn: int | None = None
@@ -436,7 +438,9 @@ class Caster:
         if now - self.polled_at >= POLL_SECONDS:
             self.polled_at = now
             self.poll()
-        due = self.speaking_until - now <= LEAD_SECONDS + self.writing_seconds
+        upcoming = self.beat.speaker if self.beat is not None and not self.beat.done else None   # else not chosen yet
+        writing = self.writing_seconds.get(upcoming, max(self.writing_seconds.values(), default=0.0))
+        due = self.speaking_until - now <= LEAD_SECONDS + writing
         if self.finished or self.data_down or now < self.retry_at or not (due or self.match.over):
             return   # the outro waits for no one; with the match data gone, there is nothing to talk about
         beat = self.beat
@@ -665,8 +669,17 @@ class Caster:
     # ---- writing and voicing a line ----
 
     def begin(self, beat: Beat) -> None:
-        """A beat's first line is under way: what it calls is called, whether or not it is cut short."""
+        """A beat's first line is being written: it reads the notebook as it is now."""
         beat.begun = True
+        with self.lock:
+            turn = self.match.turn
+            self.notebook = [p for p in self.notebook if p["beats"] < POINT_BEATS
+                             and turn - POINT_TURNS <= p["turn"] <= turn]
+            beat.points = list(self.notebook)
+
+    def called(self, beat: Beat) -> None:
+        """A beat's first line is out: what it calls is called, whether or not it is cut short. A beat that fails
+        before it says anything calls nothing, so its news, its topic and the intro are there for the next one."""
         self.beats += 1
         self.last_kind = beat.kind
         self.introduced = True
@@ -678,16 +691,12 @@ class Caster:
         if beat.topic:
             self.topics_used[beat.topic] = self.beats
         with self.lock:
-            turn = self.match.turn
-            self.notebook = [p for p in self.notebook if p["beats"] < POINT_BEATS
-                             and turn - POINT_TURNS <= p["turn"] <= turn]
-            beat.points = list(self.notebook)
-            for p in self.notebook:
+            for p in beat.points:
                 p["beats"] += 1
 
     def speak(self, beat: Beat) -> None:
         """Writes the beat's next line, voices it and publishes it."""
-        began = self.clock()
+        began, speaker = self.clock(), beat.speaker
         if not beat.begun:
             self.begin(beat)
         line = self.write(beat)
@@ -696,9 +705,13 @@ class Caster:
             beat.fails += 1
             if beat.fails >= (OUTRO_FAILS if beat.kind == "outro" else LINE_FAILS):
                 beat.count = len(beat.lines)   # it ends where it got to, and the desk moves on
+                if not beat.lines and beat.topic:   # analysis that keeps failing gives way to another; news waits
+                    self.topics_used[beat.topic] = self.beats
                 self.finished = beat.kind == "outro"   # the broadcast's last lines are never started again
             return
         beat.fails = 0
+        if not beat.lines:
+            self.called(beat)
         wav = self.voice(line)
         beat.lines.append(line)
         if (len(beat.lines) == beat.count < MAX_LINES and beat.kind not in ("intro", "outro")
@@ -706,7 +719,7 @@ class Caster:
             beat.count += 1   # a question to the other caster: it answers
         self.publish(beat, line, wav)
         self.finished = beat.kind == "outro" and beat.done
-        self.writing_seconds = self.clock() - began
+        self.writing_seconds[speaker] = self.clock() - began
 
     def prompt(self, beat: Beat) -> str:
         """What the speaker of the beat's next line reads: the DATA, the notebook, the show so far and its task."""
@@ -748,9 +761,11 @@ class Caster:
         text = f"You are {me}, the {role} caster on {DESK}\n\n{STYLE}\n\n" + (LIVE if tools else SAY_JSON)
         return renamed(text, self.casters)
 
-    def time_to_look(self) -> bool:
-        """Whether the audio queued outlasts one more lookup, the line after it and its voicing."""
-        return self.clock() + 2 * self.call_seconds + self.voice_seconds <= self.speaking_until
+    def time_to_look(self, model: str) -> bool:
+        """Whether the audio queued outlasts one more of the model's lookups, the line after it, its voicing and its
+        landing before the audio runs out."""
+        call = self.call_seconds.get(model, CALL_SECONDS)
+        return self.clock() + 2 * call + self.voice_seconds + LANDING_SECONDS <= self.speaking_until
 
     def write(self, beat: Beat) -> dict | None:
         """The beat's next line, from its speaker's agent: a round of lookups at a time while the audio queued
@@ -760,15 +775,15 @@ class Caster:
         tools = model not in self.no_tools
         messages = [{"role": "system", "content": self.system(speaker, tools)},
                     {"role": "user", "content": self.prompt(beat)}]
-        if tools and not self.time_to_look():
+        if tools and not self.time_to_look(model):
             messages[1]["content"] += f"\n{OUT_OF_TIME}"   # forced or not, it knows
         round_ = 0
         try:
             while round_ <= LOOKUP_ROUNDS:
                 body = {"model": model, "max_tokens": MAX_TOKENS, "messages": messages}
-                last = round_ == LOOKUP_ROUNDS or not self.time_to_look()
-                if tools:
-                    body["tools"] = [*LOOKUPS, SAY]
+                last = round_ == LOOKUP_ROUNDS or not self.time_to_look(model)
+                if tools:   # the last round has only say, for a model that can't be forced to it
+                    body["tools"] = [SAY] if last else [*LOOKUPS, SAY]
                     if last and model not in self.no_force:
                         body["tool_choice"] = {"type": "function", "function": {"name": "say"}}
                 try:
@@ -803,7 +818,7 @@ class Caster:
                         return self.line_of(speaker, message.get("content"), message)
                     answers = self.answers(calls)
                 round_ += 1
-                if tools and (round_ == LOOKUP_ROUNDS or not self.time_to_look()):
+                if tools and (round_ == LOOKUP_ROUNDS or not self.time_to_look(model)):
                     answers[-1]["content"] += f"\n{OUT_OF_TIME}"
                 messages += [assistant(message, calls), *answers]
             raise ValueError(f"no line after {LOOKUP_ROUNDS + 1} calls")
@@ -815,7 +830,8 @@ class Caster:
         began = self.clock()
         reply = json.loads(self.post("/v1/chat/completions", body, CHAT_SECONDS))
         if "jot" not in {t["function"]["name"] for t in body.get("tools") or ()}:   # a live call
-            self.call_seconds += 0.3 * (self.clock() - began - self.call_seconds)
+            seconds = self.call_seconds.get(body["model"], CALL_SECONDS)
+            self.call_seconds[body["model"]] = seconds + 0.3 * (self.clock() - began - seconds)
         message = reply["choices"][0]["message"]
         if not isinstance(message, dict):
             raise ValueError("the reply has no message")

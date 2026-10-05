@@ -225,7 +225,7 @@ no research. Each line is
 voiced by the `tts_model` (default `openai/gpt-4o-mini-tts`) in its caster's voice, levelled to the same loudness, and
 published at once, so the page plays it while the next is written. It paces itself to the audio: the next line is
 written so that it lands as the last one ends, so the talk runs on without piling up. The endpoint is agent-env's
-`[model]`; a failed call is retried after 5 s (a beat whose lines fail three times in a row ends where it got to),
+`[model]`; a failed call is retried after 5 s (a beat whose lines fail three times in a row ends where it got to; one that said nothing leaves its news and the intro for the next, and its subject, if analysis, gives way to another),
 and a line whose voice failed is still captioned. The stream is public, so the casters are told to keep it
 clean and to paraphrase a rude message rather than quote it, and a word on the env's blocklist, or one it masked
 (`s***`), is said and captioned as "bleep" if a line has one anyway. The page (`?stream&cast=<caster URL>`) polls
