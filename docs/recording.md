@@ -12,15 +12,16 @@ command returns the same snapshot on demand.
 
 ```json
 {
-  "schema": 2, "turn": 12, "turn_limit": 60, "seed": 3,
+  "schema": 2, "turn": 12, "turn_limit": 60, "seed": 3, "date": "3450 BC",
   "map": {"width": 60, "height": 60, "wrap_x": true},
   "seats": [{"index": 1, "civ": "Rome", "label": "opus"}],
   "players": [{"index": 1, "civ": "Rome", "is_human": true, "label": "opus", "defeated": false, "color": [196, 52, 52],
                "score": {"total": 61, "cities": 2, "pop": 5, "tiles": 21, "techs": 3},
-               "gold": 40, "government": "Despotism", "research": "Bronze Working", "at_war": [3], "contacts": [2, 3]}],
+               "gold": 40, "government": "Despotism", "research": "Bronze Working", "at_war": [3], "contacts": [2, 3],
+               "culture": 120, "city_culture": 80, "era": 0, "land": 0.0412, "pop": 0.1538}],
   "tiles": [[13, 9, "grassland", "forest", 0, 1, 1, null, ["road"], 0]],
   "cities": [{"id": "city-1", "x": 12, "y": 10, "name": "Rome", "owner": 1, "size": 3, "capital": true, "production": "Warrior",
-              "era": 0, "walls": false}],
+              "era": 0, "walls": false, "wonders": ["The Pyramids"]}],
   "units": [{"id": "Settler-4", "x": 14, "y": 10, "owner": 1, "type": "Settler", "hp": 1, "hp_max": 1, "fortified": false,
              "aboard": null}],
   "moves": [{"seq": 57, "unit": "Settler-4", "owner": 1, "type": "Settler", "path": [[12, 10], [13, 11], [14, 10]], "seen": 1}],
@@ -28,6 +29,7 @@ command returns the same snapshot on demand.
                "attacker": {"owner": 1, "type": "Warrior", "x": 14, "y": 12, "hp_before": 3, "hp_after": 3, "hp_max": 3},
                "defender": {"owner": 0, "type": "Warrior", "x": 15, "y": 13, "hp_before": 2, "hp_after": 0, "hp_max": 3},
                "rounds": ["a", "a"], "winner": "attacker", "city": null, "captured": false, "razed": false, "seen": 1}],
+  "trades": [{"seq": 59, "turn": 11, "a": 1, "b": 3, "a_gave": "60 gold", "b_gave": "Bronze Working"}],
   "events": [{"turn": 11, "kind": "city_grew", "text": "Rome grew to size 3"}]
 }
 ```
@@ -48,6 +50,13 @@ command returns the same snapshot on demand.
   to where this one has it (units carried aboard ships aside). The `world` command has the same as the last
   snapshot, and what happened since.
 - **`players`:** includes the barbarians. `color` is RGB, derived from the civ's primary colour index. `is_human` marks every civ an agent plays (one, or one per seat), and `label` the seat's label from `new_game`. Every player, seat or AI, also has (2) its `gold`, its `government`'s name, the tech it is `research`ing (null if none), the player indices it is `at_war` with and the ones it has met (`contacts`), both ascending and without the barbarians.
+- **The race** (the spectators' stories): the turn's `date` as the client shows it (`state.date`; null for a ruleset
+  that doesn't count years); each player's `culture` (and its best city's, `city_culture`), `era` (0-3) and shares of
+  the world's `land` and people (`pop`),
+  as `state.race` has them (0 for the barbarians); each city's great `wonders`; and `trades`, the trades seats made
+  since the last snapshot (in `seq` order with moves and battles): `a` gave `a_gave` to `b` for `b_gave`, each
+  described as in the brief ("60 gold", "Bronze Working, Currency"). The engine's AIs' trades among themselves are
+  not recorded. Snapshots from before these fields have none of them.
 - **`cities`, `units`:** (2) `id` is the engine's own id as a string (`"city-1"`, `"Settler-4"`): unique in the game, kept for the city's or unit's life and through saves. It is not the `c1`/`u1` id a seat's commands use. A city's `production` is the name of what it builds, or null. A unit's `aboard` is the engine id of the ship carrying it, or null.
 - **`events`:** the human player's events from the turn that just ended. In a game with seats, every seat's, each with `"civ"`.
 - **Several agents:** the renderers outline and bold every seat, name each as `civ (label)` in the scoreboard and on the chart, title the frame `Rome (Opus) vs Greece (Sonnet) vs …`, and prefix each action and event with its seat.
@@ -89,7 +98,8 @@ viewer's data (`matchdata.MatchData`, [viewer.md](viewer.md)). A frame for turn 
   each civ, in games with agents or wars: the seat's tool calls and failures in the turn just played and its
   latest game action (an AI civ's government instead), and whom it is at war with.
 - **Territory:** each civ's share of the claimed tiles.
-- **Key moments:** eliminations, captures, razings, wars, peace, lead changes, governments, foundings and techs,
+- **Key moments:** eliminations, captures, razings, wars, great wonders, landings, peace, lead changes, trades, new
+  eras, governments, first contacts, foundings and techs,
   ranked by weight and age; eliminations, captures, razings and wars stand out in red. A lead change counts once the
   new leader has held the lead every turn since, for up to 5 turns, so a close race's flips don't crowd it out.
 - **The score chart:** every civ over the turns so far (both scales follow them), the lead changes that held on the
@@ -183,9 +193,13 @@ When the task's `openciv3_match` turns on the casters (its `broadcast`, [tools.m
 `streamer/caster.py` runs next to the browser: two AI casters, by default Max (play-by-play) and Ada (the analyst);
 the task may rename them and pick their voices, styles and models, and `--no-cast` keeps them off. It reads `GET /live/data.json` every 2 s, as the viewer does, and talks only about what that data shows:
 the intro (the players, the turns, that they can message each other), the biggest new events first (an elimination,
-a city taken or razed, war and peace, a lead change the new leader holds, then a change of government or a civ's
-first cities), the agents' messages and notes, analysis when nothing happens (standings, gold, wars, plans, who is
-still thinking), and the outro at GAME OVER, which fits in the default minute of `--linger`. A beat is one call to
+a city taken or razed, war, a great wonder, a landing by a model or on a model's land, two models meeting, peace, a
+model's trade, a lead change the new leader holds, a model's new era, then a change of government, a model's
+upgrades or a civ's first cities), the agents' messages and notes, analysis when nothing happens (standings, gold,
+wars, plans, who is still thinking, the race to each victory, wonders and culture), and the outro at GAME OVER, which
+fits in the default minute of `--linger`. Their data has the year, each civ's shares of the land and of the people,
+culture and great wonders, and who is nearest domination and a cultural victory; seats go by the broadcast's `names`
+when it has them. A beat is one call to
 the task's caster `model` (default `anthropic/claude-haiku-4-5`) that returns one to three lines, and each line is
 voiced by its `tts_model` (default `openai/gpt-4o-mini-tts`) in its caster's voice and levelled to the same loudness. It paces itself to the audio: the next beat is written so that it lands as
 the last one ends, so the talk runs on without piling up. The endpoint is agent-env's `[model]`; a failed call skips

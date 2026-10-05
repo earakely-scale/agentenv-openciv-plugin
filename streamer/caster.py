@@ -54,8 +54,11 @@ AUDIO_KEPT = 200
 MAX_WORDS = 30
 MAX_TOKENS = 1500       # a beat's reply: a few lines, after whatever thinking the model does first
 WORDS_PER_SECOND = 2.5  # a line's length when its audio failed
-EVENTS = ("civ_destroyed", "city_captured", "city_destroyed", "war_declared", "peace_signed", "lead_change",
-          "government_changed", "city_founded")   # the events worth a call, the biggest first
+EVENTS = ("civ_destroyed", "city_captured", "city_destroyed", "war_declared", "wonder_built", "landing", "contact",
+          "peace_signed", "trade", "lead_change", "era_entered", "government_changed", "units_upgraded",
+          "city_founded")   # the events worth a call, the biggest first
+SEATS_ONLY = ("contact", "era_entered", "units_upgraded")   # news when a model's civ is in it, not between AIs
+DOMINATION, CULTURE_GOAL, CITY_CULTURE_GOAL = 2 / 3, 100000, 20000   # Civ III's victories (docs/protocol.md)
 EARLY_CITIES = 3        # a civ's first cities are news, later ones are not
 # Slurs and strong profanity, whole words: the env's moderation.BLOCKLIST (ROT13, so the repository holds no plaintext
 # slurs), copied because this runs without the env's package. A line that says one gets "bleep" instead.
@@ -79,6 +82,10 @@ TOPICS = {  # what the analysis is about when nothing new happened, each in turn
     "bottom": "the player at the bottom of the table: what is going wrong for them, by the numbers",
     "expansion": "expansion: city counts, population, and who is running out of room",
     "rivals": "a head-to-head between the two players closest in score",
+    "victory": "the paths to victory: who is closest to domination (two thirds of the land and of the people), to a "
+               "cultural victory, or to the top score at the turn limit, by the numbers",
+    "wonders": "the great wonders and culture: who has built how many wonders, who has the most culture, and what "
+               "that says about each player's plan",
 }
 
 SYSTEM = """\
@@ -191,7 +198,8 @@ class Match:
         p = self.player(index)
         if p is None:
             return "?"
-        return f"{p['label']} ({p['civ']})" if p.get("label") else f"{p['civ']} (the game's own AI)"
+        name = p.get("name") or p.get("label")   # the broadcast's name for the seat ("Opus 5.5"), else its label
+        return f"{name} ({p['civ']})" if name else f"{p['civ']} (the game's own AI)"
 
     def who_civ(self, civ: str) -> str:
         return next((self.who(p["index"]) for p in self.civs if p["civ"] == civ), civ)
@@ -199,7 +207,8 @@ class Match:
     def civ_named(self, name) -> str | None:
         """The civ a line's `focus` names, by civ or label; None for anything else."""
         name = str(name or "").strip().lower()
-        return next((p["civ"] for p in self.civs if name in (p["civ"].lower(), str(p.get("label")).lower())), None)
+        return next((p["civ"] for p in self.civs
+                     if name in (p["civ"].lower(), str(p.get("label")).lower(), str(p.get("name")).lower())), None)
 
     def leader(self, entry: dict) -> int | None:
         """The player with the top score in a turn entry; None while the top score is tied."""
@@ -415,6 +424,11 @@ class Caster:
         if moment.kind == "city_founded":
             cities = m.entry(moment.turn).get("cities") or ()
             return sum(c[3] == e["owner"] for c in cities) <= EARLY_CITIES
+        seat = lambda i: bool((m.player(i) or {}).get("label")) if i is not None else False   # noqa: E731
+        if moment.kind in SEATS_ONLY:
+            return seat(e.get("owner")) and (moment.kind != "contact" or seat(e.get("from")))
+        if moment.kind == "landing":
+            return seat(e.get("owner")) or seat(e.get("from"))
         return True
 
     def notes_to_read(self) -> list[Moment]:
@@ -465,7 +479,8 @@ class Caster:
         stats = m.turns[-1].get("stats") or {}
         fits = {"wars": any(s.get("at_war") for s in stats.values()), "clock": bool(m.live.get("seats")),
                 "plans": bool(self.plans()), "bottom": len(m.civs) >= 3, "race": len(m.civs) >= 2,
-                "rivals": len(m.civs) >= 2}
+                "rivals": len(m.civs) >= 2, "victory": bool(self.race()),
+                "wonders": any(s.get("wonders") for s in stats.values())}
         topic = min((t for t in TOPICS if fits.get(t, True)), key=lambda t: self.topics_used.get(t, -1))
         pbp, color = self.names
         return Beat("color", f"Nothing new to call this moment, so the desk fills with analysis. The angle: "
@@ -556,7 +571,9 @@ class Caster:
         m = self.match
         limit = m.meta.get("turn_limit")
         out = [f'Broadcast: "{self.title}"'] if self.title else []
-        out.append(f"Turn {m.turn}" + (f" of {limit}" if limit else "") + (" (GAME OVER)" if m.over else ""))
+        date = (m.turns[-1].get("date") if m.turns else None)
+        out.append(f"Turn {m.turn}" + (f" of {limit}" if limit else "") + (f", the year {date}" if date else "")
+                   + (" (GAME OVER)" if m.over else ""))
         if m.over:
             out.append(f"Result: {self.result()}")
         out.append("Standings (score; cities, population, techs; treasury; government; research; military units):")
@@ -567,6 +584,8 @@ class Caster:
             scores = {i: s[0] for i, s in (m.turns[-1].get("scores") or {}).items()}
             top = max(scores.values(), default=0)
             out.append(f"No leader: {' and '.join(m.who(i) for i, s in scores.items() if s == top)} are level on {top}")
+        if race := self.race():
+            out.append(race)
         events = [f"- turn {t['turn']}: {e['text']}" for t in m.turns[-5:] for e in t.get("events") or ()
                   if e["kind"] != "lead_change"]   # the data calls a tie a lead; the Leader line has it right
         if events:
@@ -602,6 +621,12 @@ class Caster:
             parts += [st["government"]] if st.get("government") else []
             parts += [f"researching {st['research']}"] if st.get("research") else []
             parts.append(f"{army.get(int(index), 0)} military units")
+            if "land" in st:
+                parts.append(f"{st['land']:.0%} of the land and {st['pop']:.0%} of the people")
+            if st.get("culture"):
+                parts.append(f"{st['culture']:,} culture")
+            if st.get("wonders"):
+                parts.append(f"{st['wonders']} great wonder{'s' if st['wonders'] > 1 else ''}")
             parts += ["ELIMINATED"] if score[5] else []
             for enemy in st.get("at_war") or ():
                 since = wars.get(frozenset((int(index), enemy)))
@@ -620,6 +645,27 @@ class Caster:
                            f"{calls.get('failed', 0)} failed")
             if total := totals.get(index):
                 out.append(f"   whole game: {total['ok'] + total['failed']} tool calls, {total['failed']} failed")
+        return out
+
+    def race(self) -> str:
+        """Who is nearest each victory: domination (two thirds of the land and of the people) and culture."""
+        m = self.match
+        stats = {i: st for i, st in (m.turns[-1].get("stats") or {}).items() if "land" in st} if m.turns else {}
+        if not stats:
+            return ""
+        near = max(stats, key=lambda i: min(stats[i]["land"], stats[i]["pop"]))
+        out = (f"The race: domination needs {DOMINATION:.0%} of the land and of the people; nearest {m.who(near)} with "
+               f"{stats[near]['land']:.0%} and {stats[near]['pop']:.0%}")
+        top = max(stats, key=lambda i: stats[i].get("culture") or 0)
+        city = max(stats, key=lambda i: stats[i].get("city_culture") or 0)
+        if (stats[top].get("culture") or 0) >= CULTURE_GOAL / 10 or \
+                (stats[city].get("city_culture") or 0) >= CITY_CULTURE_GOAL / 10:
+            out += (f"; a cultural victory needs {CULTURE_GOAL:,} culture and twice the next civ's, or "
+                    f"{CITY_CULTURE_GOAL:,} in one city: top {m.who(top)} with {stats[top].get('culture') or 0:,}")
+            if stats[city].get("city_culture"):
+                out += f", best city {m.who(city)}'s with {stats[city]['city_culture']:,}"
+        if (limit := m.meta.get("turn_limit")) and m.turn:
+            out += f"; {limit - m.turn} turns left"
         return out
 
     def plans(self) -> dict[str, tuple[int | None, str]]:

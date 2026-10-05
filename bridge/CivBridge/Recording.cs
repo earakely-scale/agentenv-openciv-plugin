@@ -36,6 +36,7 @@ sealed partial class Session {
 			if (!resources.TryGetValue(r, out bool k)) resources[r] = k = civs.Any(p => p.KnowsAboutResource(r));
 			return k;
 		}
+		var shares = civs.ToDictionary(p => p, ShareOf);
 		var tiles = new JsonArray();
 		foreach (Tile t in gd.map.tiles) {
 			Player owner = t.OwningPlayer();
@@ -52,6 +53,7 @@ sealed partial class Session {
 		return new JsonObject {
 			["schema"] = SnapshotSchema,
 			["turn"] = gd.turn,
+			["date"] = DateText(gd.turn),
 			["turn_limit"] = turnLimit,
 			["seed"] = seed,
 			["map"] = new JsonObject { ["width"] = gd.map.numTilesWide, ["height"] = gd.map.numTilesTall, ["wrap_x"] = gd.map.wrapHorizontally },
@@ -71,6 +73,13 @@ sealed partial class Session {
 				["at_war"] = Ints(p.isBarbarians ? [] : gd.players.Where(o => o != p && !o.isBarbarians && PlayerRelationship.AtWar(p, o)).Select(o => index[o])),
 				["contacts"] = Ints(p.playerRelationships.Keys.Where(indexById.ContainsKey).Select(id => indexById[id])
 					.Where(i => i != index[p] && !gd.players[i].isBarbarians).Order()),
+				// The race (state.race): culture for the cultural victory, the shares of land and people for domination.
+				["culture"] = CultureOf(p),
+				// its best city's culture: a city with 20,000 wins by culture too (Seats.cs)
+				["city_culture"] = p.cities.Count == 0 ? 0 : p.cities.Max(c => c.GetCultureFor(p)),
+				["era"] = Math.Clamp(p.EraIndex(), 0, EraNames.Length - 1),
+				["land"] = shares.TryGetValue(p, out var share) ? Math.Round(share.Land, 4) : 0,
+				["pop"] = shares.TryGetValue(p, out var share2) ? Math.Round(share2.Pop, 4) : 0,
 			}),
 			["tiles"] = tiles,
 			// Ids are the engine's own (City.id, MapUnit.id) as strings, "city-3" and "Warrior-12": unique in the game, kept
@@ -80,6 +89,8 @@ sealed partial class Session {
 				["x"] = c.location.XCoordinate, ["y"] = c.location.YCoordinate, ["name"] = c.name, ["owner"] = index[c.owner],
 				["size"] = c.residents.Count, ["capital"] = c.IsCapital(), ["production"] = c.itemBeingProduced?.name,
 				["era"] = Math.Clamp(c.owner.EraIndex(), 0, EraNames.Length - 1), ["walls"] = c.HasWalls(),
+				// The great wonders the city has: a wonder is built once in the world.
+				["wonders"] = Json.Strings(c.GetBuildings().Where(b => b.building.greatWonderProperties != null).Select(b => b.building.name)),
 			}),
 			["units"] = Json.Array(gd.mapUnits.Where(u => Tile.IsTileValid(u.location)), u => new JsonObject {
 				["id"] = u.id?.ToString(),
@@ -91,6 +102,7 @@ sealed partial class Session {
 			// What happened since the last snapshot, in order (patches/0010 and 0012): each unit's steps and every battle.
 			["moves"] = SnapshotMoves(since),
 			["battles"] = SnapshotBattles(since),
+			["trades"] = SnapshotTrades(since),
 			["victory"] = VictoryJson(),
 			["events"] = new JsonArray(seats.SelectMany(s => s.TurnEvents.Select(e => {
 				JsonObject copy = e.DeepClone().AsObject();

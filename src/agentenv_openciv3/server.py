@@ -1424,7 +1424,8 @@ class OpenCiv3Env(AgentEnvEnvironment):
             files, rendered_notes = await asyncio.to_thread(
                 recording.render, snapshots, formats=own, view=view, fps=fps, name=name, actions=actions,
                 baselines=baselines, seat_actions=seat_actions, calls=calls, client_videos=client_videos or None,
-                humans=[s.civ for s in self.seats if s.human], seat_notes=seat_notes, plans=plans, messages=messages)
+                humans=[s.civ for s in self.seats if s.human], seat_notes=seat_notes, plans=plans, messages=messages,
+                names=(self.scenario.get("broadcast") or {}).get("names"))
             notes = rendered_notes + notes
         return {"turns": len(snapshots), "notes": notes,
                 "files": [{"name": f.name, "content_type": f.content_type, "bytes": len(f.data),
@@ -1494,7 +1495,8 @@ class OpenCiv3Env(AgentEnvEnvironment):
         notes, plans, messages = self._talk(since)
         match = self.live.match_of(self.game_dir / "record", self.game_id,
                                    {s.civ: s.label for s in self.seats if s.label},
-                                   [s.civ for s in self.seats if s.human])
+                                   [s.civ for s in self.seats if s.human],
+                                   (self.scenario.get("broadcast") or {}).get("names"))
         body = await match.document(since, actions, calls, now, notes=notes, plans=plans, messages=messages)
         return Response(body, media_type="application/json", headers=headers)
 

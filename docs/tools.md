@@ -121,6 +121,7 @@ A game started with `seats` (new-game extension) is played by several agents, on
 
   ```jsonc
   {"title": "OpenCiv3 Showmatch",                  // 1-80 characters: the title card and the casters' intro
+   "names": {"opus": "Opus 5.5", "sol": "GPT-6 Sol"},   // optional: a seat's label -> its name on screen (1-30)
    "casters": {"model": "anthropic/claude-sonnet-5-5",        // writes their lines (default anthropic/claude-haiku-4-5)
                "tts_model": "openai/gpt-4o-mini-tts",          // speaks them (the default)
                "play_by_play": {"name": "Max", "voice": "ash", "style": "…"},   // each key optional: the defaults

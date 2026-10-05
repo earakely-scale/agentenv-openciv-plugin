@@ -382,3 +382,75 @@ body.stream .agentsview.dense .acard .mind .tx { -webkit-line-clamp: 1; }
 }
 .person { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 600;
   letter-spacing: .04em; text-transform: uppercase; color: #f1d36b; border: 1px solid rgba(241,211,107,.45); vertical-align: 1px; }
+
+/* ---- the race (?stream): the score bug over the map, the race and recap cards ---- */
+.turnbig .date { font-size: .55em; font-weight: 700; color: var(--gold); margin-right: 12px; letter-spacing: .02em; }
+.duel { position: absolute; z-index: 7; left: 14px; right: 14px; top: 12px; display: grid; gap: 10px; pointer-events: none;
+  grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr)); }
+.duel.n2 { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
+.duel.n1 { --cols: 2; } .duel.n3 { --cols: 4; } .duel.n4 { --cols: 5; } .duel.n5, .duel.n6 { --cols: 4; }
+.duel .side { min-width: 0; background: rgba(9,11,15,.9); border-top: 5px solid var(--a); border-radius: 4px 4px 10px 10px;
+  padding: 8px 14px 9px; box-shadow: 0 10px 30px rgba(0,0,0,.45); }
+.duel .side.out { filter: saturate(.25) brightness(.7); }
+.duel .hd { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.duel .nm { font: 800 24px/1.1 var(--display); font-stretch: condensed; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.duel .cv { color: var(--text2); font-size: 15px; white-space: nowrap; }
+.duel .grow { flex: 1; }
+.duel .rk { color: var(--muted); font-size: 15px; } .duel .sc { font: 800 26px/1 var(--display); font-variant-numeric: tabular-nums; }
+.duel .bits { color: var(--text2); font-size: 14px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums; }
+.duel .meters { display: flex; gap: 14px; margin-top: 5px; align-items: center; min-width: 0; overflow: hidden; }
+.duel .cult { font-size: 13px; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; } .duel .cult b { color: var(--gold); }
+.duel .now { display: flex; gap: 10px; margin-top: 5px; font-size: 13px; color: var(--muted); min-width: 0; white-space: nowrap; }
+.duel .side.busy .st { color: var(--gold); } .duel .side.busy .st::before { content: "● "; animation: blink 1.4s infinite; }
+.duel .side.done .st { color: var(--good); }
+.duel .act { overflow: hidden; text-overflow: ellipsis; min-width: 0; color: var(--text2); }
+.duel .mid { align-self: start; text-align: center; background: rgba(9,11,15,.9); border-radius: 10px; padding: 10px 18px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.45); }
+.duel:not(.n2) .mid { grid-column: span 1; }
+.duel .yr { font: 800 26px/1 var(--display); color: var(--gold); white-space: nowrap; }
+.duel .tn { color: var(--text2); font-size: 14px; margin-top: 4px; white-space: nowrap; }
+.duel .left { color: var(--live); font-weight: 800; font-size: 14px; margin-top: 3px; white-space: nowrap; }
+.meter { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text2); flex: 1; min-width: 0; }
+.meter .ml { white-space: nowrap; }
+.meter .track { position: relative; flex: 1; min-width: 40px; height: 7px; background: #2a2f38; border-radius: 4px; }
+.meter .track i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--a, var(--focus)); border-radius: 4px; }
+.meter .track b { position: absolute; left: 66.7%; top: -3px; bottom: -3px; width: 2px; background: #fff; opacity: .8; }
+.meter .mv { font-variant-numeric: tabular-nums; color: var(--text); min-width: 34px; text-align: right; }
+/* three seats or more: the civ moves to the stats line and the shares are numbers */
+.duel .cvb { display: none; }
+.duel:not(.n1):not(.n2) .cv { display: none; } .duel:not(.n1):not(.n2) .cvb { display: inline; color: var(--text); }
+.duel:not(.n1):not(.n2) .meter .track { display: none; } .duel:not(.n1):not(.n2) .meter { flex: none; }
+.duel:not(.n1):not(.n2) .meter .mv { min-width: 0; }
+body.stream.has-duel .chyron { top: calc(var(--duel-h, 130px) + 38px); }
+body.stream.has-duel .bubble { top: calc(var(--duel-h, 130px) + 40px); }
+body.stream.has-duel .clientpane:not(.big) { top: calc(var(--duel-h, 130px) + 40px); }
+@keyframes blink { 50% { opacity: .25; } }
+
+.moment .slab.story .big { font-size: 120px; } .moment .slab.story .big.long { font-size: 84px; }
+.moment .slab.story .what { margin: 0 0 16px; text-transform: none; font-size: 44px; }
+.moment.card-trade .pair .vs span { color: var(--gold); font-size: 100px; }
+.moment.card-trade .pair .civ { font-size: 26px; }
+.moment.card-contact .pair .vs span { color: #8fb4ff; }
+.moment.card-trade .meta, .moment.card-contact .meta { text-align: center; }
+.moment.card-race, .moment.card-recap { background: rgba(7,9,13,.94); padding: 0 120px; justify-content: safe center; }
+.race h1, .recap h1 { font: 900 84px/1 var(--display); font-stretch: condensed; text-transform: uppercase; margin: 0 0 8px; }
+.race h1 span, .recap h1 span { font: 600 30px/1 system-ui, sans-serif; color: var(--gold); text-transform: none; margin-left: 18px; }
+.race .how { color: var(--text2); font-size: 22px; margin: 0 0 26px; }
+.race .rrow { display: grid; grid-template-columns: 300px 120px 300px minmax(0, 1fr); grid-template-rows: auto auto; gap: 4px 28px;
+  align-items: center; padding: 18px 0 18px 22px; border-left: 8px solid var(--a); margin-bottom: 14px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--a) 18%, transparent), transparent 70%); }
+.race .rn b { display: block; font: 800 40px/1.05 var(--display); font-stretch: condensed; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.race .rn span { color: var(--text2); font-size: 18px; }
+.race .rs b { display: block; font: 900 52px/1 var(--display); font-variant-numeric: tabular-nums; } .race .rs span { color: var(--muted); font-size: 18px; }
+.race .spark { width: 300px; height: 60px; } .race .spark path { fill: none; stroke: var(--a); stroke-width: 3; vector-effect: non-scaling-stroke; }
+.race .rm { display: flex; flex-direction: column; gap: 10px; }
+.race .rm .meter { font-size: 20px; } .race .rm .meter .track { height: 12px; } .race .rm .meter .mv { min-width: 70px; }
+.race .rx { grid-column: 1 / -1; color: var(--text2); font-size: 18px; }
+.recap ul { list-style: none; padding: 0; margin: 26px 0 0; }
+.recap li { display: grid; grid-template-columns: 90px 150px minmax(0, 1fr); align-items: baseline; gap: 18px; padding: 12px 0 12px 18px;
+  border-left: 8px solid var(--a); margin-bottom: 10px; font-size: 30px; background: linear-gradient(90deg, color-mix(in srgb, var(--a) 14%, transparent), transparent 60%); }
+.recap .t { color: var(--muted); font-variant-numeric: tabular-nums; } .recap .k { color: var(--text2); font-weight: 800; text-transform: uppercase; font-size: 22px; }
+.recap .k.hot { color: #f6b3a4; } .recap .tx { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.moment.in .race .rrow, .moment.in .recap li { animation: slidein .5s cubic-bezier(.2,.8,.2,1) both; }
+@media (prefers-reduced-motion: reduce) { .duel .side.busy .st::before { animation: none; } }

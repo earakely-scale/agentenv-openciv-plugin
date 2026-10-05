@@ -290,6 +290,10 @@ async def test_a_new_game_sets_the_broadcast_the_live_data_carries(env):
     assert (await live_data(env))["live"]["broadcast"] == {"title": None, "casters": {}}
     await env.new_game(**MATCH)   # off unless the new game asks again
     assert (await live_data(env))["live"]["broadcast"] == {"title": None, "casters": None}
+    # the broadcast's names for the seats go on the viewer's players
+    await env.new_game(**MATCH, broadcast={"names": {"opus": "Opus 5.5"}})
+    players = {p["civ"]: p for p in (await live_data(env))["players"]}
+    assert players["Rome"]["name"] == "Opus 5.5" and "name" not in players["Greece"]
     with pytest.raises(ValueError, match="broadcast casters need two different names"):
         await env.new_game(broadcast={"casters": {"play_by_play": {"name": "Max"}, "analyst": {"name": "max"}}})
 
@@ -305,6 +309,9 @@ async def test_a_new_game_sets_the_broadcast_the_live_data_carries(env):
     ({"casters": {"analyst": {"name": "Iris", "pitch": "low"}}}, "broadcast casters analyst must be an object of"),
     ({"casters": {"play_by_play": {"voice": 3}}}, "broadcast casters play_by_play must be an object of"),
     ({"casters": {"analyst": {"name": "<b>Iris</b>"}}}, "broadcast casters analyst name must be 1-20 letters"),
+    ({"names": ["opus"]}, "broadcast names must map seat labels to names of 1-30 characters"),
+    ({"names": {"opus": ""}}, "broadcast names must map seat labels to names of 1-30 characters"),
+    ({"names": {"opus": "x" * 31}}, "broadcast names must map seat labels to names of 1-30 characters"),
 ])
 def test_broadcast_settings_reject_what_the_stream_cannot_use(value, error):
     with pytest.raises(ValueError, match=error):
@@ -320,3 +327,6 @@ def test_broadcast_settings_turn_the_casters_on_or_off():
                                                                  "play_by_play": {"name": "Rex O'Neil"}}}) == {
         "title": "Showmatch", "casters": {"tts_model": "openai/gpt-4o-mini-tts",
                                           "play_by_play": {"name": "Rex O'Neil"}}}
+    # the seats' names on screen and in the casters' mouths: by label
+    assert broadcast.settings({"names": {" opus ": " Opus 5.5 ", "sol": "GPT-6 Sol"}}) == {
+        "title": None, "casters": None, "names": {"opus": "Opus 5.5", "sol": "GPT-6 Sol"}}

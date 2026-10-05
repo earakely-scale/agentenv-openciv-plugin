@@ -456,6 +456,60 @@ def test_a_lead_change_is_called_once_the_new_leader_still_leads(fake):
     assert "from claude-opus" not in said   # it wasn't leading: it was level
 
 
+def test_the_later_games_stories_and_the_race(fake):
+    """A model's wonder, a landing on a model's land, the two models meeting and trading are called; an AI's new era,
+    upgrades and contacts are not. The DATA has the year, each civ's share of land and people, culture and wonders,
+    the race to each victory, and the broadcast's names for the seats."""
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.players[1]["name"] = "Opus 5.5"
+    fake.players.append({"index": 3, "civ": "Egypt", "label": None, "barbarian": False, "seat": None})
+    race = {"1": {"land": 0.31, "pop": 0.42, "culture": 12500, "city_culture": 4100, "wonders": 2, "era": 1},
+            "2": {"land": 0.2, "pop": 0.25, "culture": 900}, "3": {"land": 0.1, "pop": 0.1, "culture": 300}}
+
+    def later(turn: int, events=()) -> dict:
+        e = entry(turn, events=events, date="AD 1250", scores={"1": [40, 1, 3, 9, 2, 0], "2": [30, 1, 2, 7, 1, 0],
+                                                                 "3": [20, 1, 1, 3, 1, 0]})
+        for i, more in race.items():
+            e["stats"].setdefault(i, {"gold": 5, "government": "Despotism", "research": None, "at_war": []})
+            e["stats"][i].update(more)
+        return e
+
+    fake.start([later(1)], turn=1)
+    c.tick()
+    fake.turns.append(later(2, [
+        event("wonder_built", 1, "Opus 5.5 completed The Pyramids in Roma", x=10, y=12, wonder="The Pyramids"),
+        event("contact", 1, "First contact: Opus 5.5 meets gpt-sol", **{"from": 2}),
+        event("contact", 2, "First contact: gpt-sol meets Egypt", **{"from": 3}),
+        event("landing", 3, "Egypt landed 2 units from the sea in gpt-sol's land", x=30, y=9, **{"from": 2}),
+        event("era_entered", 3, "Egypt enters the Middle Ages"),
+        event("units_upgraded", 3, "Egypt upgraded 3 Warrior to Swordsman", x=1, y=1)]))
+    fake.live["turn"] = 2
+    until_quiet(c, clock)
+    c.tick()
+    said = fake.prompts[-1].split("NOW\n")[1]
+    for news in ("The Pyramids", "Opus 5.5 meets gpt-sol", "Egypt landed 2 units"):
+        assert news in said, news
+    for chatter in ("gpt-sol meets Egypt", "Egypt enters", "Egypt upgraded"):
+        assert chatter not in said, chatter
+    # an AI's era, upgrades and contacts are never news; a model's are
+    news = {x.text: c.newsworthy(x) for x in c.moments_of(fake.turns[-1], clock.now)}
+    assert [t for t, ok in news.items() if not ok] == [
+        "turn 2: First contact: gpt-sol meets Egypt", "turn 2: Egypt enters the Middle Ages",
+        "turn 2: Egypt upgraded 3 Warrior to Swordsman"], news
+    seat_era = c.moments_of(later(3, [event("era_entered", 1, "Opus 5.5 enters the Middle Ages"),
+                                      event("trade", 1, "Opus 5.5 traded Currency to gpt-sol for 40 gold",
+                                            **{"from": 2})]), clock.now)
+    assert all(c.newsworthy(x) for x in seat_era)
+    data = fake.prompts[-1]
+    assert "Turn 2 of 50, the year AD 1250" in data and "Opus 5.5 (Rome)" in data and "claude-opus" not in data
+    assert "31% of the land and 42% of the people; 12,500 culture; 2 great wonders" in data
+    assert ("The race: domination needs 67% of the land and of the people; nearest Opus 5.5 (Rome) with 31% and 42%; "
+            "a cultural victory needs 100,000 culture and twice the next civ's, or 20,000 in one city: top "
+            "Opus 5.5 (Rome) with 12,500, best city Opus 5.5 (Rome)'s with 4,100; 48 turns left") in data
+    assert c.match.civ_named("opus 5.5") == "Rome"
+
+
 def test_the_casters_never_say_what_the_env_masks(fake):
     clock = Clock()
     c = new_caster(fake, clock)

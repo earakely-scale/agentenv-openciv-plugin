@@ -132,6 +132,109 @@ def test_wars_and_captures_are_key_moments(game):
     assert not {"war_declared", "city_captured"} & {e["kind"] for _, e in r.moments(1, 11)}
 
 
+def later_game(snaps: list[dict]) -> list[dict]:
+    """The game with what the later game brings (the snapshot's newer fields): the year, culture, eras and shares;
+    Rome meets Greece on T3, enters the Middle Ages and builds the Pyramids in Veii on T4, trades with Greece on T5,
+    upgrades its Warrior on T4, and lands its Worker from a ship in Greece's land on T6."""
+    snaps = at_war(snaps)
+    greek = next(r for r in snaps[-1]["tiles"] if r[2] not in ("ocean", "sea", "coast") and r[4] == 1)
+    sea = next(r for r in snaps[-1]["tiles"] if r[2] in ("ocean", "sea", "coast"))
+    wild = next(r for r in snaps[-1]["tiles"] if r[2] not in ("ocean", "sea", "coast") and r[4] == -1)
+    for s in snaps:
+        t = s["turn"]
+        s["date"] = f"{4000 - 50 * t} BC"
+        for p in s["players"]:
+            if p["index"] < 2:
+                p["contacts"] = [1 - p["index"]] if t >= 3 else []
+            p.update(culture=10 * t, era=int(p["index"] == 0 and t >= 4), land=0.1, pop=0.2)
+        for c in s["cities"]:
+            c["wonders"] = ["The Pyramids"] if c["name"] == "Veii" and t >= 4 else []
+        for u in s["units"]:
+            if u["id"] == 4 and t >= 4:
+                u["type"] = "Spearman"
+            if u["id"] == 2:   # at sea aboard a ship on T5, ashore in Greece on T6: a landing
+                u["aboard"] = "ship-9" if t == 5 else None
+                if t == 5:
+                    u["x"], u["y"] = sea[0], sea[1]
+                if t == 6:
+                    u["x"], u["y"] = greek[0], greek[1]
+            if u["id"] == 4 and t in (2, 3):   # aboard in port (a ship that never sailed) then off it: no landing
+                u["aboard"] = "ship-8" if t == 2 else None
+                if t == 3:
+                    u["x"], u["y"] = wild[0], wild[1]
+        trade = {"seq": 40, "turn": 5, "a": 0, "b": 1, "a_gave": "Bronze Working", "b_gave": "60 gold"}
+        s["trades"] = [trade] if t == 5 else []
+    return snaps
+
+
+def test_the_later_games_stories_are_events_for_every_civ(game):
+    m = MatchData.from_snapshots(later_game(game), names={"opus": "Opus 5.5"})
+    events = {(t["turn"], e["kind"]): e for t in m.turns for e in t["events"]}
+    assert events[(3, "contact")]["text"] == "First contact: Opus 5.5 meets sol"
+    assert events[(4, "era_entered")]["text"] == "Opus 5.5 enters the Middle Ages"
+    assert events[(4, "wonder_built")] | {"source": None} == {
+        "kind": "wonder_built", "owner": 0, "text": "Opus 5.5 completed The Pyramids in Veii", "source": None,
+        "wonder": "The Pyramids", "city": "Veii", "x": 16, "y": 12}
+    assert events[(4, "units_upgraded")]["text"] == "Opus 5.5 upgraded 1 Warrior to Spearman"
+    assert events[(5, "trade")]["text"] == "Opus 5.5 traded Bronze Working to sol for 60 gold"
+    assert events[(5, "trade")]["from"] == 1 and events[(5, "trade")]["got"] == "60 gold"
+    landing = events[(6, "landing")]
+    assert landing["text"] == "Opus 5.5 landed 1 unit from the sea in sol's land" and landing["from"] == 1
+    # each once: the wonder stays built, the era entered and the contact made
+    kinds = [(t["turn"], e["kind"]) for t in m.turns for e in t["events"]]
+    for kind in ("wonder_built", "era_entered", "contact", "trade", "landing", "units_upgraded"):
+        assert sum(k == kind for _, k in kinds) == 1, kind
+    last = m.turns[-1]
+    assert last["date"] == "3700 BC"
+    rome = last["stats"]["0"]
+    military = sum(1 for u in game[-1]["units"] if u["owner"] == 0 and u["type"] not in ("Worker", "Settler"))
+    assert {k: rome[k] for k in ("culture", "era", "land", "pop", "military", "wonders")} == {
+        "culture": 60, "era": 1, "land": 0.1, "pop": 0.2, "military": military, "wonders": 1}
+    assert m.players[0]["name"] == "Opus 5.5" and "name" not in m.players[1]
+
+
+def test_a_city_named_like_one_its_civ_lost_is_a_new_city(game):
+    """Greece loses Athens to Rome on T4 and founds a new Athens on T5: one capture and one founding, and nothing more
+    the turns after (cities are told apart by id, not by name)."""
+    snaps = copy.deepcopy(game)
+    for s in snaps:
+        for c in s["cities"]:
+            if c["name"] == "Athens" and s["turn"] >= 4:
+                c["owner"] = 0
+        if s["turn"] >= 5:
+            s["cities"].append({"id": 777, "x": 22, "y": 8, "name": "Athens", "owner": 1, "size": 1, "capital": False,
+                                "production": "Warrior", "era": 0, "walls": False})
+    m = MatchData.from_snapshots(snaps)
+    athens = [(t["turn"], e["kind"]) for t in m.turns for e in t["events"] if "Athens" in e.get("text", "")]
+    assert athens == [(4, "city_captured"), (5, "city_founded")]
+
+
+def test_a_game_from_an_older_bridge_does_not_announce_the_wonders_it_has(game):
+    """Snapshots without `wonders` up to T3 (a game begun on an older bridge), with them from T4: the Pyramids already
+    built aren't news on T4; the Colossus, new on T5, is."""
+    snaps = copy.deepcopy(game)
+    for s in snaps:
+        for c in s["cities"]:
+            c.pop("wonders", None)
+            if s["turn"] >= 4:
+                c["wonders"] = ["The Pyramids"] if c["name"] == "Veii" else []
+            if s["turn"] >= 5 and c["name"] == "Rome":
+                c["wonders"] = ["The Colossus"]
+    m = MatchData.from_snapshots(snaps)
+    assert [(t["turn"], e["wonder"]) for t in m.turns for e in t["events"] if e["kind"] == "wonder_built"] == [
+        (5, "The Colossus")]
+
+
+def test_older_snapshots_keep_the_bridges_contact_events(game):
+    snaps = copy.deepcopy(game)
+    for s in snaps:
+        for p in s["players"]:
+            p.pop("contacts", None)
+        s["events"] = [{"kind": "contact", "text": "met Greece"}] if s["turn"] == 2 else []
+    m = MatchData.from_snapshots(snaps)
+    assert [(t["turn"], e["kind"]) for t in m.turns for e in t["events"] if e["kind"] == "contact"] == [(2, "contact")]
+
+
 def test_the_agent_view_hides_unexplored_tiles(game):
     doc = doc_of(game)
     spectator, agent = Renderer(doc), Renderer(doc, view="agent")
