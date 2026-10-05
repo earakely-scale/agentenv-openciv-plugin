@@ -199,11 +199,34 @@ upgrades or a civ's first cities), the agents' messages and notes, analysis when
 wars, plans, who is still thinking, the race to each victory, wonders and culture), and the outro at GAME OVER, which
 fits in the default minute of `--linger`. Their data has the year, each civ's shares of the land and of the people,
 culture and great wonders, and who is nearest domination and a cultural victory; seats go by the broadcast's `names`
-when it has them. A beat is one call to
-the task's caster `model` (default `anthropic/claude-haiku-4-5`) that returns one to three lines, and each line is
-voiced by its `tts_model` (default `openai/gpt-4o-mini-tts`) in its caster's voice and levelled to the same loudness. It paces itself to the audio: the next beat is written so that it lands as
-the last one ends, so the talk runs on without piling up. The endpoint is agent-env's `[model]`; a failed call skips
-a beat, and a line whose voice failed is still captioned. The stream is public, so the casters are told to keep it
+when it has them.
+
+Each caster is an agent: a beat's subject is picked as above, and its lines are written one at a time,
+alternating, each by its own caster's call that sees the line before it, so the two talk to each other rather than
+taking turns at a script. Before it speaks, a caster may look the match up with tools that answer from the same data:
+`standings` (now or at an earlier turn), `civ` (one civ in depth: its score and rank now and 10, 25 and 50 turns ago,
+cities, army by unit type, wars, record, plan, notes, messages and tool calls), `trend` (a stat over the game and
+its change), `events` (by kind, civ and turns), `battles` (wins and losses, the unit types that won, cities taken,
+of one civ or two with each other), `diplomacy` (wars, peace, trades,
+contacts and messages, in order), `turn_now` (who is still thinking and what each seat has done so far), `city` (a
+city's story) and `said` (what the desk has already said, for callbacks); it speaks with `say`. A lookup it gets
+wrong answers with an error it can read (a civ or city the game hasn't, the arguments the lookup takes), never stops
+the line. A live line looks
+things up a round at a time while the audio already queued outlasts one more round, the line and its voicing (by the
+running times of its calls; at most three rounds), then must speak: it is told it is out of time, and its last call
+forces `say` (or, for a model that turns a forced call down, asks for it). Breaking
+news (an elimination, a city taken or razed, a war) cuts into a beat under way, and a line that asks the other caster
+a question gets its answer, up to four lines a beat. In the background, every 45 s at most and once a turn, the analyst
+researches the game with the same tools and jots talking points into a notebook both casters see, each for two beats
+or 15 turns. The casters' calls use the task's caster `model` (default `anthropic/claude-haiku-4-5`), or a caster's
+own (`play_by_play.model`, `analyst.model`: say, a fast model for the play-by-play and a stronger one for the
+analysis); a model the endpoint turns tool calls down for writes its lines from the data alone, as before, and does
+no research. Each line is
+voiced by the `tts_model` (default `openai/gpt-4o-mini-tts`) in its caster's voice, levelled to the same loudness, and
+published at once, so the page plays it while the next is written. It paces itself to the audio: the next line is
+written so that it lands as the last one ends, so the talk runs on without piling up. The endpoint is agent-env's
+`[model]`; a failed call is retried after 5 s (a beat whose lines fail three times in a row ends where it got to; one that said nothing leaves its news and the intro for the next, and its subject, if analysis, gives way to another),
+and a line whose voice failed is still captioned. The stream is public, so the casters are told to keep it
 clean and to paraphrase a rude message rather than quote it, and a word on the env's blocklist, or one it masked
 (`s***`), is said and captioned as "bleep" if a line has one anyway. The page (`?stream&cast=<caster URL>`) polls
 `/cast.json?since=<id>` for new lines (`speaker`, `name`, `text`, `audio`, `seconds`, `turn`, `focus`, `kind`) and

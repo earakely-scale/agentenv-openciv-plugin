@@ -1,5 +1,7 @@
-"""The casters (streamer/caster.py) against a fake match and a fake LiteLLM: what they say and when, how they pace
-themselves to their audio, what they serve the stream page, and that failures neither stop them nor print the key."""
+"""The casters (streamer/caster.py) against a fake match and a fake LiteLLM that speaks the tool-calling protocol:
+what they say and when, a line at a time, how each caster looks the match up before it speaks and the analyst
+researches in the background, how they pace themselves to their audio, what they serve the stream page, and that
+failures neither stop them nor print the key."""
 
 import array
 import codecs
@@ -57,6 +59,23 @@ def event(kind: str, owner: int, text: str, **at) -> dict:
     return {"kind": kind, "owner": owner, "text": text, "source": "derived", **at}
 
 
+def say(text: str, focus=None, ident: str = "call_say") -> dict:
+    """A reply that speaks a line."""
+    return calls(("say", {"text": text, "focus": focus}), ident=ident)
+
+
+def calls(*made, ident: str = "call") -> dict:
+    """A reply with tool calls: (name, arguments) each, the arguments an object or the raw JSON text."""
+    return {"role": "assistant", "content": None, "tool_calls": [
+        {"id": f"{ident}_{n}", "type": "function",
+         "function": {"name": name, "arguments": args if isinstance(args, str) else json.dumps(args)}}
+        for n, (name, args) in enumerate(made)]}
+
+
+def tools_of(body: dict) -> set[str]:
+    return {t["function"]["name"] for t in body.get("tools") or ()}
+
+
 class Fake:
     """One server for both: the env's match data (GET /live/data.json) and LiteLLM (chat and speech)."""
 
@@ -64,17 +83,23 @@ class Fake:
         self.players = [{"index": 0, "civ": "Barbarians", "label": None, "barbarian": True, "seat": None},
                         {"index": 1, "civ": "Rome", "label": "claude-opus", "barbarian": False, "seat": 0},
                         {"index": 2, "civ": "Greece", "label": "gpt-sol", "barbarian": False, "seat": 1}]
+        self.meta = {"turn_limit": 50, "unit_types": ["Warrior", "Settler"], "civilian": ["Settler"],
+                     "victory": None}
         self.game: str | None = None
         self.turns: list[dict] = []
         self.live: dict = {"turn": None, "game_over": False, "victory": None, "seats": []}
         self.data_down = False
-        self.prompts: list[str] = []
-        self.chats: list[dict] = []
-        self.analyst = "Ada"
+        self.prompts: list[str] = []   # the user prompt of each line's first call (and each research session's)
+        self.chats: list[dict] = []    # every chat request
         self.auth: list[str] = []
         self.speech: list[dict] = []
         self.chat_failures = self.speech_failures = 0
-        self.content: str | None = None    # the chat reply's text; default: lines in the order asked for
+        self.reject_tools = False      # an endpoint that turns tool calls down
+        self.reject_forced = False     # one that takes tools, but not a forced call
+        self.bad_requests: list[bytes] = []   # 400s to give first, in order
+        self.script: list = []         # replies (or functions of the request) to give first, in order
+        self.content: str | None = None    # a plain-text reply instead of a say call
+        self.said = 0
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self.handler())
         self.url = f"http://127.0.0.1:{self.server.server_port}"
 
@@ -82,22 +107,27 @@ class Fake:
         self.game, self.turns = "g-1", turns
         self.live = {"turn": turn, "game_over": False, "victory": None, "seats": [
             {"civ": "Rome", "label": "claude-opus", "ended": False, "seconds": 41.2, "calls": {"ok": 3, "failed": 1},
-             "actions": []},
+             "actions": [{"text": "c1 builds Settler", "ok": True}, {"text": "u4 settle", "ok": False}]},
             {"civ": "Greece", "label": "gpt-sol", "ended": True, "seconds": 9.0, "calls": {"ok": 7, "failed": 0},
              "actions": []}], **live}
 
-    def chat(self, body: dict) -> str:
-        prompt = body["messages"][1]["content"]
-        self.prompts.append(prompt)
+    def chat(self, body: dict) -> dict:
         self.chats.append(body)
+        messages = body["messages"]
+        if len(messages) == 2:
+            self.prompts.append(messages[1]["content"])
+        if self.script:
+            step = self.script.pop(0)
+            return step(body) if callable(step) else step
         if self.content is not None:
-            return self.content
-        count = int(prompt.rsplit("Write ", 1)[1].split()[0])
-        first = caster.COLOR if f"{self.analyst} first" in prompt else caster.PBP
-        other = caster.PBP if first == caster.COLOR else caster.COLOR
-        lines = [{"speaker": first if i % 2 == 0 else other, "text": f"Line {len(self.prompts)}.{i}: Rome leads.",
-                  "focus": "claude-opus" if i == 0 else "Atlantis"} for i in range(count)]
-        return f"```json\n{json.dumps({'lines': lines})}\n```"
+            return {"role": "assistant", "content": self.content}
+        if "jot" in tools_of(body):
+            return {"role": "assistant", "content": "Nothing worth jotting."}
+        self.said += 1
+        text, focus = f"Line {self.said}: Rome leads.", "claude-opus" if self.said % 2 else "Atlantis"
+        if "tools" not in body:
+            return {"role": "assistant", "content": json.dumps({"text": text, "focus": focus})}
+        return say(text, focus)
 
     def handler(self):
         fake = self
@@ -108,9 +138,7 @@ class Fake:
                     return self.reply(503, b"down", "text/plain")
                 since = int(self.path.split("since=")[1])
                 doc = {"schema": 1, "game": fake.game, "players": fake.players if fake.game else [],
-                       "meta": {"turn_limit": 50, "unit_types": ["Warrior", "Settler"], "civilian": ["Settler"],
-                                "victory": None},
-                       "turns": [t for t in fake.turns if t["turn"] > since], "live": fake.live}
+                       "meta": fake.meta, "turns": [t for t in fake.turns if t["turn"] > since], "live": fake.live}
                 self.reply(200, json.dumps(doc).encode(), "application/json")
 
             def do_POST(self):
@@ -120,7 +148,17 @@ class Fake:
                     if fake.chat_failures:
                         fake.chat_failures -= 1
                         return self.reply(500, f"bad key {KEY}".encode(), "text/plain")
-                    reply = {"choices": [{"message": {"role": "assistant", "content": fake.chat(body)}}]}
+                    if fake.bad_requests:
+                        fake.chats.append(body)
+                        return self.reply(400, fake.bad_requests.pop(0), "text/plain")
+                    if fake.reject_tools and "tools" in body:
+                        fake.chats.append(body)
+                        return self.reply(400, b'{"error": "this model does not support tools"}', "text/plain")
+                    if fake.reject_forced and "tool_choice" in body:
+                        fake.chats.append(body)
+                        return self.reply(400, b'{"error": "tool_choice is not supported with thinking"}',
+                                          "text/plain")
+                    reply = {"choices": [{"message": fake.chat(body), "finish_reason": "stop"}]}
                     return self.reply(200, json.dumps(reply).encode(), "application/json")
                 fake.speech.append(body)
                 if fake.speech_failures:
@@ -150,6 +188,8 @@ def fake():
     f.server.shutdown()
 
 
+SPEAKERS = (caster.PBP, caster.COLOR)
+
 class Clock:
     def __init__(self):
         self.now = 1_000_000.0
@@ -164,8 +204,23 @@ def new_caster(fake: Fake, clock: Clock, **kw):
 
 
 def until_quiet(c, clock: Clock) -> None:
-    """Moves the clock to when the next beat is due: less than LEAD_SECONDS of speech left."""
+    """Moves the clock to when the next line is due: less than LEAD_SECONDS of speech left."""
     clock.now = max(clock.now + caster.POLL_SECONDS, c.speaking_until - caster.LEAD_SECONDS + 0.1)
+
+
+def beat(c, clock: Clock) -> list[dict]:
+    """Runs the beat under way, or the next one, to its end; returns the lines it said."""
+    said = len(c.lines)
+    for _ in range(caster.MAX_LINES + 1):
+        until_quiet(c, clock)
+        c.tick()
+        if c.beat is not None and c.beat.done and len(c.lines) > said:
+            break
+    return c.lines[said:]
+
+
+def now_part(prompt: str) -> str:
+    return prompt.split("NOW\n")[1]
 
 
 def test_the_casters_open_call_the_events_and_sign_off(fake):
@@ -175,19 +230,25 @@ def test_the_casters_open_call_the_events_and_sign_off(fake):
     assert c.lines == [] and fake.prompts == []   # no game yet
 
     fake.start([entry(1), entry(2)], turn=2)
-    until_quiet(c, clock)
-    c.tick()
-    intro = c.lines
+    intro = beat(c, clock)
     assert [line["kind"] for line in intro] == ["intro"] * 3
     assert [(line["speaker"], line["name"]) for line in intro] == [("pbp", "Max"), ("color", "Ada"), ("pbp", "Max")]
-    assert intro[0] == {"id": 1, "speaker": "pbp", "name": "Max", "text": "Line 1.0: Rome leads.",
+    assert intro[0] == {"id": 1, "speaker": "pbp", "name": "Max", "text": "Line 1: Rome leads.",
                         "audio": "audio/1.wav", "seconds": WAV_SECONDS, "turn": 2, "focus": "Rome", "kind": "intro"}
     assert intro[1]["focus"] is None   # not a civ in this game
-    prompt = fake.prompts[0]
-    assert '"Battle of the Labs"' in prompt and "claude-opus (Rome), gpt-sol (Greece)" in prompt
-    assert "1. claude-opus (Rome): 40" in prompt and "1300 gold" in prompt and "2 military units" in prompt
-    assert "still thinking, 41 s so far; 4 tool calls, 1 failed" in prompt
-    assert sorted(s["voice"] for s in fake.speech) == ["ash", "ash", "sage"]   # voiced in parallel
+    first, second, third = fake.prompts[:3]
+    assert '"Battle of the Labs"' in first and "claude-opus (Rome), gpt-sol (Greece)" in first
+    assert "1. claude-opus (Rome): 40" in first and "1300 gold" in first and "2 military units" in first
+    assert "still thinking, 41 s so far; 4 tool calls, 1 failed" in first
+    assert "YOUR LINE: you are Max, line 1 of 3, 6 to 16 words. You open this exchange." in first
+    # a line at a time, each caster answering the other's actual line
+    assert 'YOUR LINE: you are Ada, line 2 of 3, at most 22 words. Max just said: "Line 1: Rome leads."' in second
+    assert 'Ada just said: "Line 2: Rome leads."\nYours is the last line of this exchange: answer Ada' in third
+    systems = [b["messages"][0]["content"] for b in fake.chats[:3]]
+    assert systems[0].startswith("You are Max, the play-by-play caster") and systems[0] == systems[2]
+    assert systems[1].startswith("You are Ada, the colour analyst caster")
+    assert all(tools_of(b) == {"say"} for b in fake.chats[:3])   # the opening: nothing queued, it must speak
+    assert [s["voice"] for s in fake.speech] == ["ash", "sage", "ash"]
     assert {s["response_format"] for s in fake.speech} == {"wav"}
     assert set(fake.auth) == {f"Bearer {KEY}"}
 
@@ -196,27 +257,28 @@ def test_the_casters_open_call_the_events_and_sign_off(fake):
         event("city_captured", 1, "claude-opus took Athens from gpt-sol", x=30, y=8, **{"from": 2}),
         event("tech_learned", 2, "gpt-sol learned Pottery")]))
     fake.live["turn"] = 3
-    until_quiet(c, clock)
-    c.tick()
-    calls = fake.prompts[-1].split("NOW\n")[1]
-    assert [line["kind"] for line in c.lines[3:]] == ["event"] * 3
-    assert calls.index("claude-opus took Athens from gpt-sol (size 2)") < calls.index("are at war")
-    assert "Pottery" not in calls   # not worth a call, but in the DATA
-    assert "gpt-sol learned Pottery" in fake.prompts[-1]
-    assert "at war with gpt-sol (Greece) since turn 3" in fake.prompts[-1]
+    asked = len(fake.prompts)
+    called = beat(c, clock)
+    said = now_part(fake.prompts[asked])
+    assert [line["kind"] for line in called] == ["event"] * 3
+    assert said.index("claude-opus took Athens from gpt-sol (size 2)") < said.index("are at war")
+    assert "Pottery" not in said   # not worth a call, but in the DATA
+    assert "gpt-sol learned Pottery" in fake.prompts[asked]
+    assert "at war with gpt-sol (Greece) since turn 3" in fake.prompts[asked]
 
-    until_quiet(c, clock)
-    c.tick()
-    assert c.lines[-1]["kind"] == "color"   # the events were called once
-    assert "Ada first" in fake.prompts[-1] and "The angle: the race at the top" in fake.prompts[-1]
-    assert "Line 2.0: Rome leads." in fake.prompts[-1].split("RECENT LINES")[1]   # it remembers what it said
+    asked = len(fake.prompts)
+    assert [line["kind"] for line in beat(c, clock)] == ["color"] * 2   # the events were called once
+    assert "you are Ada, line 1 of 2, at most 22 words" in fake.prompts[asked]
+    assert "The angle: the race at the top" in fake.prompts[asked]
+    assert "Line 4: Rome leads." in fake.prompts[asked].split("RECENT LINES")[1]   # it remembers what it said
 
     fake.turns.append(entry(4, scores={"1": [61, 2, 5, 12, 3, 0], "2": [20, 0, 0, 0, 1, 1]}))
     fake.live.update(turn=4, game_over=True)
     clock.now += caster.POLL_SECONDS
-    assert c.speaking_until - clock.now > caster.LEAD_SECONDS
-    c.tick()
-    assert c.lines[-1]["kind"] == "outro"   # at once: the stream ends a minute after GAME OVER
+    for _ in range(3):
+        c.tick()   # at once, line after line: the stream ends a minute after GAME OVER
+    assert [line["kind"] for line in c.lines[-3:]] == ["outro"] * 3 and c.finished
+    assert c.speaking_until - clock.now > caster.LEAD_SECONDS + 2 * WAV_SECONDS   # however much was queued
     assert "The game is over: turn 4: claude-opus (Rome) wins on score with 61, ahead of gpt-sol (Greece) on 20" in (
         fake.prompts[-1])
     said = len(c.lines)
@@ -229,29 +291,34 @@ def test_the_casters_open_call_the_events_and_sign_off(fake):
 def test_the_task_names_the_casters_their_voices_and_models(fake):
     clock = Clock()
     config = {"model": "openai/gpt-5.6-luna", "tts_model": "openai/tts-2", "play_by_play": {"name": "Rex"},
-              "analyst": {"name": "Iris", "voice": "coral", "style": "A dry, unhurried analyst."}}
+              "analyst": {"name": "Iris", "voice": "coral", "style": "A dry, unhurried analyst.",
+                          "model": "anthropic/claude-sonnet-5-5"}}
     casters = caster.casters_of(config)
     assert casters == {"pbp": ("Rex", "ash", caster.CASTERS["pbp"][2]),
                        "color": ("Iris", "coral", "A dry, unhurried analyst.")}
     assert caster.casters_of({}) == caster.CASTERS
-    fake.analyst = "Iris"
+    models = caster.models_of(config)
+    assert models == {"pbp": "openai/gpt-5.6-luna", "color": "anthropic/claude-sonnet-5-5"}
+    assert caster.models_of({}) == {"pbp": caster.MODEL, "color": caster.MODEL}
     c = caster.Caster(f"{fake.url}/live", fake.url, KEY, model="openai/gpt-5.6-luna", tts_model="openai/tts-2",
-                      casters=casters, clock=clock)
+                      casters=casters, models=models, clock=clock)
     fake.start([entry(1)], turn=1)
-    c.tick()
-    until_quiet(c, clock)
-    c.tick()
+    beat(c, clock)
+    beat(c, clock)
     assert [(line["speaker"], line["name"]) for line in c.lines] == [
         ("pbp", "Rex"), ("color", "Iris"), ("pbp", "Rex"), ("color", "Iris"), ("pbp", "Rex")]
-    system = fake.chats[0]["messages"][0]["content"]
-    assert "- Rex, play-by-play" in system and "- Iris, colour analyst" in system
-    assert 'Rex says "Iris", Iris says "Rex"' in system and not re.search(r"\b(Max|Ada)\b", system)
-    assert "Rex welcomes everyone" in fake.prompts[0] and "Iris opens with a sharp observation" in fake.prompts[1]
-    assert {b["model"] for b in fake.chats} == {"openai/gpt-5.6-luna"}
+    pbp, analyst = (b["messages"][0]["content"] for b in fake.chats[:2])
+    for system in (pbp, analyst):
+        assert "- Rex, play-by-play" in system and "- Iris, colour analyst" in system
+        assert 'Rex says "Iris", Iris says "Rex"' in system and not re.search(r"\b(Max|Ada)\b", system)
+    assert pbp.startswith("You are Rex,") and analyst.startswith("You are Iris,")
+    assert "Rex welcomes everyone" in fake.prompts[0] and "Iris opens with a sharp observation" in fake.prompts[3]
+    assert [b["model"] for b in fake.chats] == ["openai/gpt-5.6-luna", "anthropic/claude-sonnet-5-5"] * 2 + [
+        "openai/gpt-5.6-luna"]   # each writes its own lines
     assert not any("temperature" in b for b in fake.chats)   # some models take only their own
     assert {s["model"] for s in fake.speech} == {"openai/tts-2"}
-    assert sorted((s["voice"], s["instructions"]) for s in fake.speech)[0] == ("ash", caster.CASTERS["pbp"][2])
-    assert {s["instructions"] for s in fake.speech if s["voice"] == "coral"} == {"A dry, unhurried analyst."}
+    assert [(s["voice"], s["instructions"]) for s in fake.speech[:2]] == [
+        ("ash", caster.CASTERS["pbp"][2]), ("coral", "A dry, unhurried analyst.")]
     reply = json.dumps({"lines": [{"speaker": "Iris", "text": "Iris: Rome leads, Iris.", "focus": None},
                                   {"speaker": "Max", "text": "Not a caster here."}]})
     assert [(line["speaker"], line["text"]) for line in caster.parse_lines(reply, c.match, casters)] == [
@@ -263,24 +330,31 @@ def test_the_casters_pace_themselves_to_their_audio(fake):
     c = new_caster(fake, clock)
     fake.start([entry(1)], turn=1)
     c.tick()
-    assert len(fake.prompts) == 1
-    assert c.speaking_until == pytest.approx(clock.now + 3 * (WAV_SECONDS + caster.GAP_SECONDS))
-    clock.now = c.speaking_until - caster.LEAD_SECONDS - 1
+    assert len(fake.prompts) == 1 and len(c.lines) == 1   # the page plays the first line as the next is written
+    assert c.speaking_until == pytest.approx(clock.now + WAV_SECONDS + caster.GAP_SECONDS)
     c.tick()
-    assert len(fake.prompts) == 1   # plenty is queued
-    clock.now = c.speaking_until - caster.LEAD_SECONDS + 0.5
+    assert len(c.lines) == 2   # due at once: less than LEAD_SECONDS of speech left
+    assert c.speaking_until == pytest.approx(clock.now + 2 * (WAV_SECONDS + caster.GAP_SECONDS))
+    c.tick()
+    assert len(c.lines) == 2   # plenty is queued
+    clock.now = c.speaking_until - caster.LEAD_SECONDS - 0.5
     c.tick()
     assert len(fake.prompts) == 2
-    assert c.lines[3]["kind"] == "color"
-    assert c.speaking_until == pytest.approx(clock.now + caster.LEAD_SECONDS - 0.5
-                                             + 2 * (WAV_SECONDS + caster.GAP_SECONDS))
+    clock.now += 1
+    c.tick()
+    assert len(fake.prompts) == 3
+    assert c.speaking_until == pytest.approx(clock.now + caster.LEAD_SECONDS - 0.5 + WAV_SECONDS + caster.GAP_SECONDS)
+    c.writing_seconds = dict.fromkeys(SPEAKERS, 3)   # a line that takes 3 s to write and voice starts that early
+    clock.now = c.speaking_until - caster.LEAD_SECONDS - 2.5
+    c.tick()
+    assert len(fake.prompts) == 4 and c.lines[3]["kind"] == "color"
 
 
 def test_the_page_gets_the_lines_and_their_audio_from_anywhere(fake):
     clock = Clock()
     c = new_caster(fake, clock)
     fake.start([entry(1)], turn=1)
-    c.tick()
+    beat(c, clock)
     server = ThreadingHTTPServer(("127.0.0.1", 0), caster.handler(c))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{server.server_port}"
@@ -323,35 +397,36 @@ def test_failures_are_survived_and_the_key_is_never_printed(fake, capsys):
     assert len(fake.auth) == 1   # it waits before retrying
     clock.now += caster.RETRY_SECONDS
     fake.speech_failures = 3
-    c.tick()
+    for _ in range(3):
+        c.tick()
+        until_quiet(c, clock)
     assert [line["audio"] for line in c.lines] == [None, None, None]   # captions without a voice
     assert c.lines[0]["seconds"] == pytest.approx(4 / caster.WORDS_PER_SECOND)
 
-    fake.content = "Sorry, I can't help with that."
+    for junk in ("", '{"lines": [{"speaker": "narrator", "text": "Hi"}]}', '{"mood": "great"}', "Max: Not mine."):
+        fake.content = junk   # nothing at all (all of it spent thinking), nobody's line, no line, the other's line
+        until_quiet(c, clock)
+        c.tick()
+        clock.now += caster.RETRY_SECONDS
+    assert len(c.lines) == 3
+    assert c.beat.topic == "economy" and c.topics_used["race"]   # a beat that keeps failing gives way to the next
+    fake.content = None
+    fake.script = [say("   "), say("*nods*")]   # a say with nothing to say: the caster hears why and tries again
     until_quiet(c, clock)
     c.tick()
-    fake.content = '{"lines": [{"speaker": "narrator", "text": "Hi"}]}'
-    clock.now += caster.RETRY_SECONDS
-    c.tick()
-    assert len(c.lines) == 3
-    fake.content = ""   # all of it spent thinking
-    clock.now += caster.RETRY_SECONDS
-    c.tick()
-    assert len(c.lines) == 3
-    fake.content = None
-    clock.now += caster.RETRY_SECONDS
-    c.tick()
-    assert len(c.lines) == 5 and c.lines[3]["audio"] == "audio/4.wav"
+    assert len(c.lines) == 4 and c.lines[3]["audio"] == "audio/4.wav"
+    assert [m["content"].split("\n")[0] for m in fake.chats[-1]["messages"] if m["role"] == "tool"] == [
+        "error: an empty line; call say with your line as its text"] * 2
     fake.data_down = True   # the env is gone: nothing to talk about
     until_quiet(c, clock)
     c.tick()
-    assert len(c.lines) == 5
+    assert len(c.lines) == 4
     out = capsys.readouterr()
     printed = out.out + out.err
     assert printed.count("no match data") == 2   # once each time it goes away
     assert "HTTP 500 bad key <cast key>" in printed and "HTTP 429 slow down" in printed
-    assert "no JSON in the reply" in printed and "no lines in the reply" in printed
-    assert "the reply has no text (finish_reason None)" in printed
+    assert "the reply has no text (finish_reason stop)" in printed
+    assert "no line in the reply" in printed
     assert KEY not in printed
 
 
@@ -359,26 +434,26 @@ def test_messages_and_notes_are_read_out_between_the_analysis(fake):
     clock = Clock()
     c = new_caster(fake, clock)
     fake.start([entry(1)], turn=1)
-    c.tick()
+    beat(c, clock)
     fake.turns.append(entry(2, messages=[{"from": 1, "to": [2], "text": "Join me against Carthage, or you're next."}],
                             notes={"1": "Settling the river before Greece does."},
                             plans={"2": "Six cities by turn 40, then Monarchy."}))
     fake.live.update(turn=2, messages=[{"from": "Greece", "to": "all", "text": "Rome is lying.", "seconds": 3.1}])
     fake.live["seats"][1].update(note="Walls first.", plan="Walls, then Monarchy.", plan_turn=2)
-    kinds = []
+    kinds, firsts = [], []
     for _ in range(4):
-        until_quiet(c, clock)
-        c.tick()
-        kinds.append(c.lines[-1]["kind"])
+        firsts.append(len(fake.prompts))
+        kinds.append(beat(c, clock)[-1]["kind"])
     assert kinds == ["message", "color", "message", "color"]
-    said = fake.prompts[1].split("NOW\n")[1]
+    said = now_part(fake.prompts[firsts[0]])
     assert 'turn 1, claude-opus (Rome) to gpt-sol (Greece): "Join me against Carthage, or you\'re next."' in said
     assert 'turn 2, gpt-sol (Greece) to everyone: "Rome is lying."' in said
-    notes = fake.prompts[3].split("NOW\n")[1]
+    notes = now_part(fake.prompts[firsts[2]])
     assert 'gpt-sol (Greece), ending turn 2: "Walls first."' in notes
     assert 'claude-opus (Rome), ending turn 1: "Settling the river before Greece does."' in notes
-    assert 'plan (set turn 2): "Walls, then Monarchy."' in fake.prompts[3]
-    assert "The angle: the race at the top" in fake.prompts[2] and "The angle: the economy" in fake.prompts[4]
+    assert 'plan (set turn 2): "Walls, then Monarchy."' in fake.prompts[firsts[2]]
+    assert "The angle: the race at the top" in fake.prompts[firsts[1]]
+    assert "The angle: the economy" in fake.prompts[firsts[3]]
 
 
 def test_joining_a_game_under_way_calls_only_its_latest_moments(fake):
@@ -388,36 +463,32 @@ def test_joining_a_game_under_way_calls_only_its_latest_moments(fake):
                 *[entry(t) for t in range(3, 10)],
                 entry(10, events=[event("peace_signed", 1, "claude-opus and gpt-sol made peace", **{"from": 2})])],
                turn=10)
-    c.tick()
+    beat(c, clock)
     assert "We join at turn 10" in fake.prompts[0]
-    until_quiet(c, clock)
-    c.tick()
-    assert "made peace" in fake.prompts[1].split("NOW\n")[1] and "an old war" not in fake.prompts[1].split("NOW\n")[1]
+    beat(c, clock)
+    said = now_part(fake.prompts[3])
+    assert "made peace" in said and "an old war" not in said
 
 
 def test_like_events_are_called_together_and_old_news_is_dropped(fake):
     clock = Clock()
     c = new_caster(fake, clock)
     fake.start([entry(1)], turn=1)
-    c.tick()
+    beat(c, clock)
     founded = [event("city_founded", 1 + i % 2, f"city number {i} founded", x=i, y=i) for i in range(4)]
     fake.turns.append(entry(2, events=[*founded, event("war_declared", 1, "a war", **{"from": 2})]))
     fake.live["turn"] = 2
-    until_quiet(c, clock)
-    c.tick()
-    said = fake.prompts[-1].split("NOW\n")[1]
+    assert len(beat(c, clock)) == 3
+    said = now_part(fake.prompts[3])
     assert said.index("a war") < said.index("city number 0") and all(f"city number {i}" in said for i in range(4))
-    assert len(c.lines) == 3 + 3
 
     fake.turns.append(entry(3, events=[event("peace_signed", 1, "a quick peace", **{"from": 2})]))
     fake.live["turn"] = 3
-    clock.now += caster.POLL_SECONDS
-    c.tick()   # seen, but too much is queued to call it
+    c.poll()   # seen, but not called before it is old news
     fake.turns += [entry(t) for t in range(4, 8)]
     fake.live["turn"] = 7
-    until_quiet(c, clock)
-    c.tick()
-    assert c.lines[-1]["kind"] == "color" and "a quick peace" not in fake.prompts[-1].split("NOW\n")[1]
+    asked = len(fake.prompts)
+    assert beat(c, clock)[0]["kind"] == "color" and "a quick peace" not in now_part(fake.prompts[asked])
 
 
 def test_a_lead_change_is_called_once_the_new_leader_still_leads(fake):
@@ -428,29 +499,28 @@ def test_a_lead_change_is_called_once_the_new_leader_still_leads(fake):
     fake.start([entry(6, scores=behind, events=[event("lead_change", 2, "gpt-sol takes the lead", **{"from": 1})]),
                 entry(7, scores=ahead, events=[event("lead_change", 1, "claude-opus takes it back", **{"from": 2})])],
                turn=7)
-    c.tick()
-    until_quiet(c, clock)
-    c.tick()
-    said = fake.prompts[1].split("NOW\n")[1]
+    beat(c, clock)
+    asked = len(fake.prompts)
+    beat(c, clock)
+    said = now_part(fake.prompts[asked])
     assert "turn 7: claude-opus (Rome) takes the lead from gpt-sol (Greece), 50 to 45" in said
     assert "gpt-sol (Greece) takes the lead" not in said
-    assert "Leader: claude-opus (Rome), on top since turn 7" in fake.prompts[1]
+    assert "Leader: claude-opus (Rome), on top since turn 7" in fake.prompts[asked]
 
     level = {"1": [50, 1, 3, 9, 2, 0], "2": [50, 1, 3, 9, 2, 0]}
     fake.turns.append(entry(8, scores=level, events=[event("lead_change", 2, "gpt-sol takes the lead", **{"from": 1})]))
     fake.live["turn"] = 8
-    until_quiet(c, clock)
-    c.tick()
-    assert c.lines[-1]["kind"] == "color"   # a tie is no lead change, whatever the data calls it
-    assert "No leader: claude-opus (Rome) and gpt-sol (Greece) are level on 50" in fake.prompts[2]
-    assert "takes the lead" not in fake.prompts[2]
+    asked = len(fake.prompts)
+    assert beat(c, clock)[0]["kind"] == "color"   # a tie is no lead change, whatever the data calls it
+    assert "No leader: claude-opus (Rome) and gpt-sol (Greece) are level on 50" in fake.prompts[asked]
+    assert "takes the lead" not in fake.prompts[asked]
 
     fake.turns.append(entry(9, scores={"1": [50, 1, 3, 9, 2, 0], "2": [55, 1, 3, 9, 2, 0]},
                             events=[event("lead_change", 2, "gpt-sol takes the lead from claude-opus", **{"from": 1})]))
     fake.live["turn"] = 9
-    until_quiet(c, clock)
-    c.tick()
-    said = fake.prompts[3].split("NOW\n")[1]
+    asked = len(fake.prompts)
+    beat(c, clock)
+    said = now_part(fake.prompts[asked])
     assert ("turn 9: gpt-sol (Greece) takes the lead on 55, after claude-opus (Rome) and gpt-sol (Greece) were level "
             "at the top on 50") in said
     assert "from claude-opus" not in said   # it wasn't leading: it was level
@@ -476,7 +546,7 @@ def test_the_later_games_stories_and_the_race(fake):
         return e
 
     fake.start([later(1)], turn=1)
-    c.tick()
+    beat(c, clock)
     fake.turns.append(later(2, [
         event("wonder_built", 1, "Opus 5.5 completed The Pyramids in Roma", x=10, y=12, wonder="The Pyramids"),
         event("contact", 1, "First contact: Opus 5.5 meets gpt-sol", **{"from": 2}),
@@ -485,9 +555,9 @@ def test_the_later_games_stories_and_the_race(fake):
         event("era_entered", 3, "Egypt enters the Middle Ages"),
         event("units_upgraded", 3, "Egypt upgraded 3 Warrior to Swordsman", x=1, y=1)]))
     fake.live["turn"] = 2
-    until_quiet(c, clock)
-    c.tick()
-    said = fake.prompts[-1].split("NOW\n")[1]
+    asked = len(fake.prompts)
+    beat(c, clock)
+    said = now_part(fake.prompts[asked])
     for news in ("The Pyramids", "Opus 5.5 meets gpt-sol", "Egypt landed 2 units"):
         assert news in said, news
     for chatter in ("gpt-sol meets Egypt", "Egypt enters", "Egypt upgraded"):
@@ -501,7 +571,7 @@ def test_the_later_games_stories_and_the_race(fake):
                                       event("trade", 1, "Opus 5.5 traded Currency to gpt-sol for 40 gold",
                                             **{"from": 2})]), clock.now)
     assert all(c.newsworthy(x) for x in seat_era)
-    data = fake.prompts[-1]
+    data = fake.prompts[asked]
     assert "Turn 2 of 50, the year AD 1250" in data and "Opus 5.5 (Rome)" in data and "claude-opus" not in data
     assert "31% of the land and 42% of the people; 12,500 culture; 2 great wonders" in data
     assert ("The race: domination needs 67% of the land and of the people; nearest Opus 5.5 (Rome) with 31% and 42%; "
@@ -510,22 +580,562 @@ def test_the_later_games_stories_and_the_race(fake):
     assert c.match.civ_named("opus 5.5") == "Rome"
 
 
+def test_a_caster_looks_the_match_up_before_it_speaks(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(t) for t in range(1, 13)], turn=12)
+    beat(c, clock)
+    c.call_seconds, c.voice_seconds = dict.fromkeys(c.models.values(), 0.5), 0.5
+    c.speaking_until += 5   # a long line queued: time for a round of lookups
+
+    def answered(body: dict) -> dict:   # the lookups' answers come back under their ids, in order
+        answers = [m for m in body["messages"] if m["role"] == "tool"]
+        assert [m["tool_call_id"] for m in answers] == ["look_0", "look_1"]
+        assert body["messages"][2]["role"] == "assistant" and body["messages"][2]["tool_calls"][0]["id"] == "look_0"
+        assert "claude-opus (Rome), turn 12: score 40, 1 of 2" in answers[0]["content"]
+        assert "Before: turn 2: 40, 1 of 2" in answers[0]["content"]
+        assert answers[1]["content"].startswith("score, turns 1 to 12:\nclaude-opus (Rome): 1: 40")
+        assert "tool_choice" not in body
+        return say("Forty points, Max, and it hasn't moved in ten turns.", "Rome")
+
+
+    fake.script = [calls(("civ", {"civ": "claude-opus"}), ("trend", {"stat": "score", "civs": ["Rome"]}),
+                         ident="look"), answered]
+    lines = beat(c, clock)
+    assert lines[0]["text"] == "Forty points, Max, and it hasn't moved in ten turns."
+    assert lines[0]["focus"] == "Rome" and lines[0]["speaker"] == "color"
+    assert len([b for b in fake.chats if b["messages"][1]["content"] == fake.prompts[3]]) == 2   # one line, 2 calls
+
+
+def test_live_lookups_stop_when_the_audio_would_run_dry(fake, capsys):
+    """A round of lookups only while the audio queued outlasts it, the line after it and its voicing: the casters'
+    running estimates of a call's time and a voicing's."""
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(1)], turn=1)
+    look = calls(("standings", {}))
+    fake.script = [look]
+    c.tick()   # nothing queued: it must speak at once
+    assert fake.chats[0]["tool_choice"] == {"type": "function", "function": {"name": "say"}}
+    assert len(c.lines) == 1 and len(fake.chats) == 2
+
+    c.call_seconds, c.voice_seconds = dict.fromkeys(c.models.values(), 1.0), 1.0
+    c.writing_seconds = dict.fromkeys(SPEAKERS, 40)   # so the next line is due at once
+    c.speaking_until = clock.now + 30   # plenty queued: up to LOOKUP_ROUNDS rounds, then a forced say
+    fake.script = [look] * caster.LOOKUP_ROUNDS
+    chats = len(fake.chats)
+    c.tick()
+    asked = fake.chats[chats:]
+    assert [("tool_choice" in b) for b in asked] == [False] * caster.LOOKUP_ROUNDS + [True]
+    assert asked[-1]["messages"][-1]["content"].endswith(
+        "(You are live and out of time: call say with your line now.)")
+    assert len(c.lines) == 2
+
+    def slow(body):   # a lookup that takes most of what was queued
+        clock.now = c.speaking_until - 2.5
+        return look
+
+    c.speaking_until, c.writing_seconds = clock.now + 30, dict.fromkeys(SPEAKERS, 40)
+    chats = len(fake.chats)
+    fake.script = [slow]
+    c.tick()
+    assert [("tool_choice" in b) for b in fake.chats[chats:]] == [False, True]   # no time for another round
+    assert len(c.lines) == 3
+
+    c.speaking_until, c.writing_seconds = clock.now + 30, dict.fromkeys(SPEAKERS, 40)
+    fake.script = [look] * (caster.LOOKUP_ROUNDS + 1)   # it won't speak even then: the line fails, and is retried
+    c.tick()
+    assert len(c.lines) == 3 and f"no line after {caster.LOOKUP_ROUNDS + 1} calls" in capsys.readouterr().out
+    clock.now += caster.RETRY_SECONDS
+    c.tick()
+    assert len(c.lines) == 4
+
+
+def test_a_model_without_a_forced_say_is_asked_instead(fake, capsys):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(1)], turn=1)
+    fake.reject_forced = True
+    c.tick()   # nothing queued, so the line is forced: refused, then asked without the force
+    assert c.lines[0]["text"] == "Line 1: Rome leads." and c.no_force == {c.models["pbp"]}
+    assert c.no_tools == set() and c.research_due()   # tools still work, research too
+    assert "tool_choice" in fake.chats[0] and "tool_choice" not in fake.chats[1] and "tools" in fake.chats[1]
+    until_quiet(c, clock)
+    c.tick()
+    assert len(c.lines) == 2 and not any("tool_choice" in b for b in fake.chats[2:])   # never forced again
+    assert capsys.readouterr().out.count("turned a forced say down") == 1
+
+
+def test_a_model_that_cant_be_forced_gets_only_say_on_its_last_round(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(1)], turn=1)
+    fake.reject_forced = True
+    c.tick()   # nothing queued: forced, refused, then asked with say alone, so a lookup can't cost the line
+    assert "tool_choice" in fake.chats[0] and "tool_choice" not in fake.chats[1]
+    assert tools_of(fake.chats[1]) == {"say"} and len(c.lines) == 1
+    c.call_seconds, c.voice_seconds = dict.fromkeys(c.models.values(), 0.5), 0.5
+    c.speaking_until, c.writing_seconds = clock.now + 30, dict.fromkeys(SPEAKERS, 40)
+    fake.script = [calls(("standings", {}))] * caster.LOOKUP_ROUNDS
+    chats = len(fake.chats)
+    c.tick()   # time for every round of lookups, then say alone
+    asked = fake.chats[chats:]
+    assert [tools_of(b) == {"say"} for b in asked] == [False] * caster.LOOKUP_ROUNDS + [True]
+    assert not any("tool_choice" in b for b in asked) and len(c.lines) == 2
+
+
+def test_each_casters_model_keeps_its_own_timing(fake):
+    """A fast play-by-play model and a slow analyst: a line's lookups and its start go by its own caster's times."""
+    clock = Clock()
+    c = new_caster(fake, clock, models={"pbp": "fast/model", "color": "slow/model"})
+    fake.start([entry(1)], turn=1)
+
+    def taking(seconds):
+        def line(body):
+            clock.now += seconds
+            return say(f"A line from {body['model']}.")
+        return line
+
+    fake.script = [taking(1), taking(6), taking(1)]   # the intro: Max, Ada, Max
+    beat(c, clock)
+    assert c.call_seconds["fast/model"] < caster.CALL_SECONDS < c.call_seconds["slow/model"]
+    assert c.writing_seconds["pbp"] < 2 < 6 <= c.writing_seconds["color"]
+    c.call_seconds, c.voice_seconds = {"fast/model": 1.0, "slow/model": 6.0}, 1.0
+    c.speaking_until = clock.now + 10
+    assert c.time_to_look("fast/model") and not c.time_to_look("slow/model")
+    c.speaking_until = clock.now + 2 * 1.0 + 1.0 + caster.LANDING_SECONDS - 0.1
+    assert not c.time_to_look("fast/model")   # a line that looked something up still lands before the audio ends
+
+    c.writing_seconds = {"pbp": 1.0, "color": 6.0}
+    c.beat = caster.Beat("color", "Analysis.", caster.COLOR, 2)
+    c.speaking_until = clock.now + caster.LEAD_SECONDS + 3
+    chats = len(fake.chats)
+    c.tick()   # Ada's line takes 6 s, so it starts with 7 s queued
+    assert len(fake.chats) > chats
+    c.beat = caster.Beat("color", "Analysis.", caster.PBP, 2)
+    c.speaking_until = clock.now + caster.LEAD_SECONDS + 3
+    chats = len(fake.chats)
+    c.tick()   # Max's takes 1 s: not yet
+    assert len(fake.chats) == chats
+
+
+def test_bad_lookups_get_errors_back_not_exceptions(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(1), entry(2)], turn=2)
+    bad = [calls(("teleport", {}), ("civ", "{not json"), ("civ", {"civ": "Atlantis"}), ("standings", {"turn": "soon"}),
+                 ident="bad"),
+           calls(("standings", {"turn": 99}), ("trend", {"stat": "mood"}), ("city", {"name": "Atlantis"}),
+                 ("events", ["kind"]), ident="worse"),
+           calls(*[("standings", {})] * (caster.LOOKUPS_AT_ONCE + 1), ident="many")]
+    replies: list[list[dict]] = []
+
+    def answered(body):
+        replies.append([m for m in body["messages"] if m["role"] == "tool"])
+        return say("Still standing.")
+
+    fake.script = [*bad, answered]
+    c.speaking_until, c.call_seconds, c.voice_seconds, c.writing_seconds = (
+        clock.now + 60, dict.fromkeys(c.models.values(), 0.5), 0.5, dict.fromkeys(SPEAKERS, 60))
+    c.tick()
+    assert [m["tool_call_id"] for m in replies[0]] == [  # every call is answered, in order
+        *(f"bad_{n}" for n in range(4)), *(f"worse_{n}" for n in range(4)), *(f"many_{n}" for n in range(5))]
+    answers = [m["content"] for m in replies[0]]
+    assert answers[0].startswith("error: there is no tool 'teleport'; the tools: standings, civ")
+    assert answers[1].startswith("error: the arguments are not JSON")
+    assert answers[2] == "error: no civ 'Atlantis'; the civs: claude-opus (Rome), gpt-sol (Greece)"
+    assert answers[3] == "error: standings failed on those arguments (ValueError)"
+    assert answers[4] == "error: no turn 99 in the data: turns 1 to 2"
+    assert answers[5].startswith("error: no stat 'mood'; the stats: score, cities")
+    assert answers[6] == "error: no city 'Atlantis'; the biggest: Roma, Athens"
+    assert answers[7] == "error: the arguments must be an object"
+    assert answers[8].startswith("Turn 2:\n1. claude-opus (Rome): 40")
+    assert answers[12].startswith(f"error: at most {caster.LOOKUPS_AT_ONCE} lookups at a time")
+    assert c.lines[-1]["text"] == "Still standing."
+
+
+def test_breaking_news_cuts_into_the_talk(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(1)], turn=1)
+    beat(c, clock)
+    until_quiet(c, clock)
+    c.tick()
+    assert c.beat.kind == "color" and len(c.beat.lines) == 1   # the analysis is under way
+    fake.turns.append(entry(2, events=[event("city_captured", 1, "claude-opus took Athens from gpt-sol", x=30, y=8,
+                                             **{"from": 2})]))
+    fake.live["turn"] = 2
+    asked = len(fake.prompts)
+    lines = beat(c, clock)
+    assert [(line["kind"], line["speaker"]) for line in lines] == [("event", "pbp"), ("event", "color")]
+    assert "You cut in: the desk was on something else, and this news can't wait." in fake.prompts[asked]
+    assert "took Athens" in now_part(fake.prompts[asked])
+    fake.turns.append(entry(3, events=[event("peace_signed", 1, "a quiet peace", **{"from": 2})]))
+    fake.live["turn"] = 3
+    until_quiet(c, clock)
+    c.tick()
+    until_quiet(c, clock)
+    c.tick()   # a peace is news, but not news that cuts in
+    assert c.beat.kind == "event" and c.beat.lines and not c.beat.cut_in
+
+
+def test_a_question_to_the_other_caster_gets_an_answer(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(1)], turn=1)
+    beat(c, clock)
+    fake.script = [say("Rome sits on 1300 gold."), say("Why isn't Rome spending it, Max?"),
+                   say("Saving for walls, I'd guess?"), say("Walls, or a war chest?")]
+    lines = beat(c, clock)
+    assert [line["speaker"] for line in lines] == ["color", "pbp", "color", "pbp"]   # up to MAX_LINES
+    assert len(lines) == caster.MAX_LINES
+    assert "line 3 of 3" in fake.prompts[5] and "line 4 of 4" in fake.prompts[6]
+
+
+def test_the_analyst_researches_storylines_for_the_desk(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(t) for t in range(1, 6)], turn=5)
+    assert not c.research_due()   # not before the intro
+    beat(c, clock)
+    assert c.research_due()
+
+    def jots(body):
+        assert tools_of(body) == {*caster.LOOKUP_ARGS, "jot"} and "tool_choice" not in body
+        assert body["model"] == c.models["color"] and body["messages"][0]["content"].startswith("You are Ada,")
+        assert "jot down talking points" in body["messages"][0]["content"]
+        assert "NOTEBOOK\n(empty)" in body["messages"][1]["content"]
+        return calls(("jot", {"point": "Rome has sat on 40 points for five turns.", "civ": "claude-opus"}),
+                     ("jot", {"point": " "}), ("jot", {"point": "Greece trails by 10.", "civ": "nobody"}))
+
+    fake.script = [calls(("standings", {"turn": 1})), jots]
+    assert c.research_once() == 2 and not c.research_due()   # once a turn at most
+    assert [(p["turn"], p["civ"], p["point"]) for p in c.notebook] == [
+        (5, "Rome", "Rome has sat on 40 points for five turns."), (5, None, "Greece trails by 10.")]
+    answers = [m for m in fake.chats[-1]["messages"] if m["role"] == "tool"][-3:]
+    assert [m["content"] for m in answers] == ["jotted (1 in the notebook)", "error: jot needs a point",
+                                               "jotted (2 in the notebook)"]
+
+    asked = len(fake.prompts)
+    beat(c, clock)
+    assert ("NOTEBOOK (what Ada's research found; use a point when it fits)\n"
+            "- turn 5, claude-opus (Rome): Rome has sat on 40 points for five turns.\n"
+            "- turn 5: Greece trails by 10.") in fake.prompts[asked]
+    beat(c, clock)
+    assert "NOTEBOOK (" in fake.prompts[-1]
+    beat(c, clock)
+    assert "NOTEBOOK (" not in fake.prompts[-1]   # a point is in POINT_BEATS beats, then dropped
+
+    c.jot("g-1", 5, {"point": "An old point."})
+    fake.turns += [entry(t) for t in range(6, 6 + caster.POINT_TURNS + 1)]
+    fake.live["turn"] = 5 + caster.POINT_TURNS + 1
+    beat(c, clock)
+    assert "An old point" not in fake.prompts[-1]   # nor once it is old news
+    assert c.jot("g-0", 5, {"point": "From another game."}).startswith("error: that game is over")
+
+
+def test_an_endpoint_without_tools_gets_lines_from_the_data(fake, capsys):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.reject_tools = True
+    fake.start([entry(1)], turn=1)
+    beat(c, clock)
+    assert [line["text"] for line in c.lines] == ["Line 1: Rome leads.", "Line 2: Rome leads.", "Line 3: Rome leads."]
+    assert c.no_tools == {c.models["pbp"], c.models["color"]} and not c.research_due()
+    assert sum("tools" in b for b in fake.chats) == 2   # asked once with a forced say, once without
+    assert fake.chats[2]["messages"][0]["content"].endswith(caster.SAY_JSON) and "tools" not in fake.chats[2]
+    printed = capsys.readouterr().out
+    assert printed.count("the endpoint turned tools down") == 1 and "does not support tools" in printed
+
+
+def test_the_lookups_tell_the_story_of_the_game(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.meta["unit_types"] = ["Warrior", "Settler", "Legion", "Hoplite"]
+    fight = lambda a, d, win, city=0: [1, 0, win, "aad", city, 3, a, 2 if a == 1 else 3, 30, 8, 3, 2, 3,   # noqa
+                                       d, 3 if d == 2 else 2, 30, 8, 3, 0, 3]
+    turns = [entry(t, scores={"1": [40 + 2 * t, 1, 3, 9, 2, 0], "2": [30 + t, 1, 2, 7, 1, 0]}) for t in range(1, 9)]
+    turns[2]["events"] = [event("war_declared", 1, "claude-opus and gpt-sol are at war", **{"from": 2})]
+    for t in turns[2:]:
+        t["stats"]["1"]["at_war"], t["stats"]["2"]["at_war"] = [2], [1]
+    turns[2]["messages"] = [{"from": 2, "to": [1], "text": "Peace, or you lose Roma."}]
+    turns[3]["notes"] = {"1": "Legions to Athens."}
+    turns[3]["plans"] = {"1": "Take Athens by turn 10."}
+    turns[4]["battles"] = [fight(1, 2, "d"), fight(2, 1, "d")]
+    turns[5]["battles"] = [fight(1, 2, "a", city=2)]
+    turns[5]["events"] = [event("city_captured", 1, "claude-opus took Athens from gpt-sol", x=30, y=8,
+                                **{"from": 2})]
+    for t in turns[5:]:
+        t["cities"] = [[10, 12, "Roma", 1, 4, 1, "Legion", 0], [30, 8, "Athens", 1, 1, 0, None, 1]]
+    turns[7]["events"] = [event("wonder_built", 1, "claude-opus completed The Pyramids in Roma", city="Roma",
+                                wonder="The Pyramids")]
+    turns[6]["battles"] = [fight(1, 2, "a", city=3)]
+    turns[6]["events"] = [event("city_destroyed", 2, "gpt-sol lost Sparta; it was razed", x=40, y=4)]   # the loser
+    turns[7]["actions"] = {"1": [{"text": "c1 builds Legion", "ok": True}]}
+    fake.start(turns, turn=8, messages=[{"from": "Greece", "to": "all", "text": "Rome is lying.", "seconds": 3.0}])
+    beat(c, clock)
+
+    rome = c.lookup("civ", {"civ": "Rome"})
+    for fact in ("claude-opus (Rome), turn 8: score 56, 1 of 2", "2 cities, pop 3: Roma 4 (capital) building Legion, "
+                 "Athens 1", "Army: 2 Warrior", "1300 gold", "Great wonders: The Pyramids",
+                 "Record: 0 cities founded, 1 taken, 0 lost, 1 razed", "At war with gpt-sol (Greece) since turn 3",
+                 'Plan (set turn 3): "Take Athens by turn 10."', 'Note, turn 3: "Legions to Athens."',
+                 "Messages: 0 sent, 2 received", "Tool calls: 48, 8 failed"):
+        assert fact in rome, (fact, rome)
+    greece = c.lookup("civ", {"civ": "gpt-sol"})
+    assert 'Messages: 2 sent, 0 received; turn 2: "Peace, or you lose Roma."; turn 8: "Rome is lying."' in greece
+    assert "Record: 0 cities founded, 0 taken, 2 lost" in greece   # one taken from it, one razed
+    battles = c.lookup("battles", {"civ": "Rome"})
+    assert battles.startswith("4 battles, turns 5 to 7:\nclaude-opus (Rome): 1 attacks lost, 1 defences held, "
+                              "2 attacks won, 1 cities taken, 1 cities razed; wins by Legion 3")
+    assert "- turn 6: claude-opus (Rome)'s Legion attacked gpt-sol (Greece)'s Hoplite at (30,8): the attacker won, " \
+           "city taken" in battles
+    assert c.lookup("battles", {"since_turn": 8}) == "No battles since turn 8 in the data"
+    assert c.lookup("battles", {"civ": "Rome", "other": "Greece"}).startswith("4 battles")   # theirs with each other
+    assert c.lookup("battles", {"civ": "Greece", "other": "Barbarians"}) == (
+        "No battles for gpt-sol (Greece) with Barbarians (the game's own AI) in the data")
+    assert c.lookup("city", {"city": "Roma"}) == "error: city needs name; it takes name, got city"   # its arguments
+    assert c.lookup("events", {"kind": "city_captured", "turns": 3}).startswith(
+        "(ignored turns: events takes civ, kind, since_turn, until_turn)\n1 events:")
+    assert c.lookup("events", {"since_turn": 4, "until_turn": 6}) == (
+        "1 events:\n- turn 6: claude-opus took Athens from gpt-sol")
+    assert c.lookup("city", {"name": "athens"}) == (
+        "Athens: claude-opus (Rome)'s, size 1\nFirst seen turn 1, gpt-sol (Greece)'s\n"
+        "Turn 6: now claude-opus (Rome)'s, from gpt-sol (Greece)\n"
+        "Size: turn 1: 2, turn 2: 2, turn 3: 2, turn 4: 2, turn 5: 2, turn 6: 1, turn 7: 1, turn 8: 1")
+    assert "Great wonders: The Pyramids (turn 8)" in c.lookup("city", {"name": "Roma"})
+    assert c.lookup("diplomacy", {"civ": "Greece", "other": "Rome"}) == (
+        "3 moments:\n- turn 2: gpt-sol (Greece) to claude-opus (Rome): \"Peace, or you lose Roma.\"\n"
+        "- turn 3: claude-opus and gpt-sol are at war\n- turn 8: gpt-sol (Greece) to everyone: \"Rome is lying.\"")
+    assert c.lookup("events", {"kind": "city_captured"}) == (
+        "1 events:\n- turn 6: claude-opus took Athens from gpt-sol")
+    assert c.lookup("events", {"kind": "landing"}).startswith("No such events; the kinds in this game: city_captured")
+    assert c.lookup("trend", {"stat": "score", "turns": 3}) == (
+        "score, turns 6 to 8:\nclaude-opus (Rome): 6: 52, 7: 54, 8: 56 (+4 over these turns)\n"
+        "gpt-sol (Greece): 6: 36, 7: 37, 8: 38 (+2 over these turns)")
+    assert c.lookup("standings", {"turn": 2}).startswith(
+        "Turn 2:\n1. claude-opus (Rome): 44; 1 city, pop 3, 2 techs; 1300 gold; Despotism; 2 military")
+    now = c.lookup("turn_now", {"civ": "Rome"})
+    assert now == ("Turn 8:\nclaude-opus (Rome): still thinking, 41 s so far; 4 tool calls, 1 failed\n"
+                   "   2 actions so far: c1 builds Settler; u4 settle (failed)\nTurn 7, 1 actions: c1 builds Legion")
+    assert c.lookup("said", {"query": "rome LEADS"}).startswith("3 lines:\n- turn 8, Max: Line 1: Rome leads.")
+    assert c.lookup("said", {"query": "Carthage"}) == "The desk hasn't said that yet"
+    fake.meta["unit_types"] = ["Warrior"] * 2000
+    assert len(c.lookup("trend", {"stat": "pop"})) <= caster.TOOL_CHARS
+
+
+def test_a_beat_that_fails_before_it_says_anything_calls_nothing(fake):
+    """A beat that fails three times ends; one that never got a line out leaves its news and the intro for the next."""
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(1)], turn=1)
+
+    def blip():
+        fake.chat_failures = caster.LINE_FAILS
+        for _ in range(caster.LINE_FAILS):
+            until_quiet(c, clock)
+            c.tick()
+            clock.now += caster.RETRY_SECONDS
+
+    blip()   # before the opening
+    assert c.lines == [] and not c.introduced
+    assert [line["kind"] for line in beat(c, clock)] == ["intro"] * 3   # the show still opens
+    fake.turns.append(entry(2, events=[event("civ_destroyed", 1, "claude-opus destroyed gpt-sol", **{"from": 2})]))
+    fake.live["turn"] = 2
+    blip()   # before the elimination is called
+    assert len(c.lines) == 3
+    asked = len(fake.prompts)
+    lines = beat(c, clock)
+    assert lines[0]["kind"] == "event" and "destroyed gpt-sol" in now_part(fake.prompts[asked])
+
+
+def test_the_outro_rides_out_a_blip_but_is_never_started_again(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(1)], turn=1)
+    beat(c, clock)
+    fake.live["game_over"] = True
+    clock.now += caster.POLL_SECONDS
+    c.tick()
+    assert c.lines[-1]["kind"] == "outro"
+    fake.chat_failures = caster.LINE_FAILS   # a 15 s blip: the outro carries on where it was
+    for _ in range(caster.LINE_FAILS + 2):
+        clock.now += caster.RETRY_SECONDS
+        c.tick()
+    assert [line["kind"] for line in c.lines].count("outro") == 3 and c.finished
+    assert [line["speaker"] for line in c.lines[-3:]] == ["pbp", "color", "pbp"]
+
+    c = new_caster(fake, clock)
+    until_quiet(c, clock)
+    c.tick()
+    assert [line["kind"] for line in c.lines] == ["outro"]
+    fake.chat_failures = caster.OUTRO_FAILS   # the endpoint is gone: the broadcast ends, the result called once
+    for _ in range(caster.OUTRO_FAILS + 3):
+        clock.now += caster.RETRY_SECONDS
+        c.tick()
+    assert c.finished and [line["kind"] for line in c.lines].count("outro") == 1
+
+
+def test_a_thinking_model_gets_its_thinking_back_and_a_bad_generation_is_no_refusal(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(1)], turn=1)
+    thought = {**calls(("standings", {})), "reasoning_content": "Hmm.",
+               "thinking_blocks": [{"type": "thinking", "thinking": "Hmm.", "signature": "sig"}]}
+    fake.script = [thought]
+    c.speaking_until, c.call_seconds, c.voice_seconds, c.writing_seconds = (
+        clock.now + 30, dict.fromkeys(c.models.values(), 0.5), 0.5, dict.fromkeys(SPEAKERS, 40))
+    c.tick()
+    echoed = fake.chats[-1]["messages"][2]
+    assert echoed["thinking_blocks"] == thought["thinking_blocks"] and echoed["reasoning_content"] == "Hmm."
+    assert "finish_reason" not in echoed and len(c.lines) == 1
+
+    fake.bad_requests = [b'{"error": "Failed to call a function. Please adjust your prompt. tool_use_failed"}']
+    clock.now += caster.RETRY_SECONDS
+    until_quiet(c, clock)
+    c.tick()   # one bad generation: the line is retried, the tools stay
+    clock.now += caster.RETRY_SECONDS
+    c.tick()
+    assert c.no_tools == set() and c.no_force == set() and len(c.lines) == 2
+    fake.bad_requests = [b'{"error": "Failed to call a function. tool_use_failed"}']
+    fake.script = [calls(("standings", {}))]
+    c.research_once()
+    assert c.no_tools == set()   # nor in the research
+
+
+def test_a_line_with_no_time_left_is_told_so_up_front(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(1)], turn=1)
+    c.tick()   # nothing queued
+    assert fake.chats[0]["messages"][1]["content"].endswith(f"\n{caster.OUT_OF_TIME}")
+    c.call_seconds, c.voice_seconds = dict.fromkeys(c.models.values(), 0.5), 0.5
+    c.speaking_until, c.writing_seconds = clock.now + 30, dict.fromkeys(SPEAKERS, 40)
+    c.tick()
+    assert caster.OUT_OF_TIME not in fake.chats[-1]["messages"][1]["content"]
+
+
+def test_a_new_game_starts_the_desk_afresh(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(1)], turn=1)
+    beat(c, clock)
+    assert c.lookup("said", {"query": "rome"}).startswith("3 lines")
+    fake.game, fake.turns = "g-2", [entry(1)]
+    clock.now += caster.POLL_SECONDS
+    c.tick()
+    assert "RECENT LINES (oldest first)\n(none: this is the opening)" in fake.prompts[-1]   # not the old game's
+    assert c.lookup("said", {"query": "Line 2"}) == "The desk hasn't said that yet"
+    assert c.jot("g-2", 9, {"point": "From a turn not played yet."}).startswith("jotted")
+    c.begin(caster.Beat("color", "", caster.COLOR, 2))
+    assert c.notebook == []   # a point from a turn after this one is another game's
+
+
+def test_the_lookups_tell_cities_of_one_name_apart(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    turns = [entry(t) for t in range(1, 6)]
+    for t in turns:   # Greece's Roma (id 7) beside Rome's; Rome's is lost after turn 3
+        t["cities"].append([40, 4, "Roma", 2, 1, 0, None, 7])
+    for t in turns[3:]:
+        t["cities"] = [x for x in t["cities"] if x[7] != 0]
+    fake.start(turns, turn=5)
+    beat(c, clock)
+    said = c.lookup("city", {"name": "Roma"})
+    assert said.startswith("Roma: gpt-sol (Greece)'s, size 1\nFirst seen turn 1, gpt-sol (Greece)'s")
+    assert "\n\nRoma: gone since turn 4: last claude-opus (Rome)'s, size 3" in said
+
+
+def test_none_is_no_civ(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.players.append({"index": 3, "civ": "Egypt", "label": None, "barbarian": False, "seat": None})
+    fake.start([entry(1)], turn=1)
+    c.tick()
+    for nothing in ("none", "None", "null", "", None, 3, ["Rome"]):
+        assert c.match.civ_named(nothing) is None, nothing   # an AI civ without a label is no match for "none"
+    assert c.lookup("civ", {"civ": "None"}).startswith("error: no civ 'None'; the civs: claude-opus (Rome)")
+    assert c.lookup("civ", {"civ": "Barbarians"}).startswith("Barbarians (the game's own AI) has no score")
+
+
+def test_the_voices_kept_stay_bounded(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    beat_ = caster.Beat("color", "", caster.COLOR, 2)
+    for n in range(caster.AUDIO_KEPT * 3):
+        c.publish(beat_, {"speaker": "pbp", "text": "Hi.", "focus": None}, streamed_wav(0.1) if n % 7 else None)
+    assert len(c.audio) <= caster.AUDIO_KEPT and min(c.audio) > c.line_count - caster.AUDIO_KEPT
+
+
+def test_a_key_with_a_control_character_is_refused_not_printed(tmp_path):
+    import os
+    import subprocess
+    env = {**os.environ, "CAST_BASE_URL": "http://127.0.0.1:9", "CAST_API_KEY": "sk-se\ncret-123"}
+    out = subprocess.run([sys.executable, str(CASTER), "--data", "http://127.0.0.1:9/live"], env=env,
+                         capture_output=True, text=True, timeout=30)
+    assert out.returncode == 2 and "control character" in out.stderr and "cret-123" not in out.stdout + out.stderr
+
+
+def test_research_jots_are_not_lookups(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(1), entry(2)], turn=2)
+    beat(c, clock)
+    fake.script = [calls(*[("jot", {"point": f"Point {n}."}) for n in range(caster.LOOKUPS_AT_ONCE)],
+                         ("standings", {}))]
+    c.research_once()
+    answers = [m["content"] for m in fake.chats[-1]["messages"] if m["role"] == "tool"]
+    assert answers[-1].startswith("Turn 2:")   # the lookup is answered, whatever the jots before it
+
+
+def test_the_research_and_the_poll_share_the_match_safely(fake):
+    """The research thread looks the match up while the main loop polls it, and a new game replaces it."""
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(t) for t in range(1, 30)], turn=29)
+    beat(c, clock)
+    errors: list[str] = []
+    stop = threading.Event()
+
+    def look():
+        while not stop.is_set():
+            for name, args in (("civ", {"civ": "Rome"}), ("trend", {"stat": "score"}), ("said", {}),
+                               ("diplomacy", {}), ("city", {"name": "Roma"}), ("standings", {})):
+                out = c.lookup(name, args)
+                if "failed on those arguments" in out:
+                    errors.append(out)
+
+    thread = threading.Thread(target=look)
+    thread.start()
+    try:
+        for n in range(30, 80):
+            fake.turns.append(entry(n))
+            fake.live["turn"] = n
+            if n == 60:
+                fake.game, fake.turns = "g-2", [entry(1)]
+            clock.now += caster.POLL_SECONDS
+            c.poll()
+    finally:
+        stop.set()
+        thread.join()
+    assert errors == [] and c.match.game == "g-2"
+
+
 def test_the_casters_never_say_what_the_env_masks(fake):
     clock = Clock()
     c = new_caster(fake, clock)
     fake.start([entry(1)], turn=1)
-    c.tick()
+    beat(c, clock)
     rude = codecs.decode("Ebzr, lbh fuvg shpxvat pbjneq.", "rot13")
     fake.turns.append(entry(2, messages=[{"from": 2, "to": [1], "text": "Rome, you s*** f****** coward."}]))
     fake.live["turn"] = 2
-    fake.content = json.dumps({"lines": [{"speaker": "Max", "text": f'Greece goes nuclear: "{rude}"'},
-                                         {"speaker": "Ada", "text": "Rome, you s*** f****** coward. Bold words."}]})
-    until_quiet(c, clock)
-    c.tick()
-    assert "quoting it unless it is rude" in fake.prompts[-1] and "stays unsaid" in caster.SYSTEM
+    fake.script = [say(f'Greece goes nuclear: "{rude}"'),
+                   {"role": "assistant", "content": '{"text": "Rome, you s*** f****** coward. Bold words."}'}]
+    beat(c, clock)
+    assert "quoting it unless it is rude" in fake.prompts[3] and "stays unsaid" in caster.STYLE
     said = [line["text"] for line in c.lines[3:]]
     assert said == ['Greece goes nuclear: "Rome, you bleep bleep coward."', "Rome, you bleep bleep coward. Bold words."]
-    assert sorted(s["input"] for s in fake.speech[3:]) == sorted(said)   # voiced in parallel
+    assert [s["input"] for s in fake.speech[3:]] == said
 
 
 def test_the_casters_block_the_words_the_env_blocks():
@@ -544,6 +1154,7 @@ def test_lines_are_cleaned_up_for_speech():
     assert lines == [{"speaker": "pbp", "text": "Rome strikes!", "focus": "Rome"},
                      {"speaker": "color", "text": " ".join(["word"] * 20) + ".", "focus": None}]
     assert caster.spoken(" ".join(["x"] * 40)) == " ".join(["x"] * 30) + "…"
+    assert caster.spoken("Max: Ada: Max, look at that army.") == "Max, look at that army."
     mixed_up = ('{"lines": [{"speaker": "Ada", "text": "Rome takes the lead, Ada."},'
                 ' {"speaker": "pbp", "text": "Max!"}]}')
     assert [line["text"] for line in caster.parse_lines(mixed_up, match)] == ["Rome takes the lead, Max.", "Ada!"]
@@ -563,6 +1174,22 @@ def test_lines_are_cleaned_up_for_speech():
     assert caster.wav_seconds(caster.fixed_wav(streamed_wav(1.5))) == 1.5
     with pytest.raises(ValueError):
         caster.fixed_wav(b"ID3 not a wav")
+
+
+def test_a_line_without_a_say_call_is_still_a_line(fake):
+    """Models that answer in text: the line's JSON, the old shape with every caster's lines, or plain text."""
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(1)], turn=1)
+    old = json.dumps({"lines": [{"speaker": "Ada", "text": "Not yours."}, {"speaker": "Max", "text": "Mine, Max!"}]})
+    fake.script = [{"role": "assistant", "content": old},
+                   {"role": "assistant", "content": 'Sure! {"text": "Rome, forty points.", "focus": "Rome"}'},
+                   {"role": "assistant", "content": '"Max: Greece has twelve gold."\nAda: Not mine either.'}]
+    for _ in range(3):
+        until_quiet(c, clock)
+        c.tick()
+    assert [(line["speaker"], line["text"], line["focus"]) for line in c.lines] == [
+        ("pbp", "Mine, Ada!", None), ("color", "Rome, forty points.", "Rome"), ("pbp", "Greece has twelve gold.", None)]
 
 
 def tone(amplitude: int, samples: int = 8000) -> bytes:

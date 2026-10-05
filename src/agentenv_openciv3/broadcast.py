@@ -9,7 +9,7 @@ import re
 TITLE_LIMIT = 80
 DISPLAY_LIMIT = 30      # a seat's name on screen: "Opus 5.5", "GPT-6 Sol"
 CASTER_SEATS = ("play_by_play", "analyst")
-CASTER_KEYS = ("name", "voice", "style")
+CASTER_KEYS = ("name", "voice", "style", "model")   # model: that caster's own, else the casters' model
 NAME = re.compile(r"[A-Za-z][A-Za-z .'-]{0,19}")
 
 

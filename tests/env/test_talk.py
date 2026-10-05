@@ -308,6 +308,7 @@ async def test_a_new_game_sets_the_broadcast_the_live_data_carries(env):
     ({"casters": {"model": " "}}, "broadcast casters model must be a model name"),
     ({"casters": {"analyst": {"name": "Iris", "pitch": "low"}}}, "broadcast casters analyst must be an object of"),
     ({"casters": {"play_by_play": {"voice": 3}}}, "broadcast casters play_by_play must be an object of"),
+    ({"casters": {"analyst": {"model": " "}}}, "broadcast casters analyst must be an object of"),
     ({"casters": {"analyst": {"name": "<b>Iris</b>"}}}, "broadcast casters analyst name must be 1-20 letters"),
     ({"names": ["opus"]}, "broadcast names must map seat labels to names of 1-30 characters"),
     ({"names": {"opus": ""}}, "broadcast names must map seat labels to names of 1-30 characters"),
@@ -327,6 +328,10 @@ def test_broadcast_settings_turn_the_casters_on_or_off():
                                                                  "play_by_play": {"name": "Rex O'Neil"}}}) == {
         "title": "Showmatch", "casters": {"tts_model": "openai/gpt-4o-mini-tts",
                                           "play_by_play": {"name": "Rex O'Neil"}}}
+    # each caster may have its own model: a fast one for the play-by-play, a stronger one for the analysis
+    assert broadcast.settings({"casters": {"model": "anthropic/claude-haiku-4-5",
+                                           "analyst": {"model": " anthropic/claude-sonnet-5-5 "}}})["casters"] == {
+        "model": "anthropic/claude-haiku-4-5", "analyst": {"model": "anthropic/claude-sonnet-5-5"}}
     # the seats' names on screen and in the casters' mouths: by label
     assert broadcast.settings({"names": {" opus ": " Opus 5.5 ", "sol": "GPT-6 Sol"}}) == {
         "title": None, "casters": None, "names": {"opus": "Opus 5.5", "sol": "GPT-6 Sol"}}
