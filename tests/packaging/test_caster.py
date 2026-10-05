@@ -96,6 +96,7 @@ class Fake:
         self.chat_failures = self.speech_failures = 0
         self.reject_tools = False      # an endpoint that turns tool calls down
         self.reject_forced = False     # one that takes tools, but not a forced call
+        self.bad_requests: list[bytes] = []   # 400s to give first, in order
         self.script: list = []         # replies (or functions of the request) to give first, in order
         self.content: str | None = None    # a plain-text reply instead of a say call
         self.said = 0
@@ -147,6 +148,9 @@ class Fake:
                     if fake.chat_failures:
                         fake.chat_failures -= 1
                         return self.reply(500, f"bad key {KEY}".encode(), "text/plain")
+                    if fake.bad_requests:
+                        fake.chats.append(body)
+                        return self.reply(400, fake.bad_requests.pop(0), "text/plain")
                     if fake.reject_tools and "tools" in body:
                         fake.chats.append(body)
                         return self.reply(400, b'{"error": "this model does not support tools"}', "text/plain")
@@ -591,8 +595,6 @@ def test_a_caster_looks_the_match_up_before_it_speaks(fake):
         assert "tool_choice" not in body
         return say("Forty points, Max, and it hasn't moved in ten turns.", "Rome")
 
-    until_quiet(c, clock)
-    c.speaking_until += 3
 
     fake.script = [calls(("civ", {"civ": "claude-opus"}), ("trend", {"stat": "score", "civs": ["Rome"]}),
                          ident="look"), answered]
@@ -865,7 +867,7 @@ def test_the_lookups_tell_the_story_of_the_game(fake):
     assert len(c.lookup("trend", {"stat": "pop"})) <= caster.TOOL_CHARS
 
 
-def test_a_failed_outro_is_never_started_again(fake):
+def test_the_outro_rides_out_a_blip_but_is_never_started_again(fake):
     clock = Clock()
     c = new_caster(fake, clock)
     fake.start([entry(1)], turn=1)
@@ -874,11 +876,60 @@ def test_a_failed_outro_is_never_started_again(fake):
     clock.now += caster.POLL_SECONDS
     c.tick()
     assert c.lines[-1]["kind"] == "outro"
-    fake.chat_failures = caster.LINE_FAILS
-    for _ in range(caster.LINE_FAILS + 3):
+    fake.chat_failures = caster.LINE_FAILS   # a 15 s blip: the outro carries on where it was
+    for _ in range(caster.LINE_FAILS + 2):
         clock.now += caster.RETRY_SECONDS
         c.tick()
-    assert c.finished and [line["kind"] for line in c.lines].count("outro") == 1   # the result is called once
+    assert [line["kind"] for line in c.lines].count("outro") == 3 and c.finished
+    assert [line["speaker"] for line in c.lines[-3:]] == ["pbp", "color", "pbp"]
+
+    c = new_caster(fake, clock)
+    until_quiet(c, clock)
+    c.tick()
+    assert [line["kind"] for line in c.lines] == ["outro"]
+    fake.chat_failures = caster.OUTRO_FAILS   # the endpoint is gone: the broadcast ends, the result called once
+    for _ in range(caster.OUTRO_FAILS + 3):
+        clock.now += caster.RETRY_SECONDS
+        c.tick()
+    assert c.finished and [line["kind"] for line in c.lines].count("outro") == 1
+
+
+def test_a_thinking_model_gets_its_thinking_back_and_a_bad_generation_is_no_refusal(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(1)], turn=1)
+    thought = {**calls(("standings", {})), "reasoning_content": "Hmm.",
+               "thinking_blocks": [{"type": "thinking", "thinking": "Hmm.", "signature": "sig"}]}
+    fake.script = [thought]
+    c.speaking_until, c.call_seconds, c.voice_seconds, c.writing_seconds = clock.now + 30, 0.5, 0.5, 40
+    c.tick()
+    echoed = fake.chats[-1]["messages"][2]
+    assert echoed["thinking_blocks"] == thought["thinking_blocks"] and echoed["reasoning_content"] == "Hmm."
+    assert "finish_reason" not in echoed and len(c.lines) == 1
+
+    fake.bad_requests = [b'{"error": "Failed to call a function. Please adjust your prompt. tool_use_failed"}']
+    clock.now += caster.RETRY_SECONDS
+    until_quiet(c, clock)
+    c.tick()   # one bad generation: the line is retried, the tools stay
+    clock.now += caster.RETRY_SECONDS
+    c.tick()
+    assert c.no_tools == set() and c.no_force == set() and len(c.lines) == 2
+    fake.bad_requests = [b'{"error": "Failed to call a function. tool_use_failed"}']
+    fake.script = [calls(("standings", {}))]
+    c.research_once()
+    assert c.no_tools == set()   # nor in the research
+
+
+def test_a_line_with_no_time_left_is_told_so_up_front(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(1)], turn=1)
+    c.tick()   # nothing queued
+    assert fake.chats[0]["messages"][1]["content"].endswith(f"\n{caster.OUT_OF_TIME}")
+    c.call_seconds = c.voice_seconds = 0.5
+    c.speaking_until, c.writing_seconds = clock.now + 30, 40
+    c.tick()
+    assert caster.OUT_OF_TIME not in fake.chats[-1]["messages"][1]["content"]
 
 
 def test_a_new_game_starts_the_desk_afresh(fake):

@@ -66,6 +66,11 @@ VOICE_SECONDS = 1.5
 LOOKUPS_AT_ONCE = 4     # tool calls answered in one round
 MAX_LINES = 4           # a beat's lines, counting the answers to questions it asks
 LINE_FAILS = 3          # failed lines in a row that end a beat
+OUTRO_FAILS = 6         # the outro's: the stream lingers a minute after GAME OVER for it
+REFUSED = re.compile(r"(?=.*\b(?:tools?|tool_choice|function(?:s| call(?:ing)?)?)\b)(?=.*(?:not supported|unsupported|"
+                     r"does ?n[o']t support|not (?:be )?enabled|not available|not allowed|isn't supported))",
+                     re.IGNORECASE | re.DOTALL)   # a 400 that turns tools (or a forced call) down, not a bad generation
+OUT_OF_TIME = "(You are live and out of time: call say with your line now.)"
 RESEARCH_SECONDS = 45   # the analyst's research: at most this often, and only once something new happened
 RESEARCH_ROUNDS = 6
 NOTEBOOK = 8            # talking points kept
@@ -689,7 +694,7 @@ class Caster:
         if line is None:
             self.retry_at = self.clock() + RETRY_SECONDS
             beat.fails += 1
-            if beat.fails >= LINE_FAILS:
+            if beat.fails >= (OUTRO_FAILS if beat.kind == "outro" else LINE_FAILS):
                 beat.count = len(beat.lines)   # it ends where it got to, and the desk moves on
                 self.finished = beat.kind == "outro"   # the broadcast's last lines are never started again
             return
@@ -755,6 +760,8 @@ class Caster:
         tools = model not in self.no_tools
         messages = [{"role": "system", "content": self.system(speaker, tools)},
                     {"role": "user", "content": self.prompt(beat)}]
+        if tools and not self.time_to_look():
+            messages[1]["content"] += f"\n{OUT_OF_TIME}"   # forced or not, it knows
         round_ = 0
         try:
             while round_ <= LOOKUP_ROUNDS:
@@ -768,7 +775,7 @@ class Caster:
                     message = self.chat(body)
                 except urllib.error.HTTPError as e:
                     why = failure(e)
-                    if not (tools and e.code == 400 and re.search(r"\btools?\b|tool_choice|function", why, re.I)):
+                    if not (tools and e.code == 400 and REFUSED.search(why)):
                         raise ValueError(why) from None
                     if "tool_choice" in body:   # tools, but not a forced say: it is asked to speak instead
                         self.no_force.add(model)
@@ -797,8 +804,8 @@ class Caster:
                     answers = self.answers(calls)
                 round_ += 1
                 if tools and (round_ == LOOKUP_ROUNDS or not self.time_to_look()):
-                    answers[-1]["content"] += "\n(You are live and out of time: call say with your line now.)"
-                messages += [{"role": "assistant", "content": message.get("content"), "tool_calls": calls}, *answers]
+                    answers[-1]["content"] += f"\n{OUT_OF_TIME}"
+                messages += [assistant(message, calls), *answers]
             raise ValueError(f"no line after {LOOKUP_ROUNDS + 1} calls")
         except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError, http.client.HTTPException) as e:
             self.log(f"caster: the {beat.kind} beat's line failed, retrying in {RETRY_SECONDS} s: {failure(e)}")
@@ -939,15 +946,15 @@ class Caster:
                                      "tools": [*LOOKUPS, JOT]})
             except (OSError, ValueError, KeyError, IndexError, TypeError, http.client.HTTPException) as e:
                 why = failure(e)
-                if isinstance(e, urllib.error.HTTPError) and e.code == 400 and re.search(r"\btools?\b|function", why,
-                                                                                         re.I):
+                if isinstance(e, urllib.error.HTTPError) and e.code == 400 and REFUSED.search(why) and not jotted \
+                        and len(messages) == 2:
                     self.no_tools.add(self.models[COLOR])   # no research without tools
                 self.log(f"caster: research call failed: {why}")
                 break
             calls = message.get("tool_calls") or []
             if not calls:
                 break
-            messages.append({"role": "assistant", "content": message.get("content"), "tool_calls": calls})
+            messages.append(assistant(message, calls))
             looked = 0
             for n, call in enumerate(calls):
                 fn = call.get("function") or {}
@@ -1444,6 +1451,14 @@ class Caster:
                 break
             since = t["turn"]
         return leader, since
+
+
+def assistant(message: dict, calls: list) -> dict:
+    """A reply's turn as it goes back to the model with the answers to its calls: with its thinking, which a model that
+    thinks (Anthropic's, through LiteLLM) wants back before its tool calls."""
+    out = {"role": "assistant", "content": message.get("content"), "tool_calls": calls}
+    out |= {k: message[k] for k in ("thinking_blocks", "reasoning_content") if message.get(k)}
+    return out
 
 
 def arguments(call: dict) -> dict:
