@@ -205,10 +205,13 @@ Each caster is an agent: a beat's subject is picked as above, and its lines are 
 alternating, each by its own caster's call that sees the line before it, so the two talk to each other rather than
 taking turns at a script. Before it speaks, a caster may look the match up with tools that answer from the same data:
 `standings` (now or at an earlier turn), `civ` (one civ in depth: its score and rank now and 10, 25 and 50 turns ago,
-cities, army by unit type, wars, record, plan, notes, messages and tool calls), `trend` (a stat over the game),
-`events`, `battles` (wins and losses, the unit types that won, cities taken), `diplomacy` (wars, peace, trades,
+cities, army by unit type, wars, record, plan, notes, messages and tool calls), `trend` (a stat over the game and
+its change), `events` (by kind, civ and turns), `battles` (wins and losses, the unit types that won, cities taken,
+of one civ or two with each other), `diplomacy` (wars, peace, trades,
 contacts and messages, in order), `turn_now` (who is still thinking and what each seat has done so far), `city` (a
-city's story) and `said` (what the desk has already said, for callbacks); it speaks with `say`. A live line looks
+city's story) and `said` (what the desk has already said, for callbacks); it speaks with `say`. A lookup it gets
+wrong answers with an error it can read (a civ or city the game hasn't, the arguments the lookup takes), never stops
+the line. A live line looks
 things up only while the audio already queued lasts (at least 5 s, at most three rounds), then must speak. Breaking
 news (an elimination, a city taken or razed, a war) cuts into a beat under way, and a line that asks the other caster
 a question gets its answer, up to four lines a beat. In the background, every 45 s at most and once a turn, the analyst

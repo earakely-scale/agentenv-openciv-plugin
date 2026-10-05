@@ -65,7 +65,7 @@ LOOKUP_SECONDS = 5      # a live line may look things up for at least this long,
 VOICE_SECONDS = 3       # kept for voicing a line out of the time its lookups may take
 LOOKUPS_AT_ONCE = 4     # tool calls answered in one round
 MAX_LINES = 4           # a beat's lines, counting the answers to questions it asks
-LINE_FAILS = 3          # failed calls in a row that end a beat already under way
+LINE_FAILS = 3          # failed lines in a row that end a beat
 RESEARCH_SECONDS = 45   # the analyst's research: at most this often, and only once something new happened
 RESEARCH_ROUNDS = 6
 NOTEBOOK = 8            # talking points kept
@@ -193,9 +193,11 @@ LOOKUPS = [
     tool("events", "The game's events, newest last: city_founded, city_captured, city_destroyed, civ_destroyed, "
                    "war_declared, peace_signed, lead_change, tech_learned, government_changed, wonder_built, "
                    "era_entered, contact, trade, units_upgraded, landing and more.",
-         {"kind": {"type": "string"}, "civ": CIV, "since_turn": {"type": "integer"}}),
+         {"kind": {"type": "string"}, "civ": CIV, "since_turn": {"type": "integer"},
+          "until_turn": {"type": "integer"}}),
     tool("battles", "The fights: wins and losses attacking and defending, the unit types that won, cities taken, and "
-                    "the latest battles.", {"civ": CIV, "since_turn": {"type": "integer"}}),
+                    "the latest battles; with civ and other, only theirs with each other.",
+         {"civ": CIV, "other": CIV, "since_turn": {"type": "integer"}}),
     tool("diplomacy", "Wars, peace, trades, first contacts and the players' messages, in order.",
          {"civ": CIV, "other": CIV}),
     tool("turn_now", "The turn being played: who is still thinking and for how long, tool calls, what each seat has "
@@ -206,6 +208,7 @@ LOOKUPS = [
                  "and to keep from repeating.", {"query": {"type": "string"}}),
 ]
 LOOKUP_ARGS = {t["function"]["name"]: set(t["function"]["parameters"]["properties"]) for t in LOOKUPS}
+REQUIRED = {t["function"]["name"]: t["function"]["parameters"]["required"] for t in LOOKUPS}
 SAY = tool("say", "Speak your line, live: one or two short sentences, written to be spoken. This ends your turn.",
            {"text": {"type": "string"}, "focus": {"type": "string", "description": "the civ the line is mostly "
                                                                                   "about; empty for none"}},
@@ -671,8 +674,8 @@ class Caster:
         if line is None:
             self.retry_at = self.clock() + RETRY_SECONDS
             beat.fails += 1
-            if beat.lines and beat.fails >= LINE_FAILS:
-                beat.count = len(beat.lines)   # it ends where it got to
+            if beat.fails >= LINE_FAILS:
+                beat.count = len(beat.lines)   # it ends where it got to, and the desk moves on
             return
         beat.fails = 0
         wav = self.voice(line)
@@ -738,7 +741,15 @@ class Caster:
                 said = next((c for c in calls if (c.get("function") or {}).get("name") == "say"), None)
                 if said is not None:
                     args = arguments(said)
-                    return self.line(speaker, args.get("text"), args.get("focus"))
+                    try:
+                        return self.line(speaker, args.get("text"), args.get("focus"))
+                    except ValueError as e:   # nothing to say: it says why, and the caster tries again
+                        if round_ == LOOKUP_ROUNDS:
+                            raise
+                        messages += [{"role": "assistant", "content": message.get("content"), "tool_calls": [said]},
+                                     {"role": "tool", "tool_call_id": said.get("id") or "call_say",
+                                      "content": f"error: {e}; call say with your line as its text"}]
+                        continue
                 if not calls:
                     return self.line_of(speaker, message.get("content"), message)
                 messages.append({"role": "assistant", "content": message.get("content"), "tool_calls": calls})
@@ -924,12 +935,20 @@ class Caster:
             return f"error: the arguments are not JSON: {str(args)[:80]!r}"
         if not isinstance(args, dict):
             return "error: the arguments must be an object"
+        takes = LOOKUP_ARGS[name]
+        needs = [k for k in REQUIRED[name] if args.get(k) in (None, "")]
+        if needs or (set(args) - takes and not set(args) & takes):
+            return (f"error: {name} needs {', '.join(needs) or 'other arguments'}; it takes "
+                    f"{', '.join(sorted(takes)) or 'none'}, got {', '.join(sorted(args)) or 'none'}")
+        ignored = sorted(set(args) - takes)
         try:
             with self.data:
                 if not self.match.turns:
                     return "error: the game hasn't started"
                 out = getattr(self, f"look_{name}")(**{k: v for k, v in args.items()
-                                                       if k in LOOKUP_ARGS[name] and v not in (None, "")})
+                                                       if k in takes and v not in (None, "")})
+            if ignored:
+                out = f"(ignored {', '.join(ignored)}: {name} takes {', '.join(sorted(takes))})\n{out}"
         except Unknown as e:
             return f"error: {e}"
         except Exception as e:  # a model's odd arguments (or a bug) answer with an error, never stop the line
@@ -938,11 +957,14 @@ class Caster:
         return out if len(out) <= TOOL_CHARS else out[:TOOL_CHARS - 1].rsplit("\n", 1)[0] + "\n…"
 
     def civ_of(self, name) -> dict:
-        civ = self.match.civ_named(name)
-        if civ is None:
+        """A player by civ, label or name, the barbarians too."""
+        key = str(name or "").strip().lower()
+        found = next((p for p in self.match.players
+                      if key in (p["civ"].lower(), str(p.get("label")).lower(), str(p.get("name")).lower())), None)
+        if found is None:
             civs = ", ".join(self.match.who(p["index"]) for p in self.match.civs)
             raise Unknown(f"no civ {name!r}; the civs: {civs}")
-        return next(p for p in self.match.civs if p["civ"] == civ)
+        return found
 
     def turn_of(self, turn) -> int:
         turn = int(turn)
@@ -1071,16 +1093,21 @@ class Caster:
         out = [f"{stat}, turns {span[0]['turn']} to {span[-1]['turn']}:"]
         for p in players[:8]:
             points = [(e["turn"], value(e, str(p["index"]))) for e in sample]
-            points = [f"{t}: {v:,}" if isinstance(v, int) else f"{t}: {v}" for t, v in points if v is not None]
-            out.append(f"{m.who(p['index'])}: " + (", ".join(points) or "no data"))
+            known = [(t, v) for t, v in points if v is not None]
+            change = (f" ({known[-1][1] - known[0][1]:+,} over these turns)"
+                      if len(known) > 1 and all(isinstance(v, int) for _, v in known) else "")
+            out.append(f"{m.who(p['index'])}: " + (", ".join(f"{t}: {v:,}" if isinstance(v, int) else f"{t}: {v}"
+                                                             for t, v in known) or "no data") + change)
         return "\n".join(out)
 
-    def look_events(self, kind=None, civ=None, since_turn=None) -> str:
+    def look_events(self, kind=None, civ=None, since_turn=None, until_turn=None) -> str:
         m = self.match
         index = self.civ_of(civ)["index"] if civ else None
         since = int(since_turn) if since_turn is not None else None
+        until = int(until_turn) if until_turn is not None else None
         found = [(t["turn"], e) for t in m.turns for e in t.get("events") or ()
                  if (kind is None or e["kind"] == kind) and (since is None or t["turn"] >= since)
+                 and (until is None or t["turn"] <= until)
                  and (index is None or index in (e.get("owner"), e.get("from")))]
         if not found:
             kinds = sorted({e["kind"] for t in m.turns for e in t.get("events") or ()})
@@ -1088,14 +1115,17 @@ class Caster:
         head = f"{len(found)} events" + (", the latest 15:" if len(found) > 15 else ":")
         return "\n".join([head, *(f"- turn {t}: {e['text']}" for t, e in found[-15:])])
 
-    def look_battles(self, civ=None, since_turn=None) -> str:
+    def look_battles(self, civ=None, other=None, since_turn=None) -> str:
         m = self.match
         index = self.civ_of(civ)["index"] if civ else None
+        versus = self.civ_of(other)["index"] if other else None
         since = int(since_turn) if since_turn is not None else None
         fights = [(t["turn"], b) for t in m.turns for b in t.get("battles") or ()
-                  if (since is None or t["turn"] >= since) and (index is None or index in (b[6], b[13]))]
+                  if (since is None or t["turn"] >= since) and (index is None or index in (b[6], b[13]))
+                  and (versus is None or versus in (b[6], b[13]))]
         if not fights:
             return "No battles" + (f" for {m.who(index)}" if index is not None else "") + (
+                f" with {m.who(versus)}" if versus is not None else "") + (
                 f" since turn {since}" if since is not None else "") + " in the data"
         tally: dict[int, Counter] = {}
         winners: dict[int, Counter] = {}

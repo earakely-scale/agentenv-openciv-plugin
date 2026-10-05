@@ -397,16 +397,14 @@ def test_failures_are_survived_and_the_key_is_never_printed(fake, capsys):
         c.tick()
         clock.now += caster.RETRY_SECONDS
     assert len(c.lines) == 3
+    assert c.beat.topic == "economy" and c.topics_used["race"]   # a beat that keeps failing gives way to the next
     fake.content = None
-    fake.script = [say("   "), say("*nods*")]   # a say with nothing to say
+    fake.script = [say("   "), say("*nods*")]   # a say with nothing to say: the caster hears why and tries again
     until_quiet(c, clock)
     c.tick()
-    clock.now += caster.RETRY_SECONDS
-    c.tick()
-    assert len(c.lines) == 3
-    clock.now += caster.RETRY_SECONDS
-    c.tick()
     assert len(c.lines) == 4 and c.lines[3]["audio"] == "audio/4.wav"
+    assert [m["content"] for m in fake.chats[-1]["messages"] if m["role"] == "tool"] == [
+        "error: an empty line; call say with your line as its text"] * 2
     fake.data_down = True   # the env is gone: nothing to talk about
     until_quiet(c, clock)
     c.tick()
@@ -416,7 +414,7 @@ def test_failures_are_survived_and_the_key_is_never_printed(fake, capsys):
     assert printed.count("no match data") == 2   # once each time it goes away
     assert "HTTP 500 bad key <cast key>" in printed and "HTTP 429 slow down" in printed
     assert "the reply has no text (finish_reason stop)" in printed
-    assert "no line in the reply" in printed and "an empty line" in printed
+    assert "no line in the reply" in printed
     assert KEY not in printed
 
 
@@ -791,6 +789,14 @@ def test_the_lookups_tell_the_story_of_the_game(fake):
     assert "- turn 6: claude-opus (Rome)'s Legion attacked gpt-sol (Greece)'s Hoplite at (30,8): the attacker won, " \
            "city taken" in battles
     assert c.lookup("battles", {"since_turn": 7}) == "No battles since turn 7 in the data"
+    assert c.lookup("battles", {"civ": "Rome", "other": "Greece"}).startswith("3 battles")   # theirs with each other
+    assert c.lookup("battles", {"civ": "Greece", "other": "Barbarians"}) == (
+        "No battles for gpt-sol (Greece) with Barbarians (the game's own AI) in the data")
+    assert c.lookup("city", {"city": "Roma"}) == "error: city needs name; it takes name, got city"   # its arguments
+    assert c.lookup("events", {"kind": "city_captured", "turns": 3}).startswith(
+        "(ignored turns: events takes civ, kind, since_turn, until_turn)\n1 events:")
+    assert c.lookup("events", {"since_turn": 4, "until_turn": 7}) == (
+        "1 events:\n- turn 6: claude-opus took Athens from gpt-sol")
     assert c.lookup("city", {"name": "athens"}) == (
         "Athens: claude-opus (Rome)'s, size 1\nFirst seen turn 1, gpt-sol (Greece)'s\n"
         "Turn 6: now claude-opus (Rome)'s, from gpt-sol (Greece)\n"
@@ -803,7 +809,8 @@ def test_the_lookups_tell_the_story_of_the_game(fake):
         "1 events:\n- turn 6: claude-opus took Athens from gpt-sol")
     assert c.lookup("events", {"kind": "landing"}).startswith("No such events; the kinds in this game: city_captured")
     assert c.lookup("trend", {"stat": "score", "turns": 3}) == (
-        "score, turns 6 to 8:\nclaude-opus (Rome): 6: 52, 7: 54, 8: 56\ngpt-sol (Greece): 6: 36, 7: 37, 8: 38")
+        "score, turns 6 to 8:\nclaude-opus (Rome): 6: 52, 7: 54, 8: 56 (+4 over these turns)\n"
+        "gpt-sol (Greece): 6: 36, 7: 37, 8: 38 (+2 over these turns)")
     assert c.lookup("standings", {"turn": 2}).startswith(
         "Turn 2:\n1. claude-opus (Rome): 44; 1 city, pop 3, 2 techs; 1300 gold; Despotism; 2 military")
     now = c.lookup("turn_now", {"civ": "Rome"})
