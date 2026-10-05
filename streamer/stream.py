@@ -2,7 +2,7 @@
 page's stream layout (`?stream`) full screen on a virtual display and plays its sound into a PulseAudio null sink, and
 ffmpeg encodes the display and the sink once, to each RTMP URL in STREAM_URL (one a line) and, with --record, to a
 Matroska file. With --cast-config, two
-AI casters (caster.py) talk over the game: the page plays their voices and shows them as captions. It waits for the env
+AI casters (caster.py), each an agent that looks the match up before it speaks, talk over the game: the page plays their voices and shows them as captions. It waits for the env
 to answer, and stops `--linger` seconds after the game ends, or once the env has been gone for a minute. STREAM_URL
 holds the stream key and CAST_API_KEY the model endpoint's key: nothing it prints shows either."""
 

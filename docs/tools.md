@@ -125,13 +125,16 @@ A game started with `seats` (new-game extension) is played by several agents, on
    "casters": {"model": "anthropic/claude-sonnet-5-5",        // writes their lines (default anthropic/claude-haiku-4-5)
                "tts_model": "openai/gpt-4o-mini-tts",          // speaks them (the default)
                "play_by_play": {"name": "Max", "voice": "ash", "style": "…"},   // each key optional: the defaults
-               "analyst": {"name": "Ada", "voice": "sage", "style": "…"}}}
+               "analyst": {"name": "Ada", "voice": "sage", "style": "…",
+                           "model": "anthropic/claude-sonnet-5-5"}}}   // a caster's own model (default: model)
   ```
 
   `casters` is `false` (the default: no casters), `true` (Max and Ada as above, with their default styles), or an
   object that changes any of these. `voice` is one of the speech model's voices (`gpt-4o-mini-tts`: `alloy`, `ash`,
   `ballad`, `coral`, `echo`, `fable`, `nova`, `onyx`, `sage`, `shimmer`, `verse`), `style` tells it how the voice
-  sounds, and a name is 1-20 letters, spaces or `.'-`, different from the other caster's. Both models are called
+  sounds, a caster's `model` writes its own lines instead of `model` (the analyst's also does its research), and a name
+  is 1-20 letters, spaces or `.'-`, different from the other caster's. Each caster is an agent that looks the match
+  up with tools before it speaks ([recording.md](recording.md#6-watching-a-game-live)); the models are called
   through agent-env's model endpoint (`[model]`) by the streamer, never by the env.
 - **Human seats:** a seat in new-game `humans` is played by a person in the browser (`GET /play`, with the seat's
   token from the result's `play`), through the same tool wrapper, action log and turn as an agent's seat. A tool call
