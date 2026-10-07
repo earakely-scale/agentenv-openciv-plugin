@@ -1984,7 +1984,7 @@ function nextNote(notes, shown) {
 
 // ---- the sponsor slot: the broadcast's banners (docs/tools.md, Broadcast), one at a time, in turn every BANNER_MS ----
 
-const BANNER_MS = 30000, BANNER_FADE = 600, BANNER_FONT = [21, 13];
+const BANNER_MS = 30000, BANNER_FADE = 600, BANNER_LINE = [21, 16], BANNER_TWO = [17, 13];
 const sponsor = {key: null, at: 0};
 function renderSponsor() {
   const banners = M.live?.broadcast?.banners || [], key = JSON.stringify(banners);
@@ -1994,7 +1994,8 @@ function renderSponsor() {
   if (banners.length) showBanner(banners[0]);
   renderTicker();
 }
-// A banner's text with each {name} its logo, at the largest size from BANNER_FONT that fits, else ending in "…".
+// A banner's text with each {name} its logo: on one line at the largest size from BANNER_LINE that fits, else on two
+// at the largest from BANNER_TWO, else ending in "…".
 function showBanner(b) {
   const el = $("#sponsor"), parts = b.text.split(/\{([a-z][a-z0-9_-]{0,19})\}/);
   el.classList.toggle("light", b.theme === "light");
@@ -2005,9 +2006,15 @@ function showBanner(b) {
 function fitBanner() {
   const ad = $("#sponsor .ad");
   if (!ad) return;
-  let size = BANNER_FONT[0];
-  ad.style.fontSize = `${size}px`;
-  while (ad.scrollWidth > ad.clientWidth && size > BANNER_FONT[1]) ad.style.fontSize = `${--size}px`;
+  const fit = ([size, least], over) => {
+    ad.style.fontSize = `${size}px`;
+    while (over() && size > least) ad.style.fontSize = `${--size}px`;
+    return !over();
+  };
+  ad.classList.remove("two");
+  if (fit(BANNER_LINE, () => ad.scrollWidth > ad.clientWidth)) return;
+  ad.classList.add("two");
+  fit(BANNER_TWO, () => ad.scrollHeight > ad.clientHeight);
 }
 function nextBanner() {
   const banners = M.live?.broadcast?.banners || [], el = $("#sponsor");

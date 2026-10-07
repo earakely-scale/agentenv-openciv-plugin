@@ -163,9 +163,9 @@ turn's year.
 **The sponsor slot** is the right end of the ticker's row, as wide as the side panel (560 px), and shows the broadcast's
 banners (`live.broadcast.banners`) one at a time, crossfading to the next every 30 s. It is on screen in every shot,
 since the client view at full size covers only the map, and the row shows from the start when there are banners,
-before any note. A banner is its text with its logos inline (1.45 em high), centred, at 21 px or as much smaller as
-fits down to 13 px, then cut with an ellipsis; `theme: "light"` puts it on a white plate. The text is shown as text,
-never as markup.
+before any note. A banner is its text with its logos inline, centred: on one line at 21 px or as much smaller as
+fits down to 16 px, else on two lines from 17 px down to 13 px (a 100-character banner fits), and only then cut with an
+ellipsis; `theme: "light"` puts it on a white plate. The text is shown as text, never as markup.
 
 **The score bug** sits over the top of the map while the map is shown, with the year and the turn. One to four seats
 get a card each (two face each other across the year): its name and civ, rank and score, cities, people, techs, army,

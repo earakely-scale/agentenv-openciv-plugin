@@ -286,7 +286,8 @@ PROBE_SPONSOR = TEXT + """
     const box = el.getBoundingClientRect();
     frames.push({t: Math.round(performance.now()), text: text(ad), light: el.classList.contains("light"),
       logos: $$("img", ad).map(i => i.naturalWidth > 0), size: parseFloat(ad.style.fontSize),
-      cut: ad.scrollWidth > ad.clientWidth, left: Math.round(box.left), width: Math.round(box.width),
+      cut: ad.scrollWidth > ad.clientWidth || ad.scrollHeight > ad.clientHeight, two: ad.classList.contains("two"),
+      left: Math.round(box.left), width: Math.round(box.width),
       ticker: !$("#ticker").hidden, markup: $$("#sponsor b").length});
     $("#probe").textContent = JSON.stringify(frames);
   }, 1000);"""
@@ -297,12 +298,12 @@ def test_the_stream_shows_the_broadcasts_banners_in_turn(sponsored, tmp_path):
     frames = run(f"{base}/live?stream", 70000, tmp_path)
     first = frames[0]
     assert first["text"] == "Powered by Modal with AgentEnv Framework" and first["light"] and first["ticker"]
-    assert first["logos"] == [True, True] and first["size"] == 21 and not first["cut"]
+    assert first["logos"] == [True, True] and first["size"] == 21 and not first["cut"] and not first["two"]
     assert (first["left"], first["width"]) == (1920 - 560, 560)   # the bottom row's right end, the side panel's width
     assert {"/live/logo/0/modal", "/live/logo/0/agentenv"} <= set(asked)
     long = next(f for f in frames if f["text"].startswith("<b>Every</b>"))
     assert not long["light"] and long["logos"] == [] and long["markup"] == 0
-    assert long["size"] == 13 and long["cut"]   # it shrinks to fit, down to 13 px, then ends in an ellipsis
+    assert long["two"] and 13 <= long["size"] <= 17 and not long["cut"]   # too long for a line at 16 px: two lines
     assert 28000 <= long["t"] <= 34000
     assert frames[-1]["text"] == first["text"]   # and back, a turn later
 
