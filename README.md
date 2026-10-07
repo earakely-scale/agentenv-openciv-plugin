@@ -85,7 +85,7 @@ Then, from the checkout (`cd agentenv-openciv-plugin`), play any task in the bun
 | `showmatch-quick` | the same match | Tiny, 10 | 4 min, about $1 |
 | `livestream` | the same three, paced for a two-hour broadcast | Small, 140 | 1 h 52 min, about $32 |
 | `sol-vs-opus` | GPT-6 Sol against Opus 5.5 with 3 AI civs: conquering the other model wins, the score only breaks a tie ([results](#a-duel-to-the-death)) | Tiny, up to 750 | 84 min to a conquest, about $26 |
-| `astra-opus-kimi` | GPT-6 Astra, Opus 5.5 and Kimi K3 with 3 AI civs: conquering the other two models wins, paced for a four-hour broadcast | Tiny, 300 | 4 h 35 min at most, about $170 (estimated) |
+| `five-way-war` | GPT-6 Astra, GPT-6 Sol, GPT-5.6 Terra, Opus 5.5 and Sonnet 5.5, no AI civs: each is told to conquer the other four, paced for a long broadcast | Tiny, 300 | 4 h 35 min or more, about $200 (estimated) |
 | `frontier` | nine models from five labs: Claude, GPT, Gemini, Grok, Kimi | Standard, 200 | 1 h 52 min, about $80 |
 | `frontier-quick` | the same match | Standard, 10 | 8 min, $1.70 |
 | `human-vs-ai` | you, in the browser, against 3 AI civs ([play alongside](#play-alongside-the-agents)) | Small, 100 | as long as you play, free |
