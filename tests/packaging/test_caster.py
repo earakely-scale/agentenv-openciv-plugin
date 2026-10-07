@@ -11,6 +11,7 @@ import math
 import re
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -396,7 +397,7 @@ def test_failures_are_survived_and_the_key_is_never_printed(fake, capsys):
     c.tick()
     assert len(fake.auth) == 1   # it waits before retrying
     clock.now += caster.RETRY_SECONDS
-    fake.speech_failures = 3
+    fake.speech_failures = 6   # a line's call and its twin
     for _ in range(3):
         c.tick()
         until_quiet(c, clock)
@@ -782,6 +783,43 @@ def test_a_voice_that_hangs_is_given_up_on_in_seconds(fake, monkeypatch):
                         or post(path, body, timeout))
     c.tick()
     assert ("/v1/audio/speech", caster.SPEECH_SECONDS) in asked and caster.SPEECH_SECONDS <= 15
+
+
+def test_a_slow_voice_gets_a_twin_request_and_the_first_answer_is_the_voice(fake, monkeypatch):
+    c = new_caster(fake, Clock())
+    monkeypatch.setattr(caster, "SPEECH_TWIN_SECONDS", 0.2)
+    monkeypatch.setattr(caster, "SPEECH_SECONDS", 1.0)
+    asked = []
+
+    def answers(*replies):
+        def post(path, body, timeout):
+            asked.append(timeout)
+            reply = replies[len(asked) - 1]
+            if isinstance(reply, float):
+                time.sleep(reply)
+                raise TimeoutError("The read operation timed out")
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+        return post
+
+    def timed(*replies):
+        asked.clear()
+        monkeypatch.setattr(c, "post", answers(*replies))
+        began = time.monotonic()
+        try:
+            return c.voiced({"input": "Sol takes the lead!"}), round(time.monotonic() - began, 1)
+        except OSError as e:
+            return e, round(time.monotonic() - began, 1)
+
+    assert timed(b"wav") == (b"wav", 0.0) and asked == [1.0]
+    # a call still out at SPEECH_TWIN_SECONDS gets a twin, which has the rest of SPEECH_SECONDS; the first answer wins
+    assert timed(1.0, b"twin") == (b"twin", 0.2) and asked == [1.0, 0.8]
+    # a call that fails gets its twin at once
+    assert timed(urllib.error.URLError("refused"), b"again") == (b"again", 0.0)
+    # both hung: given up on at SPEECH_SECONDS, and the line goes out as a caption
+    error, seconds = timed(1.0, 0.8)
+    assert isinstance(error, TimeoutError) and seconds <= 1.1
 
 
 def test_bad_lookups_get_errors_back_not_exceptions(fake):

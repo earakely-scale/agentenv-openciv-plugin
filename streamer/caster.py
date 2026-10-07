@@ -33,6 +33,7 @@ import urllib.parse
 import urllib.request
 from collections import Counter
 from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -61,6 +62,7 @@ MAX_TOKENS = 1500       # a call's reply: a line or a lookup, after whatever thi
 WORDS_PER_SECOND = 2.5  # a line's length when its audio failed
 CHAT_SECONDS = 45       # a model call's timeout
 SPEECH_SECONDS = 15     # a voicing's: a voice takes about 2.5 s, and one that hangs is dead air on the stream
+SPEECH_TWIN_SECONDS = 4   # a voicing not back by then gets a second request, and the first answer is the voice
 LOOKUP_ROUNDS = 3       # a live line's rounds of lookups before it must speak
 CALL_SECONDS = 2.0      # a model call's time and a line's voicing, until measured (a running average after that)
 VOICE_SECONDS = 1.5
@@ -934,14 +936,37 @@ class Caster:
         _, voice, style = self.casters[line["speaker"]]
         began = self.clock()
         try:
-            wav = leveled(fixed_wav(self.post("/v1/audio/speech", {
+            wav = leveled(fixed_wav(self.voiced({
                 "model": self.tts_model, "voice": voice, "input": line["text"], "instructions": style,
-                "response_format": "wav"}, SPEECH_SECONDS)))
+                "response_format": "wav"})))
         except (OSError, ValueError, http.client.HTTPException) as e:
             self.log(f"caster: no voice for a line, captions only: {failure(e)}")
             return None
         self.voice_seconds += 0.3 * (self.clock() - began - self.voice_seconds)
         return wav
+
+    def voiced(self, body: dict) -> bytes:
+        """The speech model's answer to `body`. The speech service answers most calls in 2 s, but some only after 20 s
+        or never (2 of 6 in a row once), so a call that fails or isn't back in SPEECH_TWIN_SECONDS gets a twin, the
+        first answer wins, and both are given up on at SPEECH_SECONDS."""
+        pool = ThreadPoolExecutor(2)
+        try:
+            calls = [pool.submit(self.post, "/v1/audio/speech", body, SPEECH_SECONDS)]
+            done, _ = wait(calls, timeout=SPEECH_TWIN_SECONDS)
+            if not done or calls[0].exception() is not None:
+                calls.append(pool.submit(self.post, "/v1/audio/speech", body, SPEECH_SECONDS - SPEECH_TWIN_SECONDS))
+            pending, error = set(calls), None
+            while pending:
+                done, pending = wait(pending, timeout=SPEECH_SECONDS, return_when=FIRST_COMPLETED)
+                if not done:
+                    raise TimeoutError("the speech model did not answer")
+                for call in done:
+                    if call.exception() is None:
+                        return call.result()
+                    error = call.exception()
+            raise error
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
     def post(self, path: str, body: dict, timeout: float) -> bytes:
         request = urllib.request.Request(f"{self.base_url}{path}", data=json.dumps(body).encode(), headers={
