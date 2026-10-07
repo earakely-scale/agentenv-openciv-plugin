@@ -3,6 +3,7 @@ dumps its DOM, where a probe script has written what was on screen. Covers what 
 messages, shown as text and never as markup) and the stream's broadcast layer (docs/viewer.md, section 5): the
 director, its cards, the speech bubble, the chyron, captions with the casters' voices, and the notes ticker."""
 
+import base64
 import html
 import io
 import json
@@ -224,6 +225,87 @@ def test_the_stream_casts_a_live_game(broadcast, tmp_path):
     over = first("card", "game over")
     assert over and over["t"] > captured["t"] and frames[-1]["view"] == "summary"
     assert all(f["markup"] == 0 for f in frames)
+
+
+LOGO = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5E"
+                        "rkJggg==")
+BANNERS = [
+    {"text": "Powered by {modal} Modal with {agentenv} AgentEnv Framework", "theme": "light",
+     "logos": {"modal": "live/logo/0/modal", "agentenv": "live/logo/0/agentenv"}},
+    {"text": "<b>Every</b> match of this broadcast is open source, with its replay: github.com/earakely-scale/agentenv",
+     "theme": "dark", "logos": {}}]
+
+
+@pytest.fixture
+def sponsored(doc):
+    """A live env whose broadcast has two banners, one with two logos on a light plate and one long text."""
+    asked = []
+
+    def data(since: int) -> dict:
+        live = {"turn": 6, "game_over": False, "victory": None, "client": False, "recording": True,
+                "min_turn_seconds": 15, "messages": [], "seats": [],
+                "broadcast": {"title": "Ads", "casters": None, "banners": BANNERS}}
+        out = {k: doc[k] for k in ("schema", "game", "meta", "players")}
+        out["turns"] = [t for t in doc["turns"] if since < t["turn"]]
+        return {**out, **({"static": doc["static"]} if since < 0 else {}), "live": live}
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def reply(self, body: bytes, ctype: str):
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            url = urllib.parse.urlparse(self.path)
+            asked.append(url.path)
+            if url.path == "/live":
+                self.reply(probed(viewer.page(), PROBE_SPONSOR).encode(), "text/html; charset=utf-8")
+            elif url.path == "/live/data.json":
+                since = int(dict(urllib.parse.parse_qsl(url.query)).get("since", -1))
+                self.reply(json.dumps(data(since)).encode(), "application/json")
+            elif url.path in ("/live/logo/0/modal", "/live/logo/0/agentenv"):
+                self.reply(LOGO, "image/png")
+            else:
+                self.send_error(404)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}", asked
+    server.shutdown()
+
+
+PROBE_SPONSOR = TEXT + """
+  const frames = [];
+  setInterval(() => {
+    const el = $("#sponsor"), ad = $("#sponsor .ad");
+    if (!el || el.hidden || !ad) return;
+    const box = el.getBoundingClientRect();
+    frames.push({t: Math.round(performance.now()), text: text(ad), light: el.classList.contains("light"),
+      logos: $$("img", ad).map(i => i.naturalWidth > 0), size: parseFloat(ad.style.fontSize),
+      cut: ad.scrollWidth > ad.clientWidth || ad.scrollHeight > ad.clientHeight, two: ad.classList.contains("two"),
+      left: Math.round(box.left), width: Math.round(box.width),
+      ticker: !$("#ticker").hidden, markup: $$("#sponsor b").length});
+    $("#probe").textContent = JSON.stringify(frames);
+  }, 1000);"""
+
+
+def test_the_stream_shows_the_broadcasts_banners_in_turn(sponsored, tmp_path):
+    base, asked = sponsored
+    frames = run(f"{base}/live?stream", 70000, tmp_path)
+    first = frames[0]
+    assert first["text"] == "Powered by Modal with AgentEnv Framework" and first["light"] and first["ticker"]
+    assert first["logos"] == [True, True] and 16 <= first["size"] <= 21 and not first["cut"] and not first["two"]
+    assert (first["left"], first["width"]) == (1920 - 560, 560)   # the bottom row's right end, the side panel's width
+    assert {"/live/logo/0/modal", "/live/logo/0/agentenv"} <= set(asked)
+    long = next(f for f in frames if f["text"].startswith("<b>Every</b>"))
+    assert not long["light"] and long["logos"] == [] and long["markup"] == 0
+    assert long["two"] and 13 <= long["size"] <= 17 and not long["cut"]   # too long for a line at 16 px: two lines
+    assert 28000 <= long["t"] <= 34000
+    assert frames[-1]["text"] == first["text"]   # and back, a turn later
 
 
 @pytest.fixture(scope="module")

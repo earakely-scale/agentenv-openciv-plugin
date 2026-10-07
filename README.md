@@ -85,6 +85,7 @@ Then, from the checkout (`cd agentenv-openciv-plugin`), play any task in the bun
 | `showmatch-quick` | the same match | Tiny, 10 | 4 min, about $1 |
 | `livestream` | the same three, paced for a two-hour broadcast | Small, 140 | 1 h 52 min, about $32 |
 | `sol-vs-opus` | GPT-6 Sol against Opus 5.5 with 3 AI civs: conquering the other model wins, the score only breaks a tie ([results](#a-duel-to-the-death)) | Tiny, up to 750 | 84 min to a conquest, about $26 |
+| `five-way-war` | GPT-6 Astra, GPT-6 Sol, GPT-5.6 Terra, Opus 5.5 and Sonnet 5.5, no AI civs: the game ends only when one has conquered the rest | Tiny, up to 750 | as long as you stream it: about $160 for 4 h (estimated) |
 | `frontier` | nine models from five labs: Claude, GPT, Gemini, Grok, Kimi | Standard, 200 | 1 h 52 min, about $80 |
 | `frontier-quick` | the same match | Standard, 10 | 8 min, $1.70 |
 | `human-vs-ai` | you, in the browser, against 3 AI civs ([play alongside](#play-alongside-the-agents)) | Small, 100 | as long as you play, free |
@@ -231,6 +232,16 @@ and `--title` renames it. Both models run through agent-env's model endpoint (`[
 ```bash
 agent-env openciv3 stream --client-view --record ~/broadcasts &   # stream it, cast as the task says, keep a copy
 agent-env run openciv3 --task showmatch
+```
+
+**Sponsor it.** `broadcast`'s `banners` fill a sponsor slot at the bottom right of the stream, one at a time, each for
+30 s: text with logos inline, on the stream's dark colours or a white plate. A logo is an `https://` URL, a `data:` URI
+or an image file; the match step inlines each one when the game starts, so the stream never waits on another host:
+
+```json
+"banners": [{"text": "Powered by {modal} Modal Sandboxes with {agentenv} AgentEnv Framework", "theme": "light",
+             "logos": {"modal": "https://github.com/modal-labs.png",
+                       "agentenv": "https://raw.githubusercontent.com/scaleapi/agentenv-framework/main/assets/brand/icon-512.png"}}]
 ```
 
 When the game ends, its recording is saved with the run:

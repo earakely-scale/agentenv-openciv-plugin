@@ -676,7 +676,8 @@ function shell() {
     $("#stage").insertAdjacentHTML("beforeend", `<div class="duel" id="duel" hidden></div><div class="bubble" id="bubble" hidden></div>
       <div class="chyron" id="chyron" hidden></div>`);
     $("#views").insertAdjacentHTML("beforeend", `<div class="bcl"><div class="caption" id="caption" hidden></div></div>`);
-    $(".timeline").insertAdjacentHTML("beforebegin", `<div class="ticker" id="ticker" hidden><div class="tag">Agent notes</div><div class="tk" id="tk"></div></div>`);
+    $(".timeline").insertAdjacentHTML("beforebegin", `<div class="ticker" id="ticker" hidden><div class="tag" id="tktag">Agent notes</div><div class="tk" id="tk"></div>
+      <div class="sponsor" id="sponsor" hidden></div></div>`);
     document.body.insertAdjacentHTML("beforeend", `<div class="moment" id="moment" hidden></div>`);
   }
   for (const b of $$(".tabs button")) b.onclick = () => setView(b.dataset.view);
@@ -1599,6 +1600,7 @@ function broadcastStart() {
 }
 // What the newest data adds: events of turns after turn index `wasLast`, new messages, a new leader, the game's end.
 function broadcastNews(wasLast) {
+  renderSponsor();
   const d = bc.director, now = performance.now();
   if (!d) return;
   let k = M.events.length; while (k > 0 && M.events[k - 1].ti > wasLast) k--;
@@ -1962,7 +1964,8 @@ function renderTicker() {
   if (!M.ready || !$("#ticker")) return;
   const notes = M.seats.filter(p => !M.series[p.index][M.last][5]).map(p => ({p, n: M.lastNote(M.last, p.index)}))
     .filter(x => x.n);
-  $("#ticker").hidden = !notes.length;
+  $("#ticker").hidden = !notes.length && $("#sponsor").hidden;
+  $("#tktag").hidden = $("#tk").hidden = !notes.length;
   if (!notes.length) return;
   const x = nextNote(notes, bc.notes);
   $("#tk").innerHTML = `<div class="item">${sw(x.p)}<b>${lab(x.p)}:</b><span class="q">${quote(x.n.text)}</span><span class="t">T${x.n.turn}</span></div>`;
@@ -1977,6 +1980,48 @@ function nextNote(notes, shown) {
   shown.delete(x.p.index);
   shown.set(x.p.index, key(x));
   return x;
+}
+
+// ---- the sponsor slot: the broadcast's banners (docs/tools.md, Broadcast), one at a time, in turn every BANNER_MS ----
+
+const BANNER_MS = 30000, BANNER_FADE = 600, BANNER_LINE = [21, 16], BANNER_TWO = [17, 13];
+const sponsor = {key: null, at: 0};
+function renderSponsor() {
+  const banners = M.live?.broadcast?.banners || [], key = JSON.stringify(banners);
+  if (key === sponsor.key) return;
+  Object.assign(sponsor, {key, at: 0});
+  $("#sponsor").hidden = !banners.length;
+  if (banners.length) showBanner(banners[0]);
+  renderTicker();
+}
+// A banner's text with each {name} its logo: on one line at the largest size from BANNER_LINE that fits, else on two
+// at the largest from BANNER_TWO, else ending in "…".
+function showBanner(b) {
+  const el = $("#sponsor"), parts = b.text.split(/\{([a-z][a-z0-9_-]{0,19})\}/);
+  el.classList.toggle("light", b.theme === "light");
+  el.innerHTML = `<div class="ad">${parts.map((s, k) => k % 2 ? `<img alt="" src="${esc(b.logos[s])}">` : esc(s)).join("")}</div>`;
+  for (const img of $$("img", el)) img.onload = fitBanner;
+  fitBanner();
+}
+function fitBanner() {
+  const ad = $("#sponsor .ad");
+  if (!ad) return;
+  const fit = ([size, least], over) => {
+    ad.style.fontSize = `${size}px`;
+    while (over() && size > least) ad.style.fontSize = `${--size}px`;
+    return !over();
+  };
+  ad.classList.remove("two");
+  if (fit(BANNER_LINE, () => ad.scrollWidth > ad.clientWidth)) return;
+  ad.classList.add("two");
+  fit(BANNER_TWO, () => ad.scrollHeight > ad.clientHeight);
+}
+function nextBanner() {
+  const banners = M.live?.broadcast?.banners || [], el = $("#sponsor");
+  if (banners.length < 2 || !el) return;
+  sponsor.at = (sponsor.at + 1) % banners.length;
+  el.classList.add("out");
+  setTimeout(() => { showBanner(banners[sponsor.at]); el.classList.remove("out"); }, BANNER_FADE);
 }
 
 // ---- the casters (&cast=URL): their lines in order, voiced, with a caption while each plays ----
@@ -2091,7 +2136,7 @@ async function poll() {
 
 shell();
 $("#views").insertAdjacentHTML("beforeend", `<div class="empty" id="emptymsg" hidden></div>`);
-if (STREAM) { setInterval(tick, 250); setInterval(renderTicker, 5000); if (CAST) pollCast(); }
+if (STREAM) { setInterval(tick, 250); setInterval(renderTicker, 5000); setInterval(nextBanner, BANNER_MS); if (CAST) pollCast(); }
 if (LIVE) { waiting("Connecting to the game…"); poll(); }
 else if (M.ingest(window.OPENCIV_DATA) && M.ready) start();
 else waiting("This recording has no turns.");
