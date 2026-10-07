@@ -511,7 +511,9 @@ def test_five_way_war_seats_five_models_and_no_ai_paced_for_over_four_hours(loca
     assert {n: a["a2a_agent_id"] for n, a in agents.items()} == {
         "astra": "openciv3-codex", "sol": "openciv3-codex", "terra": "openciv3-codex", "opus": "openciv3-claude",
         "sonnet": "openciv3-claude"}
-    assert all(a["env_vars"] == {"OPENCIV3_SESSION_TURNS": "30"} and a["ttl_seconds"] == 28800 for a in agents.values())
+    assert {n: a["env_vars"]["OPENCIV3_SESSION_TURNS"] for n, a in agents.items()} == {
+        "astra": "20", "sol": "30", "terra": "30", "opus": "30", "sonnet": "30"}
+    assert all(a["ttl_seconds"] == 28800 for a in agents.values())
     players = [s for s in steps if s["type"] == "prompt_agent"]
     assert {s["agent_name"]: s["model"] for s in players} == {
         "astra": "openai/gpt-6-astra", "sol": "openai/gpt-6-sol", "terra": "openai/gpt-5.6-terra",

@@ -14,7 +14,7 @@
       "openciv3"
     ],
     "env_vars": {
-      "OPENCIV3_SESSION_TURNS": "30"
+      "OPENCIV3_SESSION_TURNS": "20"
     },
     "ttl_seconds": 28800,
     "depends_on": [
