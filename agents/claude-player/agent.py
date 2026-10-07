@@ -29,7 +29,7 @@ from openciv3_player import (
     play,
 )
 
-MODEL_SILENCE_SECONDS = 240
+MODEL_SILENCE_SECONDS = 120
 
 
 class ClaudeConfig(PlayerConfig):
