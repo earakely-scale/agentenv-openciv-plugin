@@ -127,7 +127,7 @@ A game started with `seats` (new-game extension) is played by several agents, on
                "play_by_play": {"name": "Max", "voice": "ash", "style": "…"},   // each key optional: the defaults
                "analyst": {"name": "Ada", "voice": "sage", "style": "…",
                            "model": "anthropic/claude-sonnet-5-5"}},   // a caster's own model (default: model)
-   "banners": [{"text": "Powered by {modal} Modal with {agentenv} AgentEnv Framework",   // 1-100 characters
+   "banners": [{"text": "Powered by {modal} Modal sandboxes with {agentenv} AgentEnv Framework",   // 1-100 characters
                 "logos": {"modal": "https://github.com/modal-labs.png",                // {name} in the text: its logo
                           "agentenv": "~/brand/agentenv-icon.png"},
                 "theme": "light"},                                                     // optional: dark (the default)

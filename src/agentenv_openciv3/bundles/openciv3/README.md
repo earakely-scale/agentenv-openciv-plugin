@@ -78,7 +78,7 @@ in parallel: the outcome verifier and `save_env_recording`.
   barbarians, at a 55 s pace, each agent starting a fresh session every 30 turns (Astra, at 5× Sol's price a
   token, every 20). Their prompt makes conquering the others the ultimate goal, as the game ends only when one
   has: the turn limit, 750, is about 11 hours away, so the broadcast runs until a conquest or until you stop
-  it (about 65 turns an hour). Its sponsor slot reads "Powered by Modal with AgentEnv Framework", with both logos. On a Small map three agents kept the peace for 75 turns; on a Tiny one, Opus
+  it (about 65 turns an hour). Its sponsor slot reads "Powered by Modal sandboxes with AgentEnv Framework", with both logos. On a Small map three agents kept the peace for 75 turns; on a Tiny one, Opus
   went to war at turn 56.
 - `human-vs-ai` and `human-vs-agents` seat you: you play Rome in the browser, on a Small map for 100 turns, against
   3 AI civilizations (`human-vs-ai`) or against Opus (Claude Code, Greece) and GPT-5.6 Sol (Codex, America)
