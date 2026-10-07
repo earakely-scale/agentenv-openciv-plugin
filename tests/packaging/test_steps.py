@@ -303,14 +303,21 @@ def test_a_paced_match_round_trips(local_stores):
     assert cls.from_dict({"id": "m", "type": "openciv3_match", "env_id": "e", "turns": 1}).min_turn_seconds == 0
 
 
-async def test_a_match_names_its_broadcast_for_the_env(local_stores):
+async def test_a_match_names_its_broadcast_for_the_env(local_stores, tmp_path):
     env = FakeGame()
     show = {"title": "Showmatch", "casters": {"model": "openai/gpt-5.6-luna", "analyst": {"name": "Iris"}}}
+    png = b"\x89PNG\r\n\x1a\n" + b"\0" * 16
+    (tmp_path / "modal.png").write_bytes(png)
+    ad = {**show, "banners": [{"text": "Powered by {modal} Modal", "logos": {"modal": str(tmp_path / "modal.png")}}]}
     async with deployed(env) as record:
-        for value in (show, None):
-            await OpenCiv3MatchTaskStep(id="match", version=None, env_id="openciv3", turns=10,
-                                        broadcast=value).execute(run_context(record, "opus", "sol"))
-    assert [g.get("broadcast") for g in env.games] == [show, None]
+        for value in (show, None, ad):
+            step = OpenCiv3MatchTaskStep(id="match", version=None, env_id="openciv3", turns=10, broadcast=value)
+            await step.execute(run_context(record, "opus", "sol"))
+    # the env gets each banner logo inlined, the step keeps the task's source
+    uri = f"data:image/png;base64,{base64.b64encode(png).decode()}"
+    inlined = {**ad, "banners": [{**ad["banners"][0], "logos": {"modal": uri}}]}
+    assert [g.get("broadcast") for g in env.games] == [show, None, inlined]
+    assert step.broadcast == ad
 
 
 def test_a_broadcast_match_round_trips_and_a_bad_broadcast_fails_when_the_task_loads(local_stores):
@@ -506,7 +513,10 @@ def test_five_way_war_seats_five_models_and_no_ai_until_one_conquers_the_rest(lo
     settings = (match.turns, match.size, match.ai_opponents, match.barbarians, match.min_turn_seconds)
     assert settings == (750, "Tiny", 0, "Restless", 55)
     assert match.civs == {"astra": "America", "sol": "England", "terra": "Persia", "opus": "Rome", "sonnet": "Greece"}
-    assert broadcast.settings(match.broadcast)["title"].startswith("Five AI models at war in Civilization 3")
+    shown = broadcast.settings(match.broadcast)
+    assert shown["title"].startswith("Five AI models at war in Civilization 3")
+    assert [(b["text"], b["theme"], sorted(b["logos"])) for b in shown["banners"]] == [
+        ("Powered by {modal} Modal with {agentenv} AgentEnv Framework", "light", ["agentenv", "modal"])]
     agents = {s["agent_name"]: s for s in steps if s["type"] == "deploy_agent"}
     assert {n: a["a2a_agent_id"] for n, a in agents.items()} == {
         "astra": "openciv3-codex", "sol": "openciv3-codex", "terra": "openciv3-codex", "opus": "openciv3-claude",

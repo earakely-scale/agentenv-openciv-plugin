@@ -370,6 +370,15 @@ body.stream .agentsview.dense .acard .mind .tx { -webkit-line-clamp: 1; }
 .ticker .item b { font-weight: 750; } .ticker .item .sw { width: 13px; height: 13px; margin: 0; }
 .ticker .item .q { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .ticker .item .t { margin-left: auto; padding-left: 18px; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* the sponsor slot: the broadcast's banners, at the bottom row's right end, as wide as the side panel above it */
+.ticker .sponsor { flex: 0 0 560px; min-width: 0; overflow: hidden; margin-left: auto; display: flex; align-items: center;
+  padding: 0 18px; background: var(--raise); border-left: 1px solid var(--line2); color: var(--text);
+  transition: opacity .6s ease; }
+.ticker .sponsor.out { opacity: 0; }
+.ticker .sponsor.light { background: #f5f6f8; border-left-color: #f5f6f8; color: #14161b; }
+.ticker .sponsor .ad { flex: 1; min-width: 0; text-align: center; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; font-weight: 650; letter-spacing: .01em; }
+.ticker .sponsor img { height: 1.45em; vertical-align: middle; margin: -.2em .08em 0; border-radius: 5px; }
 
 @keyframes wipe { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0); } }
 @keyframes slidein { from { opacity: 0; transform: translateX(-36px); } to { opacity: 1; transform: none; } }

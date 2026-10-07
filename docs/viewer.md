@@ -113,6 +113,7 @@ the turns it hasn't seen; a recording embeds the whole document.
 | `GET /live` | The viewer app |
 | `GET /live/data.json?since=N` | The match data with only turns after `N`; `since=-1` (default) adds `static`. Also `live` (below) |
 | `GET /live/client.png?seat=CIV&turn=N` | The real client's view of the game from that seat (default: the first), for the newest turn it has drawn; 503 with `Retry-After` until the first frame, 404 without the client |
+| `GET /live/logo/<banner>/<name>` | A logo of the broadcast's banners, as the task gave it (`image/png`, `image/svg+xml`, …); 404 for none |
 | `GET /live/state.json`, `GET /live/frame.png` | Kept for old pages and scripts |
 
 `live` is the turn being played right now. A seat is `ended` once it has ended the turn (including while its
@@ -122,7 +123,9 @@ returns. Before the first game, `game` is null, `turns` is empty, and so are `se
 ```jsonc
 {"turn": 57, "game_over": false, "victory": null, "client": true, "recording": true,   // over: for every seat
  "min_turn_seconds": 15,                                          // the broadcast pace: no turn ends sooner; 0: none
- "broadcast": {"title": "OpenCiv3 Showmatch", "casters": {}},     // the task's (tools.md, The broadcast); null: none
+ "broadcast": {"title": "OpenCiv3 Showmatch", "casters": {},      // the task's (tools.md, The broadcast); null: none
+               "banners": [{"text": "Powered by {modal} Modal", "theme": "light",
+                            "logos": {"modal": "live/logo/0/modal"}}]},   // each logo a link, not its bytes
  "messages": [{"from": "Rome", "to": ["Greece"], "text": "Join me against Carthage.",
                "seconds": 12.4}],                                 // this turn's, oldest first; "to": "all" for everyone
  "seats": [{"civ": "Rome", "label": "opus", "ended": false,      // has ended the turn
@@ -156,6 +159,13 @@ diplomacy feed, the score chart while no agent is spotlit, and the events), a lo
 speaks, a ticker under the map with the newest note of each seat still in the game (`label: "note"`, every 5 s, seat
 by seat, a note not shown yet before the others), and the timeline. The top bar has the broadcast's title and the
 turn's year.
+
+**The sponsor slot** is the right end of the ticker's row, as wide as the side panel (560 px), and shows the broadcast's
+banners (`live.broadcast.banners`) one at a time, crossfading to the next every 30 s. It is on screen in every shot,
+since the client view at full size covers only the map, and the row shows from the start when there are banners,
+before any note. A banner is its text with its logos inline (1.45 em high), centred, at 21 px or as much smaller as
+fits down to 13 px, then cut with an ellipsis; `theme: "light"` puts it on a white plate. The text is shown as text,
+never as markup.
 
 **The score bug** sits over the top of the map while the map is shown, with the year and the turn. One to four seats
 get a card each (two face each other across the year): its name and civ, rank and score, cities, people, techs, army,

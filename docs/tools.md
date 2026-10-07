@@ -115,8 +115,8 @@ A game started with `seats` (new-game extension) is played by several agents, on
   it. That seat counts as having ended the turn in the live view, and its wait is no silence: the env never ends
   its turn for it. A blocked `end_turn` doesn't wait; neither do games with one seat, autoplay, or a turn the env
   ends for a silent seat.
-- **The broadcast:** new-game `broadcast` is the stream's title and whether two AI casters talk over it, set by the
-  task (`openciv3_match`'s `broadcast`) and off when a new game leaves it out. `agent-env openciv3 stream` reads it
+- **The broadcast:** new-game `broadcast` is the stream's title, whether two AI casters talk over it and the
+  banners in its sponsor slot, set by the task (`openciv3_match`'s `broadcast`) and off when a new game leaves it out. `agent-env openciv3 stream` reads it
   from the live data (`live.broadcast`) and follows it; the env only keeps it and never calls a model.
 
   ```jsonc
@@ -126,7 +126,12 @@ A game started with `seats` (new-game extension) is played by several agents, on
                "tts_model": "openai/gpt-4o-mini-tts",          // speaks them (the default)
                "play_by_play": {"name": "Max", "voice": "ash", "style": "…"},   // each key optional: the defaults
                "analyst": {"name": "Ada", "voice": "sage", "style": "…",
-                           "model": "anthropic/claude-sonnet-5-5"}}}   // a caster's own model (default: model)
+                           "model": "anthropic/claude-sonnet-5-5"}},   // a caster's own model (default: model)
+   "banners": [{"text": "Powered by {modal} Modal with {agentenv} AgentEnv Framework",   // 1-100 characters
+                "logos": {"modal": "https://github.com/modal-labs.png",                // {name} in the text: its logo
+                          "agentenv": "~/brand/agentenv-icon.png"},
+                "theme": "light"},                                                     // optional: dark (the default)
+               {"text": "Every match is open source"}]}                               // optional: up to 8, in turn
   ```
 
   `casters` is `false` (the default: no casters), `true` (Max and Ada as above, with their default styles), or an
@@ -136,6 +141,15 @@ A game started with `seats` (new-game extension) is played by several agents, on
   is 1-20 letters, spaces or `.'-`, different from the other caster's. Each caster is an agent that looks the match
   up with tools before it speaks ([recording.md](recording.md#6-watching-a-game-live)); the models are called
   through agent-env's model endpoint (`[model]`) by the streamer, never by the env.
+
+  `banners` fill the stream's sponsor slot, one at a time, each for 30 s ([viewer.md](viewer.md#5-broadcast-mode-stream)).
+  A banner's text places each of its `logos` where `{name}` stands (names: `a-z`, `0-9`, `_`, `-`; every placeholder
+  needs a logo and every logo a placeholder), and its `theme` is `dark`, the stream's colours, or `light`, a white plate
+  for logos made for light backgrounds. A logo's source is an `https://` URL, a `data:image/…;base64,` URI, or an image
+  file on the machine that runs the task (absolute or `~/…`): the `openciv3_match` step fetches or reads each one,
+  checks it is a PNG, JPEG, WebP, GIF or SVG image of at most 512 KB, and gives the env a `data:` URI, so the game's
+  settings hold all the stream shows and a broadcast never waits on another host. The env takes logos only as `data:`
+  URIs; its live data links each one (`live/logo/<banner>/<name>`) instead of carrying it.
 - **Human seats:** a seat in new-game `humans` is played by a person in the browser (`GET /play`, with the seat's
   token from the result's `play`), through the same tool wrapper, action log and turn as an agent's seat. A tool call
   that would play a human seat fails with `human_seat`: its header names it, or names no seat while the first civ is
@@ -191,6 +205,7 @@ shape and the `live` object are specified in [docs/viewer.md](viewer.md#3-live-r
 | `GET /live` | The match viewer, which follows the game: the map, every seat's view of it, the standings, the agents' actions and the real client's view |
 | `GET /live/data.json?since=N` | The viewer's data with the turns after N (`since=-1`, the default, adds the static map; each turn carries the seats' notes, plans and messages of the turn before), plus `live`: the turn being played, its messages and the broadcast pace, and per seat whether it has ended the turn, for how long it has played it, its calls, its actions, its note so far and its plan. `game` changes when a new game starts; `game` is null before the first game. 400 when `since` is not a number |
 | `GET /live/client.png?seat=CIV&turn=N` | The real client's view from that seat (default: the first) of the newest turn it has drawn. It draws one seat at a time, in the background, skipping turns rather than queueing them; 503 with `Retry-After` until that seat's first frame, 400 for a civ that is no seat, 404 without the client |
+| `GET /live/logo/<banner>/<name>` | A banner logo of the broadcast's (`broadcast.banners`): the image the task gave, 404 for none |
 | `GET /live/state.json`, `GET /live/frame.png?turn=N&view=spectator\|agent` | Kept for older pages and scripts: the newest turn's scoreboard, events and actions, and the map frame of turn N as the recording draws it (404 before the first turn) |
 
 With `OPENCIV_RECORD=0` there are no snapshots: the data has no turns and `live.recording` is false.

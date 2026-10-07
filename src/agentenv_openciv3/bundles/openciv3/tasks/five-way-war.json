@@ -120,7 +120,17 @@
           "name": "Ada",
           "voice": "sage"
         }
-      }
+      },
+      "banners": [
+        {
+          "text": "Powered by {modal} Modal with {agentenv} AgentEnv Framework",
+          "theme": "light",
+          "logos": {
+            "modal": "https://github.com/modal-labs.png",
+            "agentenv": "https://raw.githubusercontent.com/scaleapi/agentenv-framework/main/assets/brand/icon-512.png"
+          }
+        }
+      ]
     },
     "depends_on": [
       "agent-astra",

@@ -234,6 +234,16 @@ agent-env openciv3 stream --client-view --record ~/broadcasts &   # stream it, c
 agent-env run openciv3 --task showmatch
 ```
 
+**Sponsor it.** `broadcast`'s `banners` fill a sponsor slot at the bottom right of the stream, one at a time, each for
+30 s: text with logos inline, on the stream's dark colours or a white plate. A logo is an `https://` URL, a `data:` URI
+or an image file; the match step inlines each one when the game starts, so the stream never waits on another host:
+
+```json
+"banners": [{"text": "Powered by {modal} Modal with {agentenv} AgentEnv Framework", "theme": "light",
+             "logos": {"modal": "https://github.com/modal-labs.png",
+                       "agentenv": "https://raw.githubusercontent.com/scaleapi/agentenv-framework/main/assets/brand/icon-512.png"}}]
+```
+
 When the game ends, its recording is saved with the run:
 
 - an MP4 of the map, standings, agents' actions and key moments, turn by turn;
