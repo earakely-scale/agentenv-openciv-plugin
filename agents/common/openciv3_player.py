@@ -40,7 +40,8 @@ SESSIONS = (
 RESUME = ("This game is under way: an earlier session played it up to turn {turn}. Start with the get_turn_brief tool "
           "and read your plan in it.")
 SESSION_TURNS = 75
-FOOTER = re.compile(r"\[(?:GAME OVER )?T(\d+)/(\d+)")
+FOOTER = re.compile(r"\[(GAME OVER )?T(\d+)/(\d+)")
+GAME_OVER = re.compile(r"^GAME OVER\b", re.MULTILINE)
 SEAT_HEADER = "X-OpenCiv3-Seat"
 TOOL_TIMEOUT_SECONDS = 1800
 STOP_AT = re.compile(r"\buntil turn (\d+)", re.IGNORECASE)
@@ -68,10 +69,13 @@ def endpoint(environ: dict[str, str]) -> str:
 
 
 def game_turn(text: str) -> tuple[int | None, int | None, bool] | None:
-    """(turn, turn_limit, game over) from the footer of a tool result, if it has one."""
+    """(turn, turn_limit, game over) from the footer of a tool result, if it has one. Only the env says the game is
+    over: a plan or a message echoed in the result may quote the words ("this session ends at GAME OVER")."""
+    said = bool(GAME_OVER.search(text))
     if m := FOOTER.findall(text):
-        return int(m[-1][0]), int(m[-1][1]), "GAME OVER" in text
-    return (None, None, True) if "GAME OVER" in text else None
+        over, turn, limit = m[-1]
+        return int(turn), int(limit), bool(over) or (said and int(turn) >= int(limit))
+    return (None, None, True) if said else None
 
 
 def next_message(turn: int | None, limit: int | None, over: bool, stop: int | None, nudges: int,

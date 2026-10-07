@@ -29,6 +29,8 @@ from openciv3_player import (
     play,
 )
 
+MODEL_SILENCE_SECONDS = 240
+
 
 class ClaudeConfig(PlayerConfig):
     model: str = "sonnet"
@@ -112,15 +114,34 @@ class ClaudeCode(Harness):
         message = {"type": "user", "message": {"role": "user", "content": text}}
         self.proc.stdin.write((json.dumps(message) + "\n").encode())
         await self.proc.stdin.drain()
-        async for line in self.proc.stdout:
+        tools = 0
+        while True:
+            try:
+                line = await asyncio.wait_for(self.proc.stdout.readline(), None if tools else MODEL_SILENCE_SECONDS)
+            except TimeoutError:
+                session.error = f"The model sent nothing for {MODEL_SILENCE_SECONDS} s; a fresh session plays on."
+                self.proc.kill()
+                return False
+            if not line:
+                return False
             try:
                 event = json.loads(line)
             except ValueError:
                 continue
             self.see(event, session)
+            tools = max(0, tools + self.pending(event))
             if event.get("type") == "result":
                 return event.get("subtype") != "error_max_budget_usd"
-        return False
+
+    @staticmethod
+    def pending(event: dict) -> int:
+        """How many more tool calls are running after `event`: while one runs (end_turn waits for the other seats), the
+        CLI is quiet; otherwise the model is answering, and a model that stays silent has hung (a request that never
+        returns), so the session ends and a fresh one picks the game up."""
+        content = (event.get("message") or {}).get("content") or []
+        kind = {"assistant": "tool_use", "user": "tool_result"}.get(event.get("type"))
+        n = sum(isinstance(c, dict) and c.get("type") == kind for c in content)
+        return n if kind == "tool_use" else -n
 
     @staticmethod
     def see(event: dict, session: Session) -> None:

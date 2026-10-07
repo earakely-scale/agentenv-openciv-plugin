@@ -69,6 +69,11 @@ def test_the_game_turn_comes_from_the_last_footer():
     assert common.game_turn("GAME OVER — turn 60/60 reached.\n[GAME OVER T60/60]") == (60, 60, True)
     assert common.game_turn("[T3/60 · needs orders: u1] then [T4/60 · needs orders: u1]") == (4, 60, False)
     assert common.game_turn("GAME OVER") == (None, None, True)
+    plan = "plan (T12): expand, then attack Rome. This session ends after 40 turns or GAME OVER.\n"
+    assert common.game_turn(plan + "[T12/270 · nothing needs orders]") == (12, 270, False)
+    assert common.game_turn("From China: GAME OVER for Rome soon.\n[T40/270 · needs orders: u7]") == (
+        40, 270, False)
+    assert common.game_turn("plan (T5):\nGAME OVER is far off.\n[T5/270 · nothing needs orders]") == (5, 270, False)
     assert common.game_turn("hi") is None
 
 
@@ -188,3 +193,26 @@ def test_a_prompt_with_a_stop_turn_is_one_session(fake_cli):
     assert result.parts[0].text == ("Ended turn 8.\n\nSession ended at turn 8/30 after 4 tool calls and 1 nudges "
                                     "($0.50).")
     assert result.usage.cost_usd == 0.5 and len(result.native_trajectory.payload) == 2 * 6
+
+
+def test_a_model_that_goes_silent_ends_its_session_and_a_fresh_one_plays_on(fake_cli, monkeypatch):
+    game_file = fake_cli("claude")
+    monkeypatch.setenv("FAKE_HANG", "model")
+    monkeypatch.setattr(claude, "MODEL_SILENCE_SECONDS", 1)
+    result = run_task(claude.ClaudePlayer, claude.ClaudeConfig(name="opus"), "Lead Rome.")
+    sessions = list(json.loads(game_file.read_text())["sessions"].values())
+    assert [len(messages) for messages in sessions] == [1, 2, 3, 2]
+    assert sessions[1][0].startswith("This game is under way: an earlier session played it up to turn 0.")
+    assert result.parts[0].text.endswith("Played T0 to T30 (GAME OVER) in 4 sessions after 15 tool calls and 4 nudges "
+                                         "($1.75).")
+
+
+def test_a_long_tool_call_is_not_a_silent_model(fake_cli, monkeypatch):
+    game_file = fake_cli("claude")
+    monkeypatch.setenv("FAKE_HANG", "tool")
+    monkeypatch.setenv("FAKE_HANG_SECONDS", "2")
+    monkeypatch.setattr(claude, "MODEL_SILENCE_SECONDS", 1)
+    result = run_task(claude.ClaudePlayer, claude.ClaudeConfig(name="opus"), "Lead Rome.")
+    sessions = json.loads(game_file.read_text())["sessions"].values()
+    assert [len(messages) for messages in sessions] == [3, 3, 2]
+    assert result.parts[0].text.endswith("in 3 sessions after 16 tool calls and 5 nudges ($2.00).")
