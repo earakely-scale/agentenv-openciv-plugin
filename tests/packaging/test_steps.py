@@ -399,7 +399,7 @@ def test_await_game_is_registered_under_its_type_and_round_trips(local_stores):
 
 @pytest.mark.parametrize("task", ["smoke", "play", "full-game", "three-agents", "three-agents-quick", "frontier",
                                   "frontier-quick", "showmatch", "showmatch-quick", "livestream", "sol-vs-opus",
-                                  "human-vs-ai",
+                                  "astra-opus-kimi", "human-vs-ai",
                                   "human-vs-agents"])
 def test_every_bundle_task_records_after_the_game_alongside_grading(local_stores, task):
     steps = json.loads(files("agentenv_openciv3.bundles").joinpath(f"openciv3/tasks/{task}.json").read_text())
@@ -495,6 +495,28 @@ def test_sol_vs_opus_is_won_by_conquest_among_ai_civilizations(local_stores):
     assert all(s["prompt"] == players[0]["prompt"] for s in players)
     assert all(w in players[0]["prompt"] for w in ("conquer the other model's civilization", "only a tiebreaker",
                                                    "game's own AI", "GAME OVER"))
+
+
+def test_astra_opus_kimi_is_a_three_way_war_paced_for_four_hours(local_stores):
+    steps = json.loads(files("agentenv_openciv3.bundles").joinpath("openciv3/tasks/astra-opus-kimi.json").read_text())
+    registry = get_task_step_registry()
+    for s in steps:
+        assert registry[s["type"]].from_dict(s).to_dict()["id"] == s["id"]
+    match = registry["openciv3_match"].from_dict(next(s for s in steps if s["type"] == "openciv3_match"))
+    assert (match.turns, match.size, match.ai_opponents, match.difficulty, match.barbarians, match.min_turn_seconds) == (
+        300, "Tiny", 3, "Monarch", "Restless", 55)
+    assert match.civs == {"astra": "America", "opus": "Rome", "kimi": "China"}
+    assert broadcast.settings(match.broadcast)["title"].startswith("GPT-6 Astra vs Opus 5.5 vs Kimi K3")
+    agents = {s["agent_name"]: s for s in steps if s["type"] == "deploy_agent"}
+    assert {n: a["a2a_agent_id"] for n, a in agents.items()} == {
+        "astra": "openciv3-codex", "opus": "openciv3-claude", "kimi": "openciv3-claude"}
+    assert all(a["env_vars"] == {"OPENCIV3_SESSION_TURNS": "30"} and a["ttl_seconds"] == 28800 for a in agents.values())
+    players = [s for s in steps if s["type"] == "prompt_agent"]
+    assert {s["agent_name"]: s["model"] for s in players} == {
+        "astra": "openai/gpt-6-astra", "opus": "anthropic/claude-opus-5-5", "kimi": "bedrock/global.moonshotai.kimi-k3"}
+    assert all(s["prompt"] == players[0]["prompt"] and s["timeout_seconds"] == 28800 for s in players)
+    assert all(w in players[0]["prompt"] for w in ("two other AI models", "conquer the other models' civilizations",
+                                                   "only a tiebreaker", "GAME OVER"))
 
 
 @pytest.mark.parametrize("full_name", ["three-agents", "frontier", "showmatch"])

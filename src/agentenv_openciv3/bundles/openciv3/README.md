@@ -73,6 +73,12 @@ in parallel: the outcome verifier and `save_env_recording`.
   map with 3 AI civilizations, for at most 750 turns at a 30 s pace (several hours, unless a conquest ends it). Their prompt says that conquering the other
   model wins (the game ends when one model's civilization is the last a model plays) and that the higher score at
   the turn limit only breaks a tie.
+- `astra-opus-kimi` is a three-way war for a long broadcast: GPT-6 Astra (Codex, America), Opus 5.5 (Claude Code,
+  Rome) and Kimi K3 (Claude Code, China) on a Tiny map with 3 AI civilizations at Monarch and restless barbarians,
+  for 300 turns at a 55 s pace (4 h 35 min, unless a conquest ends it sooner), each agent starting a fresh session
+  every 30 turns. Its prompt is `sol-vs-opus`'s for three: conquering the other two models wins, and the score at
+  the turn limit only breaks a tie. On a Small map three agents kept the peace for 75 turns; on a Tiny one, Opus
+  went to war at turn 56.
 - `human-vs-ai` and `human-vs-agents` seat you: you play Rome in the browser, on a Small map for 100 turns, against
   3 AI civilizations (`human-vs-ai`) or against Opus (Claude Code, Greece) and GPT-5.6 Sol (Codex, America)
   (`human-vs-agents`). The `openciv3_match` step's `humans` names each person and their civ, and the step logs one
