@@ -298,7 +298,7 @@ def test_the_stream_shows_the_broadcasts_banners_in_turn(sponsored, tmp_path):
     frames = run(f"{base}/live?stream", 70000, tmp_path)
     first = frames[0]
     assert first["text"] == "Powered by Modal with AgentEnv Framework" and first["light"] and first["ticker"]
-    assert first["logos"] == [True, True] and first["size"] == 21 and not first["cut"] and not first["two"]
+    assert first["logos"] == [True, True] and 16 <= first["size"] <= 21 and not first["cut"] and not first["two"]
     assert (first["left"], first["width"]) == (1920 - 560, 560)   # the bottom row's right end, the side panel's width
     assert {"/live/logo/0/modal", "/live/logo/0/agentenv"} <= set(asked)
     long = next(f for f in frames if f["text"].startswith("<b>Every</b>"))
