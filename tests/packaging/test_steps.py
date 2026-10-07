@@ -497,14 +497,14 @@ def test_sol_vs_opus_is_won_by_conquest_among_ai_civilizations(local_stores):
                                                    "game's own AI", "GAME OVER"))
 
 
-def test_five_way_war_seats_five_models_and_no_ai_paced_for_over_four_hours(local_stores):
+def test_five_way_war_seats_five_models_and_no_ai_until_one_conquers_the_rest(local_stores):
     steps = json.loads(files("agentenv_openciv3.bundles").joinpath("openciv3/tasks/five-way-war.json").read_text())
     registry = get_task_step_registry()
     for s in steps:
         assert registry[s["type"]].from_dict(s).to_dict()["id"] == s["id"]
     match = registry["openciv3_match"].from_dict(next(s for s in steps if s["type"] == "openciv3_match"))
     settings = (match.turns, match.size, match.ai_opponents, match.barbarians, match.min_turn_seconds)
-    assert settings == (300, "Tiny", 0, "Restless", 55)
+    assert settings == (750, "Tiny", 0, "Restless", 55)
     assert match.civs == {"astra": "America", "sol": "England", "terra": "Persia", "opus": "Rome", "sonnet": "Greece"}
     assert broadcast.settings(match.broadcast)["title"].startswith("Five AI models at war in Civilization 3")
     agents = {s["agent_name"]: s for s in steps if s["type"] == "deploy_agent"}
@@ -519,8 +519,10 @@ def test_five_way_war_seats_five_models_and_no_ai_paced_for_over_four_hours(loca
         "astra": "openai/gpt-6-astra", "sol": "openai/gpt-6-sol", "terra": "openai/gpt-5.6-terra",
         "opus": "anthropic/claude-opus-5-5", "sonnet": "anthropic/claude-sonnet-5-5"}
     assert all(s["prompt"] == players[0]["prompt"] and s["timeout_seconds"] == 28800 for s in players)
-    assert all(w in players[0]["prompt"] for w in ("four other AI models", "conquer the other four civilizations",
-                                                   "only a tiebreaker", "GAME OVER"))
+    assert all(w in players[0]["prompt"] for w in ("four other AI models", "conquering the other civilizations your "
+                                                   "ultimate goal", "the game ends only when you have done so",
+                                                   "GAME OVER"))
+    assert "tiebreaker" not in players[0]["prompt"]
 
 
 @pytest.mark.parametrize("full_name", ["three-agents", "frontier", "showmatch"])

@@ -75,10 +75,11 @@ in parallel: the outcome verifier and `save_env_recording`.
   the turn limit only breaks a tie.
 - `five-way-war` is a war for a long broadcast: GPT-6 Astra (America), GPT-6 Sol (England) and GPT-5.6 Terra
   (Persia) on Codex, Opus 5.5 (Rome) and Sonnet 5.5 (Greece) on Claude Code, alone on a Tiny map with restless
-  barbarians, for 300 turns at a 55 s pace (4 h 35 min or more), each agent starting a fresh session every 30
-  turns (Astra, at 5× Sol's price a token, every 20). Their prompt makes conquering the other four the goal; the score at the turn limit only breaks a tie,
-  and with four rivals to eliminate the game is likelier to reach the limit than to end early. On a Small map
-  three agents kept the peace for 75 turns; on a Tiny one, Opus went to war at turn 56.
+  barbarians, at a 55 s pace, each agent starting a fresh session every 30 turns (Astra, at 5× Sol's price a
+  token, every 20). Their prompt makes conquering the others the ultimate goal, as the game ends only when one
+  has: the turn limit, 750, is about 11 hours away, so the broadcast runs until a conquest or until you stop
+  it (about 65 turns an hour). On a Small map three agents kept the peace for 75 turns; on a Tiny one, Opus
+  went to war at turn 56.
 - `human-vs-ai` and `human-vs-agents` seat you: you play Rome in the browser, on a Small map for 100 turns, against
   3 AI civilizations (`human-vs-ai`) or against Opus (Claude Code, Greece) and GPT-5.6 Sol (Codex, America)
   (`human-vs-agents`). The `openciv3_match` step's `humans` names each person and their civ, and the step logs one
