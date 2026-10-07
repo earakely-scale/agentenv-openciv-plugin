@@ -523,12 +523,12 @@ def test_five_way_war_seats_five_models_and_no_ai_until_one_conquers_the_rest(lo
         "sonnet": "openciv3-claude"}
     assert {n: a["env_vars"]["OPENCIV3_SESSION_TURNS"] for n, a in agents.items()} == {
         "astra": "20", "sol": "30", "terra": "30", "opus": "30", "sonnet": "30"}
-    assert all(a["ttl_seconds"] == 28800 for a in agents.values())
+    assert all(a["ttl_seconds"] == 36000 for a in agents.values())   # an 8-hour broadcast, with room to spare
     players = [s for s in steps if s["type"] == "prompt_agent"]
     assert {s["agent_name"]: s["model"] for s in players} == {
         "astra": "openai/gpt-6-astra", "sol": "openai/gpt-6-sol", "terra": "openai/gpt-5.6-terra",
         "opus": "anthropic/claude-opus-5-5", "sonnet": "anthropic/claude-sonnet-5-5"}
-    assert all(s["prompt"] == players[0]["prompt"] and s["timeout_seconds"] == 28800 for s in players)
+    assert all(s["prompt"] == players[0]["prompt"] and s["timeout_seconds"] == 36000 for s in players)
     assert all(w in players[0]["prompt"] for w in ("four other AI models", "conquering the other civilizations your "
                                                    "ultimate goal", "the game ends only when you have done so",
                                                    "GAME OVER"))
