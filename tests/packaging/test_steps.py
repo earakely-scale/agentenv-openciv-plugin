@@ -503,8 +503,8 @@ def test_astra_opus_kimi_is_a_three_way_war_paced_for_four_hours(local_stores):
     for s in steps:
         assert registry[s["type"]].from_dict(s).to_dict()["id"] == s["id"]
     match = registry["openciv3_match"].from_dict(next(s for s in steps if s["type"] == "openciv3_match"))
-    assert (match.turns, match.size, match.ai_opponents, match.difficulty, match.barbarians, match.min_turn_seconds) == (
-        300, "Tiny", 3, "Monarch", "Restless", 55)
+    settings = (match.turns, match.size, match.ai_opponents, match.difficulty, match.barbarians, match.min_turn_seconds)
+    assert settings == (300, "Tiny", 3, "Monarch", "Restless", 55)
     assert match.civs == {"astra": "America", "opus": "Rome", "kimi": "China"}
     assert broadcast.settings(match.broadcast)["title"].startswith("GPT-6 Astra vs Opus 5.5 vs Kimi K3")
     agents = {s["agent_name"]: s for s in steps if s["type"] == "deploy_agent"}
