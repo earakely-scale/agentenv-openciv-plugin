@@ -60,6 +60,7 @@ MAX_WORDS = 30
 MAX_TOKENS = 1500       # a call's reply: a line or a lookup, after whatever thinking the model does first
 WORDS_PER_SECOND = 2.5  # a line's length when its audio failed
 CHAT_SECONDS = 45       # a model call's timeout
+SPEECH_SECONDS = 15     # a voicing's: a voice takes about 2.5 s, and one that hangs is dead air on the stream
 LOOKUP_ROUNDS = 3       # a live line's rounds of lookups before it must speak
 CALL_SECONDS = 2.0      # a model call's time and a line's voicing, until measured (a running average after that)
 VOICE_SECONDS = 1.5
@@ -69,8 +70,12 @@ MAX_LINES = 4           # a beat's lines, counting the answers to questions it a
 LINE_FAILS = 3          # failed lines in a row that end a beat
 OUTRO_FAILS = 6         # the outro's: the stream lingers a minute after GAME OVER for it
 REFUSED = re.compile(r"(?=.*\b(?:tools?|tool_choice|function(?:s| call(?:ing)?)?)\b)(?=.*(?:not supported|unsupported|"
-                     r"does ?n[o']t support|not (?:be )?enabled|not available|not allowed|isn't supported))",
+                     r"does ?n[o']t support|not (?:be )?enabled|not available|not allowed|isn't supported|"
+                     r"requires --enable-auto-tool-choice))",
                      re.IGNORECASE | re.DOTALL)   # a 400 that turns tools (or a forced call) down, not a bad generation
+ADAPTATIONS = ((re.compile(r"max_completion_tokens"), "max_completion_tokens"),   # what a 400 can ask a model's
+               (re.compile(r"reasoning_effort.{0,80}'none'", re.DOTALL), "reasoning_effort"))   # calls for
+TEXT_ALONE = "(Text alone doesn't go on air: call say with your line, or look something up first.)"
 OUT_OF_TIME = "(You are live and out of time: call say with your line now.)"
 RESEARCH_SECONDS = 45   # the analyst's research: at most this often, and only once something new happened
 RESEARCH_ROUNDS = 6
@@ -315,6 +320,8 @@ class Match:
         p = self.player(index)
         if p is None:
             return "?"
+        if p.get("barbarian"):
+            return p["civ"]
         name = p.get("name") or p.get("label")   # the broadcast's name for the seat ("Opus 5.5"), else its label
         return f"{name} ({p['civ']})" if name else f"{p['civ']} (the game's own AI)"
 
@@ -370,7 +377,7 @@ class Caster:
         self.data_url = data_url.split("?")[0].rstrip("/")
         self.base_url = base_url.rstrip("/").removesuffix("/v1")
         self.api_key = api_key
-        self.model, self.tts_model, self.title = model, tts_model, title
+        self.tts_model, self.title = tts_model, title
         self.models = {s: (models or {}).get(s) or model for s in CASTERS}   # each caster's own, else the shared one
         self.casters = casters
         self.clock = clock
@@ -387,6 +394,7 @@ class Caster:
         self.no_tools: set[str] = set()   # models the endpoint turned tools down for: they write from the DATA
         self.no_force: set[str] = set()   # models that take tools but not a forced say
         self.call_seconds: dict[str, float] = {}   # each model's live calls, a running average
+        self.adaptations: dict[str, set[str]] = {}   # what the endpoint asked each model's calls for (ADAPTATIONS)
         self.voice_seconds = VOICE_SECONDS
         self.game_line = 0           # the last line before this game's first: RECENT LINES and `said` start after it
         self.researched_at = float("-inf")
@@ -815,7 +823,14 @@ class Caster:
                                                    "content": f"error: {e}; call say with your line as its text"}]
                 else:
                     if not calls:
-                        return self.line_of(speaker, message.get("content"), message)
+                        text = str(message.get("content") or "").strip()
+                        if not tools or last or not text:
+                            return self.line_of(speaker, message.get("content"), message)
+                        round_ += 1   # "Let me check the standings first" is not a line: it is told so
+                        more = round_ == LOOKUP_ROUNDS or not self.time_to_look(model)
+                        messages += [{"role": "assistant", "content": text},
+                                     {"role": "user", "content": TEXT_ALONE + (f"\n{OUT_OF_TIME}" if more else "")}]
+                        continue
                     answers = self.answers(calls)
                 round_ += 1
                 if tools and (round_ == LOOKUP_ROUNDS or not self.time_to_look(model)):
@@ -827,8 +842,14 @@ class Caster:
         return None
 
     def chat(self, body: dict) -> dict:
-        began = self.clock()
-        reply = json.loads(self.post("/v1/chat/completions", body, CHAT_SECONDS))
+        while True:
+            began = self.clock()
+            try:
+                reply = json.loads(self.post("/v1/chat/completions", self.adapted(body), CHAT_SECONDS))
+                break
+            except urllib.error.HTTPError as e:
+                if e.code != 400 or not self.adapt(body["model"], failure(e)):
+                    raise
         if "jot" not in {t["function"]["name"] for t in body.get("tools") or ()}:   # a live call
             seconds = self.call_seconds.get(body["model"], CALL_SECONDS)
             self.call_seconds[body["model"]] = seconds + 0.3 * (self.clock() - began - seconds)
@@ -836,7 +857,29 @@ class Caster:
         if not isinstance(message, dict):
             raise ValueError("the reply has no message")
         message["finish_reason"] = reply["choices"][0].get("finish_reason")
+        for n, call in enumerate(message.get("tool_calls") or ()):
+            if isinstance(call, dict) and not call.get("id"):   # one id for the call and its answer, both sent back
+                call["id"] = f"call_{n}"
         return message
+
+    def adapt(self, model: str, why: str) -> bool:
+        """Takes up what a 400 says the model's calls need (max_completion_tokens for max_tokens, tools without
+        reasoning: OpenAI's reasoning models); False when it asks for nothing new."""
+        have = self.adaptations.setdefault(model, set())
+        new = {name for pattern, name in ADAPTATIONS if pattern.search(why)} - have
+        if new:
+            have |= new
+            self.log(f"caster: {model}'s calls take {', '.join(sorted(new))} from now on ({why[:160]})")
+        return bool(new)
+
+    def adapted(self, body: dict) -> dict:
+        have = self.adaptations.get(body["model"], set())
+        out = dict(body)
+        if "max_completion_tokens" in have and "max_tokens" in out:
+            out["max_completion_tokens"] = out.pop("max_tokens")
+        if "reasoning_effort" in have and out.get("tools"):
+            out["reasoning_effort"] = "none"
+        return out
 
     def answers(self, calls: list) -> list[dict]:
         """The tool messages answering a round of lookups, one for each call, in order."""
@@ -893,7 +936,7 @@ class Caster:
         try:
             wav = leveled(fixed_wav(self.post("/v1/audio/speech", {
                 "model": self.tts_model, "voice": voice, "input": line["text"], "instructions": style,
-                "response_format": "wav"}, 45)))
+                "response_format": "wav"}, SPEECH_SECONDS)))
         except (OSError, ValueError, http.client.HTTPException) as e:
             self.log(f"caster: no voice for a line, captions only: {failure(e)}")
             return None
@@ -979,7 +1022,7 @@ class Caster:
                     jotted += answer.startswith("jotted")
                 else:
                     looked += 1
-                    answer = (self.lookup(fn.get("name"), fn.get("arguments")) if looked <= LOOKUPS_AT_ONCE
+                    answer = (self.lookup(fn.get("name"), fn.get("arguments"), "jot") if looked <= LOOKUPS_AT_ONCE
                               else f"error: at most {LOOKUPS_AT_ONCE} lookups at a time")
                 messages.append({"role": "tool", "tool_call_id": call.get("id") or f"call_{n}", "content": answer})
         return jotted
@@ -998,10 +1041,11 @@ class Caster:
 
     # ---- the lookups: the match as short text ----
 
-    def lookup(self, name, args) -> str:
-        """A lookup's answer, as the model reads it: an error is text too, never an exception."""
+    def lookup(self, name, args, then: str = "say") -> str:
+        """A lookup's answer, as the model reads it: an error is text too, never an exception. `then` is the tool the
+        caller ends with besides the lookups (say, or jot in research)."""
         if name not in LOOKUP_ARGS:
-            return f"error: there is no tool {name!r}; the tools: {', '.join(LOOKUP_ARGS)}, say"
+            return f"error: there is no tool {name!r}; the tools: {', '.join(LOOKUP_ARGS)}, {then}"
         try:
             args = json.loads(args) if isinstance(args, str) and args.strip() else args or {}
         except ValueError:
@@ -1010,7 +1054,7 @@ class Caster:
             return "error: the arguments must be an object"
         takes = LOOKUP_ARGS[name]
         needs = [k for k in REQUIRED[name] if args.get(k) in (None, "")]
-        if needs or (set(args) - takes and not set(args) & takes):
+        if needs:
             return (f"error: {name} needs {', '.join(needs) or 'other arguments'}; it takes "
                     f"{', '.join(sorted(takes)) or 'none'}, got {', '.join(sorted(args)) or 'none'}")
         ignored = sorted(set(args) - takes)
@@ -1192,8 +1236,8 @@ class Caster:
         index = self.civ_of(civ)["index"] if civ else None
         versus = self.civ_of(other)["index"] if other else None
         since = int(since_turn) if since_turn is not None else None
-        fights = [(t["turn"], b) for t in m.turns for b in t.get("battles") or ()
-                  if (since is None or t["turn"] >= since) and (index is None or index in (b[6], b[13]))
+        fights = [(t["turn"] - 1, b) for t in m.turns for b in t.get("battles") or ()   # fought during the turn
+                  if (since is None or t["turn"] - 1 >= since) and (index is None or index in (b[6], b[13]))
                   and (versus is None or versus in (b[6], b[13]))]
         if not fights:
             return "No battles" + (f" for {m.who(index)}" if index is not None else "") + (
@@ -1607,13 +1651,15 @@ def wav_seconds(wav: bytes) -> float:
 
 
 def failure(e: Exception) -> str:
-    """What went wrong, with an HTTP error's reply, which says why."""
+    """What went wrong, with an HTTP error's reply, which says why (read once, then kept on the error)."""
     if isinstance(e, urllib.error.HTTPError):
-        try:
-            body = e.read(300).decode(errors="replace")
-        except OSError:
-            body = ""
-        return f"HTTP {e.code} {' '.join(body.split())}"
+        if not hasattr(e, "why"):
+            try:
+                body = e.read(300).decode(errors="replace")
+            except OSError:
+                body = ""
+            e.why = f"HTTP {e.code} {' '.join(body.split())}"
+        return e.why
     return str(e) or repr(e)
 
 

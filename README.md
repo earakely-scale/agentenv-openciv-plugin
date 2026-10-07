@@ -84,6 +84,7 @@ Then, from the checkout (`cd agentenv-openciv-plugin`), play any task in the bun
 | **`showmatch`** | Opus 5.5, GPT-6 Sol and Kimi K3, talking in public, cast by two AI casters (the flagship; [stream it](#watch-it-live)) | Tiny, 50 | 16 min, about $5 |
 | `showmatch-quick` | the same match | Tiny, 10 | 4 min, about $1 |
 | `livestream` | the same three, paced for a two-hour broadcast | Small, 140 | 1 h 52 min, about $32 |
+| `sol-vs-opus` | GPT-6 Sol against Opus 5.5 with 3 AI civs: conquering the other model wins, the score only breaks a tie ([results](#a-duel-to-the-death)) | Tiny, up to 750 | 84 min to a conquest, about $26 |
 | `frontier` | nine models from five labs: Claude, GPT, Gemini, Grok, Kimi | Standard, 200 | 1 h 52 min, about $80 |
 | `frontier-quick` | the same match | Standard, 10 | 8 min, $1.70 |
 | `human-vs-ai` | you, in the browser, against 3 AI civs ([play alongside](#play-alongside-the-agents)) | Small, 100 | as long as you play, free |
@@ -205,15 +206,19 @@ agent-env run openciv3 --task showmatch
 ```
 
 **Cast it.** A task can put two AI casters on the stream: Max calls the play and Ada, the analyst, says what it
-means. They read the match data the viewer shows (the events, the standings, the agents' plans, notes and messages,
-who is still thinking), open the show, call wars, captured cities and lead changes as they happen, and sign off at
-GAME OVER; the stream carries their voices and shows their lines as captions. The task's `openciv3_match` step turns
-them on with `broadcast`, which also names the stream and may pick the casters' models, names and voices:
+means. Each is an agent: before a line it looks the match up with tools over the data the viewer shows (the
+standings, a civ in depth, a stat's trend, the events and battles, the diplomacy, who is still thinking, a city's
+story, what the desk has said), and the analyst researches the game in the background, jotting talking points into a
+notebook both casters read. They talk to each other a line at a time, open the show, call wars, captured cities and
+lead changes as they happen, and sign off at GAME OVER; the stream carries their voices and shows their lines as
+captions. The task's `openciv3_match` step turns them on with `broadcast`, which also names the stream and may pick
+the casters' models, names and voices, a model for each caster if you like:
 
 ```json
 "broadcast": {"title": "OpenCiv3 Showmatch",
-              "casters": {"model": "anthropic/claude-sonnet-5-5", "tts_model": "openai/gpt-4o-mini-tts",
-                          "play_by_play": {"name": "Max", "voice": "ash"}, "analyst": {"name": "Ada", "voice": "sage"}}}
+              "casters": {"model": "anthropic/claude-haiku-4-5", "tts_model": "openai/gpt-4o-mini-tts",
+                          "play_by_play": {"name": "Max", "voice": "ash"},
+                          "analyst": {"name": "Ada", "voice": "sage", "model": "anthropic/claude-sonnet-5-5"}}}
 ```
 
 `"casters": true` takes the defaults (Haiku 4.5 writes the lines, `gpt-4o-mini-tts` speaks them), and `false`, or no
@@ -476,6 +481,30 @@ founding a city, and the score as a fraction of `settler_bot`'s, with gates for 
 [bundle's README](src/agentenv_openciv3/bundles/openciv3/README.md).
 
 ## Results
+
+### A duel to the death
+
+`sol-vs-opus`: GPT-6 Sol (Codex) as America against Opus 5.5 (Claude Code) as Rome, on a Tiny map with three AI
+civilizations (Spain, Egypt, Zululand), for up to 750 turns at a 30 s pace. Their prompt makes conquering the other
+model the way to win; the higher score at the turn limit only breaks a tie. It went out live on Twitch on
+2026-10-04 ([the broadcast](https://www.twitch.tv/videos/2892054037), which Twitch keeps for a limited time) and
+ended with grade 1 when Opus took America's last city: a conquest at turn 156, after 84 minutes.
+
+| | Opus 5.5 (Rome) | GPT-6 Sol (America) |
+|---|---|---|
+| Result | **won by conquest, T156** | eliminated |
+| Score, cities at the end | 914, 25 | 80, 0 (8 at T120) |
+| Public messages | 42 | 63 |
+| Tool calls (failed) | 727 (1.5%) | 573 (1.9%) |
+| Cost | $12.91 | $7.70 |
+
+- **Four wars, three peaces.** Rome and America went to war at turns 58, 81, 100 and 123; the first three ended in
+  peace within three to seven turns. In the last, America fell from 8 cities at T120 to 3 at T140 and 1 at T150.
+- **The AI civilizations** finished with Egypt on 582 (12 cities), Spain 403 and Zululand 333. Opus led for good
+  from T79.
+- **The casters signed off a turn early** and called it a win on score: one seat's defeat read as the game's end.
+  That is fixed (#15); a private rerun on a Tiny map with one AI civilization ended by conquest at T59, and the
+  casters called it as one.
 
 ### A match made to be streamed
 

@@ -719,6 +719,71 @@ def test_each_casters_model_keeps_its_own_timing(fake):
     assert len(fake.chats) == chats
 
 
+def test_a_reasoning_model_gets_what_the_endpoint_asks_for(fake, capsys):
+    """OpenAI's reasoning models on chat completions want max_completion_tokens, and tools without reasoning: the
+    first 400s say so, and the model's calls carry it from then on, tools and all."""
+    clock = Clock()
+    c = new_caster(fake, clock, models=dict.fromkeys(SPEAKERS, "openai/gpt-6-luna"))
+    fake.start([entry(1)], turn=1)
+    fake.bad_requests = [
+        b'{"error": {"message": "Unsupported parameter: \'max_tokens\' is not supported with this model. Use '
+        b'\'max_completion_tokens\' instead."}}',
+        b'{"error": {"message": "Function tools with reasoning_effort are not supported for gpt-6-luna in '
+        b'/v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to \'none\'."}}']
+    c.tick()
+    first, second, third = fake.chats[:3]
+    assert "max_tokens" in first and "max_completion_tokens" not in first
+    assert second["max_completion_tokens"] == caster.MAX_TOKENS and "reasoning_effort" not in second
+    assert third["reasoning_effort"] == "none" and "max_tokens" not in third and tools_of(third) == {"say"}
+    assert len(c.lines) == 1 and c.no_tools == set() and c.no_force == set()
+    until_quiet(c, clock)
+    c.tick()
+    assert len(fake.chats) == 4 and fake.chats[3]["reasoning_effort"] == "none"   # straight away from now on
+    assert capsys.readouterr().out.count("calls take") == 2
+
+
+def test_a_tool_refusal_in_vllms_words_turns_tools_off(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(1)], turn=1)
+    vllm = b'{"error": {"message": "\\"auto\\" tool choice requires --enable-auto-tool-choice and --tool-call-parser"}}'
+    fake.bad_requests = [vllm, vllm]   # forced, then not: neither works on this endpoint
+    c.tick()
+    assert c.no_tools == {c.models["pbp"]} and len(c.lines) == 1 and "tools" not in fake.chats[-1]
+
+
+def test_text_alone_is_not_a_line_while_there_is_time_to_look(fake):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(t) for t in range(1, 4)], turn=3)
+    c.call_seconds, c.voice_seconds = dict.fromkeys(c.models.values(), 0.5), 0.5
+    c.speaking_until, c.writing_seconds = clock.now + 30, dict.fromkeys(SPEAKERS, 40)
+    no_id = {"type": "function", "function": {"name": "standings", "arguments": "{}"}}
+    fake.script = [{"role": "assistant", "content": "Let me check the standings first."},
+                   {"role": "assistant", "content": None, "tool_calls": [no_id]},
+                   say("Rome leads on forty.")]
+    chats = len(fake.chats)
+    c.tick()
+    assert c.lines[0]["text"] == "Rome leads on forty."
+    nudged, answered = fake.chats[chats + 1], fake.chats[chats + 2]
+    assert nudged["messages"][-2:] == [{"role": "assistant", "content": "Let me check the standings first."},
+                                       {"role": "user", "content": caster.TEXT_ALONE}]
+    back, reply = answered["messages"][-2:]   # a call without an id goes back with the id its answer has
+    assert back["tool_calls"][0]["id"] == reply["tool_call_id"] == "call_0"
+
+
+def test_a_voice_that_hangs_is_given_up_on_in_seconds(fake, monkeypatch):
+    clock = Clock()
+    c = new_caster(fake, clock)
+    fake.start([entry(1)], turn=1)
+    asked = []
+    post = c.post
+    monkeypatch.setattr(c, "post", lambda path, body, timeout: asked.append((path, timeout))
+                        or post(path, body, timeout))
+    c.tick()
+    assert ("/v1/audio/speech", caster.SPEECH_SECONDS) in asked and caster.SPEECH_SECONDS <= 15
+
+
 def test_bad_lookups_get_errors_back_not_exceptions(fake):
     clock = Clock()
     c = new_caster(fake, clock)
@@ -886,15 +951,18 @@ def test_the_lookups_tell_the_story_of_the_game(fake):
     assert 'Messages: 2 sent, 0 received; turn 2: "Peace, or you lose Roma."; turn 8: "Rome is lying."' in greece
     assert "Record: 0 cities founded, 0 taken, 2 lost" in greece   # one taken from it, one razed
     battles = c.lookup("battles", {"civ": "Rome"})
-    assert battles.startswith("4 battles, turns 5 to 7:\nclaude-opus (Rome): 1 attacks lost, 1 defences held, "
+    assert battles.startswith("4 battles, turns 4 to 6:\nclaude-opus (Rome): 1 attacks lost, 1 defences held, "
                               "2 attacks won, 1 cities taken, 1 cities razed; wins by Legion 3")
-    assert "- turn 6: claude-opus (Rome)'s Legion attacked gpt-sol (Greece)'s Hoplite at (30,8): the attacker won, " \
-           "city taken" in battles
+    assert "- turn 5: claude-opus (Rome)'s Legion attacked gpt-sol (Greece)'s Hoplite at (30,8): the attacker won, " \
+           "city taken" in battles   # fought during the turn before the entry, as its messages were sent
     assert c.lookup("battles", {"since_turn": 8}) == "No battles since turn 8 in the data"
     assert c.lookup("battles", {"civ": "Rome", "other": "Greece"}).startswith("4 battles")   # theirs with each other
     assert c.lookup("battles", {"civ": "Greece", "other": "Barbarians"}) == (
-        "No battles for gpt-sol (Greece) with Barbarians (the game's own AI) in the data")
+        "No battles for gpt-sol (Greece) with Barbarians in the data")
     assert c.lookup("city", {"city": "Roma"}) == "error: city needs name; it takes name, got city"   # its arguments
+    assert c.lookup("standings", {"civ": "Rome"}).startswith(   # a harmless extra argument costs no round
+        "(ignored civ: standings takes turn)\nTurn 8:\n1. claude-opus (Rome): 56")
+    assert c.lookup("plan", {}, "jot").endswith(", jot")   # research ends with jot, not say
     assert c.lookup("events", {"kind": "city_captured", "turns": 3}).startswith(
         "(ignored turns: events takes civ, kind, since_turn, until_turn)\n1 events:")
     assert c.lookup("events", {"since_turn": 4, "until_turn": 6}) == (
@@ -1055,7 +1123,7 @@ def test_none_is_no_civ(fake):
     for nothing in ("none", "None", "null", "", None, 3, ["Rome"]):
         assert c.match.civ_named(nothing) is None, nothing   # an AI civ without a label is no match for "none"
     assert c.lookup("civ", {"civ": "None"}).startswith("error: no civ 'None'; the civs: claude-opus (Rome)")
-    assert c.lookup("civ", {"civ": "Barbarians"}).startswith("Barbarians (the game's own AI) has no score")
+    assert c.lookup("civ", {"civ": "Barbarians"}).startswith("Barbarians has no score")
 
 
 def test_the_voices_kept_stay_bounded(fake):
