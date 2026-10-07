@@ -239,7 +239,7 @@ agent-env run openciv3 --task showmatch
 or an image file; the match step inlines each one when the game starts, so the stream never waits on another host:
 
 ```json
-"banners": [{"text": "Powered by {modal} Modal sandboxes with {agentenv} AgentEnv Framework", "theme": "light",
+"banners": [{"text": "Powered by {modal} Modal Sandboxes with {agentenv} AgentEnv Framework", "theme": "light",
              "logos": {"modal": "https://github.com/modal-labs.png",
                        "agentenv": "https://raw.githubusercontent.com/scaleapi/agentenv-framework/main/assets/brand/icon-512.png"}}]
 ```

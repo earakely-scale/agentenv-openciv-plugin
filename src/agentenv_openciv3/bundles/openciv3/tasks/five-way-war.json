@@ -123,7 +123,7 @@
       },
       "banners": [
         {
-          "text": "Powered by {modal} Modal sandboxes with {agentenv} AgentEnv Framework",
+          "text": "Powered by {modal} Modal Sandboxes with {agentenv} AgentEnv Framework",
           "theme": "light",
           "logos": {
             "modal": "https://github.com/modal-labs.png",

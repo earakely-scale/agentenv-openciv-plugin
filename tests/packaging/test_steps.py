@@ -516,7 +516,7 @@ def test_five_way_war_seats_five_models_and_no_ai_until_one_conquers_the_rest(lo
     shown = broadcast.settings(match.broadcast)
     assert shown["title"].startswith("Five AI models at war in Civilization 3")
     assert [(b["text"], b["theme"], sorted(b["logos"])) for b in shown["banners"]] == [
-        ("Powered by {modal} Modal sandboxes with {agentenv} AgentEnv Framework", "light", ["agentenv", "modal"])]
+        ("Powered by {modal} Modal Sandboxes with {agentenv} AgentEnv Framework", "light", ["agentenv", "modal"])]
     agents = {s["agent_name"]: s for s in steps if s["type"] == "deploy_agent"}
     assert {n: a["a2a_agent_id"] for n, a in agents.items()} == {
         "astra": "openciv3-codex", "sol": "openciv3-codex", "terra": "openciv3-codex", "opus": "openciv3-claude",
