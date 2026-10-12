@@ -57,6 +57,8 @@ SCENARIO_KEYS = ("seed", "civ", "opponents", "size", "difficulty", "barbarians",
 SCENARIO_INTS = {"seed": (0, None), "opponents": (1, 11), "ocean": (0, 100), "turn_limit": (1, 1000),
                  "human_turn_seconds": (0, None), "min_turn_seconds": (0, 600)}
 ENV_ONLY = ("humans", "human_turn_seconds", "min_turn_seconds", "broadcast")   # the env's own keys, not new_game args
+LOGO_HEADERS = {"Cache-Control": "max-age=3600", "X-Content-Type-Options": "nosniff",
+                "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"}
 ENV_SCENARIO = (("size", "OPENCIV_SIZE", str), ("opponents", "OPENCIV_OPPONENTS", int),
                 ("difficulty", "OPENCIV_DIFFICULTY", str), ("barbarians", "OPENCIV_BARBARIANS", str))
 AUTOPLAY_POLICIES = Literal["null", "found_capital", "engine_ai", "settler_bot"]
@@ -119,7 +121,7 @@ def merge_scenario(base: dict, update: dict) -> dict:
                 raise ValueError(f"scenario labels must map civ names to labels, got {value!r}")
             continue
         if key == "broadcast":
-            update[key] = broadcast.settings(value)
+            update[key] = broadcast.settings(value, inlined=True)
             continue
         if key not in SCENARIO_INTS:
             if not isinstance(value, str):
@@ -1439,7 +1441,8 @@ class OpenCiv3Env(AgentEnvEnvironment):
         self.live = live.Live()
         for path, handler in (("/live", self._live_page), ("/live/data.json", self._live_data),
                               ("/live/state.json", self._live_state), ("/live/frame.png", self._live_frame),
-                              ("/live/client.png", self._live_client), ("/play", self._play_page),
+                              ("/live/client.png", self._live_client),
+                              ("/live/logo/{banner:int}/{name}", self._live_logo), ("/play", self._play_page),
                               ("/play/api/view", self._play_view), ("/play/api/status", self._play_status),
                               ("/play/api/city", self._play_city), ("/play/api/techs", self._play_techs),
                               ("/play/api/diplomacy", self._play_diplomacy), ("/play/api/tile", self._play_tile),
@@ -1458,13 +1461,15 @@ class OpenCiv3Env(AgentEnvEnvironment):
         pace, show = self.scenario.get("min_turn_seconds", 0), self.scenario.get("broadcast")
         if self.game is None:
             return {"turn": None, "game_over": False, "victory": None, "client": self.client,
-                    "recording": self.record, "min_turn_seconds": pace, "broadcast": show, "messages": [], "seats": []}
+                    "recording": self.record, "min_turn_seconds": pace, "broadcast": broadcast.public(show),
+                    "messages": [], "seats": []}
         now, turn = time.monotonic(), self.turn
         over, victory = self._game_over()
         return {
             "turn": turn, "game_over": over,
             "victory": victory, "client": self.client, "recording": self.record, "min_turn_seconds": pace,
-            "broadcast": show, "messages": [{k: m[k] for k in ("from", "to", "text", "seconds")} for m in self.messages
+            "broadcast": broadcast.public(show),
+            "messages": [{k: m[k] for k in ("from", "to", "text", "seconds")} for m in self.messages
                          if m["turn"] == turn],
             "seats": [{"civ": s.civ, "label": s.label, "human": s.human, "ended": s.ready or s.pacing or s.over,
                        "seconds": round(max(0.0, (s.ended_at if (s.ready or s.pacing) and s.ended_at else now)
@@ -1517,6 +1522,16 @@ class OpenCiv3Env(AgentEnvEnvironment):
         if png is None:
             return PlainTextResponse("the game has not reached that turn", 404)
         return Response(png, media_type="image/png")
+
+    async def _live_logo(self, request: Request) -> Response:
+        """GET /live/logo/<banner>/<name>: a sponsor banner's logo (broadcast banners), as the task's broadcast set it.
+        An SVG may not run scripts here, even opened on its own."""
+        found = broadcast.logo(self.scenario.get("broadcast"), request.path_params["banner"],
+                               request.path_params["name"])
+        if found is None:
+            return PlainTextResponse("no such banner logo", 404)
+        body, kind = found
+        return Response(body, media_type=kind, headers=LOGO_HEADERS)
 
     async def _live_client(self, request: Request) -> Response:
         """GET /live/client.png?seat=CIV: the client's newest frame from that seat (default: the first)."""

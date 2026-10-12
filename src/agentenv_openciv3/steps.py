@@ -49,8 +49,9 @@ def _extension_card(deployed: DeployedEnv, uri: str) -> dict:
 class OpenCiv3MatchTaskStep(TaskStep):
     """Start a game with one seat per deployed agent and one per human player; the env knows each seat by its name,
     the seat's label. A human plays in the browser, through the play link the step logs (docs/play.md).
-    ``min_turn_seconds`` paces a match for a broadcast: no turn ends sooner; ``broadcast`` names the stream and turns
-    its voiced casters on or off, with their models and voices (docs/tools.md, Broadcast)."""
+    ``min_turn_seconds`` paces a match for a broadcast: no turn ends sooner; ``broadcast`` names the stream, turns
+    its voiced casters on or off, with their models and voices, and sets its sponsor banners, whose logos the step
+    inlines before the game starts (docs/tools.md, Broadcast)."""
 
     type: ClassVar[str] = "openciv3_match"
     entity_refs = (EntityRef.env("env_id"),)
@@ -117,6 +118,7 @@ class OpenCiv3MatchTaskStep(TaskStep):
         seats = self._seats([a.agent_name for a in context.deployed_agents])
         humans = [s for s in seats if s.get("human")]
         first, *others = seats
+        show = await asyncio.to_thread(broadcasting.inline, self.broadcast)
         args = {"seed": self.seed, "size": self.size, "difficulty": self.difficulty, "barbarians": self.barbarians,
                 "turn_limit": self.turns, "civ": first["civ"], "opponents": len(others) + self.ai_opponents,
                 "seats": [s["civ"] for s in others], "labels": {s["civ"]: s["agent"] for s in seats},
@@ -124,7 +126,7 @@ class OpenCiv3MatchTaskStep(TaskStep):
                 **({"humans": [s["civ"] for s in humans], "human_turn_seconds": self.human_turn_seconds}
                    if humans else {}),
                 **({"min_turn_seconds": self.min_turn_seconds} if self.min_turn_seconds > 0 else {}),
-                **({"broadcast": self.broadcast} if self.broadcast is not None else {})}
+                **({"broadcast": show} if show is not None else {})}
         result = await client.invoke_extension(deployed.environment_url, card, NEW_GAME_EXTENSION, args,
                                                timeout=self.timeout_seconds)
         base_url = deployed.mcp_url.removesuffix("/mcp")

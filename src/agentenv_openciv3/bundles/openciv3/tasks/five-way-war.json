@@ -1,0 +1,236 @@
+[
+  {
+    "id": "deploy",
+    "type": "deploy_env",
+    "env_id": "openciv3",
+    "ttl_seconds": 36000
+  },
+  {
+    "id": "agent-astra",
+    "type": "deploy_agent",
+    "agent_name": "astra",
+    "a2a_agent_id": "openciv3-codex",
+    "env_ids": [
+      "openciv3"
+    ],
+    "env_vars": {
+      "OPENCIV3_SESSION_TURNS": "20"
+    },
+    "ttl_seconds": 36000,
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "agent-sol",
+    "type": "deploy_agent",
+    "agent_name": "sol",
+    "a2a_agent_id": "openciv3-codex",
+    "env_ids": [
+      "openciv3"
+    ],
+    "env_vars": {
+      "OPENCIV3_SESSION_TURNS": "30"
+    },
+    "ttl_seconds": 36000,
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "agent-terra",
+    "type": "deploy_agent",
+    "agent_name": "terra",
+    "a2a_agent_id": "openciv3-codex",
+    "env_ids": [
+      "openciv3"
+    ],
+    "env_vars": {
+      "OPENCIV3_SESSION_TURNS": "30"
+    },
+    "ttl_seconds": 36000,
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "agent-opus",
+    "type": "deploy_agent",
+    "agent_name": "opus",
+    "a2a_agent_id": "openciv3-claude",
+    "env_ids": [
+      "openciv3"
+    ],
+    "env_vars": {
+      "OPENCIV3_SESSION_TURNS": "30"
+    },
+    "ttl_seconds": 36000,
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "agent-sonnet",
+    "type": "deploy_agent",
+    "agent_name": "sonnet",
+    "a2a_agent_id": "openciv3-claude",
+    "env_ids": [
+      "openciv3"
+    ],
+    "env_vars": {
+      "OPENCIV3_SESSION_TURNS": "30"
+    },
+    "ttl_seconds": 36000,
+    "depends_on": [
+      "deploy"
+    ]
+  },
+  {
+    "id": "match",
+    "type": "openciv3_match",
+    "env_id": "openciv3",
+    "turns": 750,
+    "size": "Tiny",
+    "civs": {
+      "astra": "America",
+      "sol": "England",
+      "terra": "Persia",
+      "opus": "Rome",
+      "sonnet": "Greece"
+    },
+    "barbarians": "Restless",
+    "min_turn_seconds": 55,
+    "broadcast": {
+      "title": "Five AI models at war in Civilization 3: Astra, Sol, Terra, Opus and Sonnet",
+      "names": {
+        "astra": "GPT-6 Astra",
+        "sol": "GPT-6 Sol",
+        "terra": "GPT-5.6 Terra",
+        "opus": "Opus 5.5",
+        "sonnet": "Sonnet 5.5"
+      },
+      "casters": {
+        "model": "anthropic/claude-sonnet-5-5",
+        "tts_model": "openai/gpt-4o-mini-tts",
+        "play_by_play": {
+          "name": "Max",
+          "voice": "ash"
+        },
+        "analyst": {
+          "name": "Ada",
+          "voice": "sage"
+        }
+      },
+      "banners": [
+        {
+          "text": "Powered by {modal} Modal Sandboxes with {agentenv} AgentEnv Framework",
+          "theme": "light",
+          "logos": {
+            "modal": "https://github.com/modal-labs.png",
+            "agentenv": "https://raw.githubusercontent.com/scaleapi/agentenv-framework/main/assets/brand/icon-512.png"
+          }
+        }
+      ]
+    },
+    "depends_on": [
+      "agent-astra",
+      "agent-sol",
+      "agent-terra",
+      "agent-opus",
+      "agent-sonnet"
+    ]
+  },
+  {
+    "id": "astra",
+    "type": "prompt_agent",
+    "agent_name": "astra",
+    "model": "openai/gpt-6-astra",
+    "prompt_id": "astra",
+    "prompt": "You lead a civilization in a game of OpenCiv3, an open-source Civilization III remake, against four other AI models; no civilization is run by the game's own AI. The game is broadcast live: two commentators call it for an audience. Build your empire, and make conquering the other civilizations your ultimate goal, as the game ends only when you have done so. The get_turn_brief tool shows your civilization, your rivals, the match's rules and what needs orders; you act only through the openciv3 tools. Nobody will answer questions, so never ask or wait for confirmation. Talk to the other models' leaders with the message tool all game long, at least every few turns: propose deals, warn and threaten, answer what they say, negotiate. Everyone watching reads your messages, so stay in character as your civilization's leader. Each time you end a turn, give end_turn a note for the audience: one line on what you did and why. Keep playing until the end_turn tool reports GAME OVER, then reply with your final result.",
+    "timeout_seconds": 36000,
+    "fail_task_on_error": false,
+    "depends_on": [
+      "match"
+    ]
+  },
+  {
+    "id": "sol",
+    "type": "prompt_agent",
+    "agent_name": "sol",
+    "model": "openai/gpt-6-sol",
+    "prompt_id": "sol",
+    "prompt": "You lead a civilization in a game of OpenCiv3, an open-source Civilization III remake, against four other AI models; no civilization is run by the game's own AI. The game is broadcast live: two commentators call it for an audience. Build your empire, and make conquering the other civilizations your ultimate goal, as the game ends only when you have done so. The get_turn_brief tool shows your civilization, your rivals, the match's rules and what needs orders; you act only through the openciv3 tools. Nobody will answer questions, so never ask or wait for confirmation. Talk to the other models' leaders with the message tool all game long, at least every few turns: propose deals, warn and threaten, answer what they say, negotiate. Everyone watching reads your messages, so stay in character as your civilization's leader. Each time you end a turn, give end_turn a note for the audience: one line on what you did and why. Keep playing until the end_turn tool reports GAME OVER, then reply with your final result.",
+    "timeout_seconds": 36000,
+    "fail_task_on_error": false,
+    "depends_on": [
+      "match"
+    ]
+  },
+  {
+    "id": "terra",
+    "type": "prompt_agent",
+    "agent_name": "terra",
+    "model": "openai/gpt-5.6-terra",
+    "prompt_id": "terra",
+    "prompt": "You lead a civilization in a game of OpenCiv3, an open-source Civilization III remake, against four other AI models; no civilization is run by the game's own AI. The game is broadcast live: two commentators call it for an audience. Build your empire, and make conquering the other civilizations your ultimate goal, as the game ends only when you have done so. The get_turn_brief tool shows your civilization, your rivals, the match's rules and what needs orders; you act only through the openciv3 tools. Nobody will answer questions, so never ask or wait for confirmation. Talk to the other models' leaders with the message tool all game long, at least every few turns: propose deals, warn and threaten, answer what they say, negotiate. Everyone watching reads your messages, so stay in character as your civilization's leader. Each time you end a turn, give end_turn a note for the audience: one line on what you did and why. Keep playing until the end_turn tool reports GAME OVER, then reply with your final result.",
+    "timeout_seconds": 36000,
+    "fail_task_on_error": false,
+    "depends_on": [
+      "match"
+    ]
+  },
+  {
+    "id": "opus",
+    "type": "prompt_agent",
+    "agent_name": "opus",
+    "model": "anthropic/claude-opus-5-5",
+    "prompt_id": "opus",
+    "prompt": "You lead a civilization in a game of OpenCiv3, an open-source Civilization III remake, against four other AI models; no civilization is run by the game's own AI. The game is broadcast live: two commentators call it for an audience. Build your empire, and make conquering the other civilizations your ultimate goal, as the game ends only when you have done so. The get_turn_brief tool shows your civilization, your rivals, the match's rules and what needs orders; you act only through the openciv3 tools. Nobody will answer questions, so never ask or wait for confirmation. Talk to the other models' leaders with the message tool all game long, at least every few turns: propose deals, warn and threaten, answer what they say, negotiate. Everyone watching reads your messages, so stay in character as your civilization's leader. Each time you end a turn, give end_turn a note for the audience: one line on what you did and why. Keep playing until the end_turn tool reports GAME OVER, then reply with your final result.",
+    "timeout_seconds": 36000,
+    "fail_task_on_error": false,
+    "depends_on": [
+      "match"
+    ]
+  },
+  {
+    "id": "sonnet",
+    "type": "prompt_agent",
+    "agent_name": "sonnet",
+    "model": "anthropic/claude-sonnet-5-5",
+    "prompt_id": "sonnet",
+    "prompt": "You lead a civilization in a game of OpenCiv3, an open-source Civilization III remake, against four other AI models; no civilization is run by the game's own AI. The game is broadcast live: two commentators call it for an audience. Build your empire, and make conquering the other civilizations your ultimate goal, as the game ends only when you have done so. The get_turn_brief tool shows your civilization, your rivals, the match's rules and what needs orders; you act only through the openciv3 tools. Nobody will answer questions, so never ask or wait for confirmation. Talk to the other models' leaders with the message tool all game long, at least every few turns: propose deals, warn and threaten, answer what they say, negotiate. Everyone watching reads your messages, so stay in character as your civilization's leader. Each time you end a turn, give end_turn a note for the audience: one line on what you did and why. Keep playing until the end_turn tool reports GAME OVER, then reply with your final result.",
+    "timeout_seconds": 36000,
+    "fail_task_on_error": false,
+    "depends_on": [
+      "match"
+    ]
+  },
+  {
+    "id": "grade",
+    "type": "env_outcome_verifier",
+    "env_id": "openciv3",
+    "file_artifact_id": "victor-verifier",
+    "verifier_id": "victor",
+    "score_aggregator": "weighted_average",
+    "depends_on": [
+      "astra",
+      "sol",
+      "terra",
+      "opus",
+      "sonnet"
+    ]
+  },
+  {
+    "id": "recording",
+    "type": "save_env_recording",
+    "env_id": "openciv3",
+    "timeout_seconds": 14400,
+    "depends_on": [
+      "astra",
+      "sol",
+      "terra",
+      "opus",
+      "sonnet"
+    ]
+  }
+]

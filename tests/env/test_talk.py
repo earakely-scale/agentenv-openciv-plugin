@@ -313,10 +313,91 @@ async def test_a_new_game_sets_the_broadcast_the_live_data_carries(env):
     ({"names": ["opus"]}, "broadcast names must map seat labels to names of 1-30 characters"),
     ({"names": {"opus": ""}}, "broadcast names must map seat labels to names of 1-30 characters"),
     ({"names": {"opus": "x" * 31}}, "broadcast names must map seat labels to names of 1-30 characters"),
+    ({"banners": []}, "broadcast banners must be a list of 1-8 banners"),
+    ({"banners": [{"text": "ad"}] * 9}, "broadcast banners must be a list of 1-8 banners"),
+    ({"banners": [{"text": "ad", "link": "x"}]}, "a broadcast banner is an object of text, logos and theme"),
+    ({"banners": [{"text": " "}]}, "a broadcast banner's text must be 1-100 characters"),
+    ({"banners": [{"text": "x" * 101}]}, "a broadcast banner's text must be 1-100 characters"),
+    ({"banners": [{"text": "Powered by {modal}"}]}, r"places logos it has no source for: \['modal'\]"),
+    ({"banners": [{"text": "Powered by Modal", "logos": {"modal": "/m.png"}}]},
+     r"has logos it never places \(\{name\} in its text\): \['modal'\]"),
+    ({"banners": [{"text": "{Modal}", "logos": {"Modal": "/m.png"}}]}, "logos map names .* to image sources"),
+    ({"banners": [{"text": "ad", "theme": "neon"}]}, "a broadcast banner's theme is one of dark, light"),
+    ({"banners": [{"text": "{m}", "logos": {"m": "http://example.com/m.png"}}]},
+     "banner logo 'm' is an https:// URL, a data:image/...;base64, URI or an image file's path"),
+    ({"banners": [{"text": "{m}", "logos": {"m": "m.png"}}]}, "banner logo 'm' is an https:// URL"),
+    ({"banners": [{"text": "{m}", "logos": {"m": "data:text/html;base64,PGI+"}}]},
+     "banner logo 'm' is not a base64 data: URI of a PNG, JPEG, WebP, GIF or SVG image"),
 ])
 def test_broadcast_settings_reject_what_the_stream_cannot_use(value, error):
     with pytest.raises(ValueError, match=error):
         broadcast.settings(value)
+
+
+PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5E"
+                       "rkJggg==")
+SVG = b'<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2 2"><rect width="2"/></svg>'
+
+
+def data_uri(body: bytes, kind: str = "image/png") -> str:
+    return f"data:{kind};base64,{base64.b64encode(body).decode()}"
+
+
+def test_broadcast_banners_inline_each_logo_from_a_file_a_url_or_a_data_uri(tmp_path, monkeypatch):
+    (tmp_path / "modal.png").write_bytes(PNG)
+    fetched = []
+
+    class Reply:
+        def __init__(self, body): self.body = body
+        def __enter__(self): return self
+        def __exit__(self, *exc): return False
+        def read(self, n): return self.body[:n]
+
+    def urlopen(request, timeout):
+        fetched.append((request.full_url, timeout))
+        return Reply(SVG)
+
+    monkeypatch.setattr(broadcast.urllib.request, "urlopen", urlopen)
+    show = {"title": "Five-way war", "banners": [
+        {"text": "Powered by {modal} Modal with {agentenv} AgentEnv Framework", "theme": "light",
+         "logos": {"modal": str(tmp_path / "modal.png"), "agentenv": "https://example.com/icon.svg"}},
+        {"text": "Built by {scale}", "logos": {"scale": data_uri(PNG)}},
+        {"text": "Every match is open source"}]}
+    assert broadcast.settings(show)["banners"][2] == {"text": "Every match is open source", "logos": {},
+                                                      "theme": "dark"}
+    inlined = broadcast.inline(show)
+    assert fetched == [("https://example.com/icon.svg", broadcast.LOGO_SECONDS)]
+    assert inlined["banners"][0]["logos"] == {"modal": data_uri(PNG), "agentenv": data_uri(SVG, "image/svg+xml")}
+    assert inlined["banners"][1] == show["banners"][1] and inlined["title"] == "Five-way war"
+    assert broadcast.settings(inlined, inlined=True)["banners"][0]["theme"] == "light"
+    with pytest.raises(ValueError, match="reaches the env as a data: URI"):
+        broadcast.settings(show, inlined=True)
+    for body, error in ((b"<html>no</html>", "is not a PNG, JPEG, WebP, GIF or SVG image"),
+                        (PNG + b"0" * broadcast.LOGO_BYTES, "is over 524,288 bytes")):
+        (tmp_path / "bad.png").write_bytes(body)
+        with pytest.raises(ValueError, match=error):
+            broadcast.inline({"banners": [{"text": "{bad}", "logos": {"bad": str(tmp_path / "bad.png")}}]})
+    with pytest.raises(ValueError, match="could not be read from"):
+        broadcast.inline({"banners": [{"text": "{gone}", "logos": {"gone": str(tmp_path / "gone.png")}}]})
+
+
+async def test_the_live_data_links_each_banner_logo_and_the_env_serves_it(env):
+    banners = [{"text": "Powered by {modal} Modal", "theme": "light", "logos": {"modal": data_uri(PNG)}},
+               {"text": "{mark} AgentEnv", "logos": {"mark": data_uri(SVG, "image/svg+xml")}}]
+    await env.new_game(**MATCH, broadcast={"title": "Ads", "banners": banners})
+    assert (await live_data(env))["live"]["broadcast"]["banners"] == [
+        {"text": "Powered by {modal} Modal", "theme": "light", "logos": {"modal": "live/logo/0/modal"}},
+        {"text": "{mark} AgentEnv", "theme": "dark", "logos": {"mark": "live/logo/1/mark"}}]
+
+    async def get(banner: int, name: str):
+        return await env._live_logo(SimpleNamespace(path_params={"banner": banner, "name": name}))
+
+    png, svg = await get(0, "modal"), await get(1, "mark")
+    assert (png.body, png.media_type, svg.body, svg.media_type) == (PNG, "image/png", SVG, "image/svg+xml")
+    assert svg.headers["content-security-policy"].startswith("default-src 'none'")
+    assert [(await get(b, n)).status_code for b, n in ((0, "mark"), (2, "modal"), (-1, "modal"))] == [404] * 3
+    with pytest.raises(ValueError, match="reaches the env as a data: URI"):
+        await env.new_game(**MATCH, broadcast={"banners": [{"text": "{m}", "logos": {"m": "https://example.com/m.png"}}]})
 
 
 def test_broadcast_settings_turn_the_casters_on_or_off():

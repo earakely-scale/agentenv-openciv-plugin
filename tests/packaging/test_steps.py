@@ -303,14 +303,21 @@ def test_a_paced_match_round_trips(local_stores):
     assert cls.from_dict({"id": "m", "type": "openciv3_match", "env_id": "e", "turns": 1}).min_turn_seconds == 0
 
 
-async def test_a_match_names_its_broadcast_for_the_env(local_stores):
+async def test_a_match_names_its_broadcast_for_the_env(local_stores, tmp_path):
     env = FakeGame()
     show = {"title": "Showmatch", "casters": {"model": "openai/gpt-5.6-luna", "analyst": {"name": "Iris"}}}
+    png = b"\x89PNG\r\n\x1a\n" + b"\0" * 16
+    (tmp_path / "modal.png").write_bytes(png)
+    ad = {**show, "banners": [{"text": "Powered by {modal} Modal", "logos": {"modal": str(tmp_path / "modal.png")}}]}
     async with deployed(env) as record:
-        for value in (show, None):
-            await OpenCiv3MatchTaskStep(id="match", version=None, env_id="openciv3", turns=10,
-                                        broadcast=value).execute(run_context(record, "opus", "sol"))
-    assert [g.get("broadcast") for g in env.games] == [show, None]
+        for value in (show, None, ad):
+            step = OpenCiv3MatchTaskStep(id="match", version=None, env_id="openciv3", turns=10, broadcast=value)
+            await step.execute(run_context(record, "opus", "sol"))
+    # the env gets each banner logo inlined, the step keeps the task's source
+    uri = f"data:image/png;base64,{base64.b64encode(png).decode()}"
+    inlined = {**ad, "banners": [{**ad["banners"][0], "logos": {"modal": uri}}]}
+    assert [g.get("broadcast") for g in env.games] == [show, None, inlined]
+    assert step.broadcast == ad
 
 
 def test_a_broadcast_match_round_trips_and_a_bad_broadcast_fails_when_the_task_loads(local_stores):
@@ -399,7 +406,7 @@ def test_await_game_is_registered_under_its_type_and_round_trips(local_stores):
 
 @pytest.mark.parametrize("task", ["smoke", "play", "full-game", "three-agents", "three-agents-quick", "frontier",
                                   "frontier-quick", "showmatch", "showmatch-quick", "livestream", "sol-vs-opus",
-                                  "human-vs-ai",
+                                  "five-way-war", "human-vs-ai",
                                   "human-vs-agents"])
 def test_every_bundle_task_records_after_the_game_alongside_grading(local_stores, task):
     steps = json.loads(files("agentenv_openciv3.bundles").joinpath(f"openciv3/tasks/{task}.json").read_text())
@@ -495,6 +502,37 @@ def test_sol_vs_opus_is_won_by_conquest_among_ai_civilizations(local_stores):
     assert all(s["prompt"] == players[0]["prompt"] for s in players)
     assert all(w in players[0]["prompt"] for w in ("conquer the other model's civilization", "only a tiebreaker",
                                                    "game's own AI", "GAME OVER"))
+
+
+def test_five_way_war_seats_five_models_and_no_ai_until_one_conquers_the_rest(local_stores):
+    steps = json.loads(files("agentenv_openciv3.bundles").joinpath("openciv3/tasks/five-way-war.json").read_text())
+    registry = get_task_step_registry()
+    for s in steps:
+        assert registry[s["type"]].from_dict(s).to_dict()["id"] == s["id"]
+    match = registry["openciv3_match"].from_dict(next(s for s in steps if s["type"] == "openciv3_match"))
+    settings = (match.turns, match.size, match.ai_opponents, match.barbarians, match.min_turn_seconds)
+    assert settings == (750, "Tiny", 0, "Restless", 55)
+    assert match.civs == {"astra": "America", "sol": "England", "terra": "Persia", "opus": "Rome", "sonnet": "Greece"}
+    shown = broadcast.settings(match.broadcast)
+    assert shown["title"].startswith("Five AI models at war in Civilization 3")
+    assert [(b["text"], b["theme"], sorted(b["logos"])) for b in shown["banners"]] == [
+        ("Powered by {modal} Modal Sandboxes with {agentenv} AgentEnv Framework", "light", ["agentenv", "modal"])]
+    agents = {s["agent_name"]: s for s in steps if s["type"] == "deploy_agent"}
+    assert {n: a["a2a_agent_id"] for n, a in agents.items()} == {
+        "astra": "openciv3-codex", "sol": "openciv3-codex", "terra": "openciv3-codex", "opus": "openciv3-claude",
+        "sonnet": "openciv3-claude"}
+    assert {n: a["env_vars"]["OPENCIV3_SESSION_TURNS"] for n, a in agents.items()} == {
+        "astra": "20", "sol": "30", "terra": "30", "opus": "30", "sonnet": "30"}
+    assert all(a["ttl_seconds"] == 36000 for a in agents.values())   # an 8-hour broadcast, with room to spare
+    players = [s for s in steps if s["type"] == "prompt_agent"]
+    assert {s["agent_name"]: s["model"] for s in players} == {
+        "astra": "openai/gpt-6-astra", "sol": "openai/gpt-6-sol", "terra": "openai/gpt-5.6-terra",
+        "opus": "anthropic/claude-opus-5-5", "sonnet": "anthropic/claude-sonnet-5-5"}
+    assert all(s["prompt"] == players[0]["prompt"] and s["timeout_seconds"] == 36000 for s in players)
+    assert all(w in players[0]["prompt"] for w in ("four other AI models", "conquering the other civilizations your "
+                                                   "ultimate goal", "the game ends only when you have done so",
+                                                   "GAME OVER"))
+    assert "tiebreaker" not in players[0]["prompt"]
 
 
 @pytest.mark.parametrize("full_name", ["three-agents", "frontier", "showmatch"])
