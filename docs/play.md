@@ -7,47 +7,54 @@ the env, the task steps and the play UI.
 
 ## 1. In a task
 
-`openciv3_match` takes `humans` next to the agents:
+A person plays a player slot of the env's lobby (agentenv-game-env), `"player_kind": "human"`, next to the agents':
 
 ```jsonc
-{"id": "match", "type": "openciv3_match", "env_id": "openciv3", "turns": 100,
- "civs": {"opus": "Greece"},            // agents (deployed with deploy_agent) and their civs
- "humans": {"you": "Rome"},             // people: a name (the seat's label) and a civ; a list of names picks civs
- "human_turn_seconds": 900}             // a human seat idle this long while others wait has its turn ended; 0: never
+{"id": "lobby", "type": "open_lobby", "env_id": "openciv3", "depends_on": ["deploy"],
+ "game_settings": {"turn_limit": 100,
+                   "human_turn_seconds": 900}},  // a human seat idle this long while others wait has its turn ended; 0: never
+{"id": "slot-opus", "type": "add_player_slot", "env_id": "openciv3", "player_id": "opus", "player_kind": "agent",
+ "player_name": "opus", "game_settings": {"civ": "Greece"}, "depends_on": ["lobby", "agent-opus"]},
+{"id": "slot-you", "type": "add_player_slot", "env_id": "openciv3", "player_id": "you", "player_kind": "human",
+ "player_name": "you", "game_settings": {"civ": "Rome"}, "depends_on": ["lobby"]},   // the next free civ without one
+{"id": "match", "type": "close_lobby", "env_id": "openciv3", "depends_on": ["slot-opus", "slot-you"]},
+{"id": "await", "type": "await_match", "env_id": "openciv3", "timeout_seconds": 36000, "fail_task_on_error": false,
+ "depends_on": ["match"]},
+{"id": "finish", "type": "finish_match", "env_id": "openciv3", "depends_on": ["await", "opus"]}
 ```
 
-- **The play link:** the step logs one per human, `PLAY Rome (you): http://127.0.0.1:<port>/play#token=<token>`, and
-  stores them in `context.metadata["openciv3_match"]["play"]` as `{name: {"civ", "url"}}`. The token is the seat's:
-  whoever has the link plays that civ. `agent-env openciv3 play --open` finds a running env's links and opens them.
-- **Waiting for the game:** a human plays no `prompt_agent` step, so a match with humans adds `openciv3_await_game`
-  (below) and makes grading and the recording depend on it.
+- **The play link:** a person's player slot gets a play token, 32 hex characters, as the slot's secret headers
+  (`x-openciv3-token`; agentenv-game-env's `@player_slot_headers`), which only the lobby's `fill` returns.
+  `add_player_slot` logs the slot's page with the token in its fragment,
+  `PLAY player slot you (you): http://127.0.0.1:<port>/players/you/play#x-openciv3-token=<token>`, and keeps the slot
+  in `context.metadata["game_slots"]["you"]` (its `interfaces` and `headers`). Whoever has the link plays that civ.
+  `agent-env openciv3 play --open` finds a running env's links and opens them.
+- **Waiting for the game:** a human plays no `prompt_agent` step, so a match with humans adds `await_match` (below)
+  and makes `finish_match`, and so grading and the recording, depend on it.
 - **Idle humans:** `human_turn_seconds: 0` lets a person take as long as they like, but an agent's `end_turn` then
   waits on them, past the agents' own tool timeout if need be; keep a limit in matches with agents.
-- **Agents can't play a human's seat:** a tool call whose `X-OpenCiv3-Seat` names a human seat fails with
-  `human_seat`.
+- **Agents can't play a human's seat:** a tool call at a person's player slot fails with `human_seat`.
+- **Grading:** `grade_match` grades every agent by default; `human-vs-agents` grades the person with a second
+  `grade_match` step (`"player_ids": ["you"]`, no `max_missed`), so their idle turns count against no one.
 
-`openciv3_await_game` waits until the game is over (`data/get` reports `game_over`), logging the turn as it goes:
+`await_match` (agentenv-game-env) waits until the match ends on its own, reading it every `poll_seconds` and trying
+again when a read fails:
 
 | Field | Default | Meaning |
 |---|---|---|
 | `env_id` | required | The env the match runs in |
-| `timeout_seconds` | `36000` | Fail the step if the game is not over by then |
+| `timeout_seconds` | `36000` | Fail the step if the match has not ended by then |
 | `poll_seconds` | `10` | How often it asks |
 
-## 2. The new-game extension
+## 2. The lobby and the env
 
-`urn:openciv3:new-game/v1` takes two more args:
-
-- `humans`: civs (among `civ` and `seats`) that people play.
-- `human_turn_seconds` (default `900`): replaces `SEAT_STALL_SECONDS` (300) for human seats; `0` never ends a
-  human's turn for them.
-
-Its result adds `"play": {civ: "/play#token=<token>"}`, one per human seat (`{}` without humans); the token is 32
-hex characters, new for every game. The env logs `NEW GAME <id>` when any game starts, then each link at INFO
+`human_turn_seconds` (default `900`) replaces `SEAT_STALL_SECONDS` (300) for human seats; `0` never ends a human's
+turn for them. The env starts a game from the lobby with each person's civ as a human seat, and the token its slot
+was given. It logs `NEW GAME <id>` when any game starts, then each link at INFO
 (`PLAY <civ> (<label>) game <id> /play#token=...`), which is how `agent-env openciv3 play` finds the newest game's
 links. `data/get`'s `seats[]` gains `"human": true|false` (a one-seat game a person plays has a top-level `"human"`
-and lists its seat), and so do `/live`'s seats and the viewer's players. Leaving `humans` out of a new game means no
-humans.
+and lists its seat), and so do `/live`'s seats and the viewer's players. A game without a human player slot has no
+humans; the env's default game (`urn:openciv3:new-game/v1`) never has one.
 
 ## 3. The bridge: `known_map`
 
@@ -131,14 +138,15 @@ The city screen and the advisors read two more commands' fields:
 
 ## 4. The play API (the env, next to `/mcp`)
 
-Every route but the page needs the seat's token, as the header `X-OpenCiv3-Token` or `?token=`; a wrong or missing
-token gets 401. Errors are JSON: `{"ok": false, "error": {"code", "message", "alternatives", "suggest"}}`, with 400 for
+The routes are the env's, at `/play`; under a person's player slot (`/players/<player_id>/play`, the page its slot's
+env card lists) they are the same routes. Every route but the page needs the seat's token, as the header
+`X-OpenCiv3-Token` or `?token=`; a wrong or missing token gets 401. Errors are JSON: `{"ok": false, "error": {"code", "message", "alternatives", "suggest"}}`, with 400 for
 a malformed request (`bad_request`, `unknown_tool`, `bad_args`) and 200 for what the game refuses. The GET routes but
 `view` and `status` answer with the bridge's result as it is.
 
 | Route | What it does |
 |---|---|
-| `GET /play` | The play UI. It reads the token from the URL's `#token=` |
+| `GET /play` | The play UI. It reads the token from the URL's fragment, `#token=` or `#x-openciv3-token=` |
 | `GET /play/api/view` | Everything the UI draws (below) |
 | `GET /play/api/status` | `{"game", "turn", "game_over", "ended", "waiting_for": [civ], "seats": [...]}`, cheap, for polling |
 | `GET /play/api/city?city=c1` | The bridge's `city` (with `options`) |

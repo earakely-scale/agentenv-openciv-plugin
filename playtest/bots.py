@@ -4,9 +4,10 @@
     .venv/bin/python playtest/bots.py --seats 3 --turns 30 --out /tmp/match-3 --fast
     .venv/bin/python playtest/bots.py --seats 2 --humans Rome=you --turns 50     # you play Rome in the browser
 
-Starts the env locally (no Docker) on a copy of the bridge, starts a match the way the `frontier` task does (the
-`urn:openciv3:new-game/v1` extension with civs, seats, labels, size and turn limit), and plays one asyncio task per
-seat. Each is an MCP client sending its seat's `X-OpenCiv3-Seat` header and plays its turns with real tool calls:
+Starts the env locally (no Docker) on a copy of the bridge, starts a match the way the `frontier` task does (the env's
+lobby, `urn:game:lobby/v1`: its settings, then a player slot per civilization, each with its civ and label), and plays
+one asyncio task per seat. Each is an MCP client at its player slot's address, /players/<label>/mcp, and plays its
+turns with real tool calls:
 get_turn_brief, list_units, find_city_sites + settle, set_production, research, auto_work, fortify and explore,
 buy, revolution, set_rates, plan, view_map, diplomacy and message, then end_turn with a note on what it did. Seats
 have personalities (expansionist, builder, aggressive); the aggressive ones threaten a neighbour, declare war on it
@@ -21,8 +22,8 @@ summary.json (data/get at the end), bots.json (the bots' own counters and notabl
 match.json (seats, labels, seed, the live URL, timings and what happened: wars, peace, cities captured and razed).
 
 With --humans, those civs are human seats (docs/play.md): the bots leave them alone, and the script prints each one's
-play link (`PLAY Rome (you): http://.../play#token=...`) and writes them to play.json, for a person or a browser
-script (playtest/play_e2e.mjs) to play.
+play link (`PLAY Rome (you): http://.../players/you/play#x-openciv3-token=...`) and writes them to play.json, for a
+person or a browser script (playtest/play_e2e.mjs) to play.
 """
 from __future__ import annotations
 
@@ -46,6 +47,7 @@ import time
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlencode
 
 import httpx
 from agentenv_protocol import client as env_client
@@ -53,8 +55,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 ROOT = Path(__file__).resolve().parents[1]
-NEW_GAME = "urn:openciv3:new-game/v1"
-SEAT_HEADER = "X-OpenCiv3-Seat"
+LOBBY = "urn:game:lobby/v1"
 DEFAULT_SEATS = [("Rome", "opus"), ("Greece", "sonnet"), ("Egypt", "haiku"), ("America", "sol"), ("Babylon", "luna"),
                  ("Persia", "terra"), ("England", "gemini"), ("Carthage", "grok"), ("China", "kimi")]
 DEFAULT_PERSONALITIES = {"opus": "aggressive", "sonnet": "builder", "haiku": "expansionist", "sol": "expansionist",
@@ -517,8 +518,9 @@ class Bot:
     async def connect(self) -> None:
         self.stack = contextlib.AsyncExitStack()
         http = await self.stack.enter_async_context(
-            httpx.AsyncClient(headers={SEAT_HEADER: self.label}, timeout=httpx.Timeout(900, connect=30)))
-        read, write, _ = await self.stack.enter_async_context(streamable_http_client(self.m.mcp_url, http_client=http))
+            httpx.AsyncClient(timeout=httpx.Timeout(900, connect=30)))
+        read, write, _ = await self.stack.enter_async_context(
+            streamable_http_client(f"{self.m.base}/players/{self.label}/mcp", http_client=http))
         self.session = await self.stack.enter_async_context(ClientSession(read, write))
         await self.session.initialize()
 
@@ -1314,6 +1316,15 @@ class Match:
         }
         (self.out / "match.json").write_text(json.dumps(meta, indent=2) + "\n")
 
+    async def live_meta(self) -> dict:
+        """The game the lobby created, as the live view shows it: its seed, turn limit and map."""
+        async with httpx.AsyncClient(timeout=60) as http:
+            for _ in range(240):
+                if meta := (await http.get(f"{self.base}/live/data.json")).json().get("meta"):
+                    return meta
+                await asyncio.sleep(0.5)
+        raise RuntimeError("the live view never showed the game the lobby created")
+
     async def run(self) -> int:
         self.out.mkdir(parents=True, exist_ok=True)
         self.logf = open(self.out / "bots.log", "w")
@@ -1323,18 +1334,27 @@ class Match:
         try:
             card = await self.wait_ready()
             civs = [s[0] for s in seats] + list(self.humans)
-            args = {"seed": self.args.seed, "size": self.args.size, "difficulty": self.args.difficulty,
-                    "barbarians": self.args.barbarians, "turn_limit": self.args.turns, "civ": civs[0],
-                    "opponents": len(civs) - 1 + self.args.ai_opponents, "seats": civs[1:],
-                    "labels": {s[0]: s[1] for s in seats} | self.humans}
-            if self.humans:
-                args |= {"humans": list(self.humans), "human_turn_seconds": self.args.human_turn_seconds}
-            if self.args.min_turn_seconds:
-                args["min_turn_seconds"] = self.args.min_turn_seconds
+            labels = {s[0]: s[1] for s in seats} | self.humans
+            settings = {"seed": self.args.seed, "size": self.args.size, "difficulty": self.args.difficulty,
+                        "barbarians": self.args.barbarians, "turn_limit": self.args.turns,
+                        "human_turn_seconds": self.args.human_turn_seconds,
+                        "min_turn_seconds": self.args.min_turn_seconds}
             if self.args.broadcast:
-                args["broadcast"] = json.loads(self.args.broadcast)
-            game = await env_client.invoke_extension(self.base, card, NEW_GAME, args, 600)
-            self.play = {civ: self.base + path for civ, path in (game.get("play") or {}).items()}
+                settings["broadcast"] = json.loads(self.args.broadcast)
+            await env_client.invoke_extension(self.base, card, LOBBY, {"game_settings": settings}, 60, method="open")
+            self.play = {}
+            for civ in civs:
+                kind = "human" if civ in self.humans else "agent"
+                slot = await env_client.invoke_extension(self.base, card, LOBBY, {
+                    "player_id": labels[civ], "player_kind": kind, "player_name": labels[civ],
+                    "game_settings": {"civ": civ}}, 60, method="fill")
+                if kind == "human":
+                    self.play[civ] = f"{self.base}{slot['environment_url']}/play#{urlencode(slot['headers'])}"
+            for i in range(self.args.ai_opponents):
+                await env_client.invoke_extension(self.base, card, LOBBY, {"player_id": f"ai{i + 1}",
+                                                                           "player_kind": "ai"}, 60, method="fill")
+            await env_client.invoke_extension(self.base, card, LOBBY, {}, 600, method="close")
+            game = await self.live_meta()
             self.turn_limit, self.width = game["turn_limit"], game["map"]["width"] if game["map"].get("wrap_x") else 0
             self.log(f"{ts()} match: seed {game['seed']}, {self.args.size} map {game['map']['width']}x"
                      f"{game['map']['height']}, {len(seats)} seats, {self.turn_limit} turns")

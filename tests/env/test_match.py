@@ -3,6 +3,7 @@ by the game's own victory rules, scores and moves, the play-out, the spectator v
 fake bridge, whose states the tests set where a game would have to be played to reach them."""
 
 import pytest
+from agentenv_protocol import DataPart
 from seated import lobby_game, playing
 
 from agentenv_openciv3 import server
@@ -97,3 +98,11 @@ async def test_the_spectator_view_is_the_live_page_and_the_files_are_the_recordi
     assert all(f["bytes"] > 0 and f["path"].startswith("/agentenv/ext/match/files/") for f in listed["files"])
     with pytest.raises(Exception, match="OpenCiv3 keeps a match's map_video, html_replay, last_turn, client_video"):
         await env._match_files({"kinds": ["replay"]})
+
+
+async def test_the_data_plane_starts_a_default_game_after_a_lobby_game(env):
+    await lobby_game(env, **PLAYERS)
+    await env.data_reset()
+    assert [(s.civ, s.player_id) for s in env.seats] == [("Rome", None)] and "seats" not in env.scenario
+    await env.data_add([DataPart(data={"scenario": {"turn_limit": 5}})])
+    assert [(s.civ, s.player_id) for s in env.seats] == [("Rome", None)] and env.scenario["turn_limit"] == 5

@@ -212,8 +212,8 @@ standings, a civ in depth, a stat's trend, the events and battles, the diplomacy
 story, what the desk has said), and the analyst researches the game in the background, jotting talking points into a
 notebook both casters read. They talk to each other a line at a time, open the show, call wars, captured cities and
 lead changes as they happen, and sign off at GAME OVER; the stream carries their voices and shows their lines as
-captions. The task's `openciv3_match` step turns them on with `broadcast`, which also names the stream and may pick
-the casters' models, names and voices, a model for each caster if you like:
+captions. The task's `open_lobby` step turns them on with its `broadcast` game setting, which also names the stream
+and may pick the casters' models, names and voices, a model for each caster if you like:
 
 ```json
 "broadcast": {"title": "OpenCiv3 Showmatch",
@@ -235,8 +235,8 @@ agent-env run openciv3 --task showmatch
 ```
 
 **Sponsor it.** `broadcast`'s `banners` fill a sponsor slot at the bottom right of the stream, one at a time, each for
-30 s: text with logos inline, on the stream's dark colours or a white plate. A logo is an `https://` URL, a `data:` URI
-or an image file; the match step inlines each one when the game starts, so the stream never waits on another host:
+30 s: text with logos inline, on the stream's dark colours or a white plate. A logo is an `https://` URL or a `data:`
+URI; the env fetches each URL as the lobby closes, so the stream never waits on another host:
 
 ```json
 "banners": [{"text": "Powered by {modal} Modal Sandboxes with {agentenv} AgentEnv Framework", "theme": "light",
@@ -264,31 +264,34 @@ agent-env run openciv3 --task human-vs-ai       # you (Rome) against 3 AI civs, 
 agent-env run openciv3 --task human-vs-agents   # you against Opus (Claude Code) and GPT-5.6 Sol (Codex)
 ```
 
-When the game starts, the run prints your link, which is your seat: whoever opens it plays that civ.
+When your player slot is filled, the run prints your link, which is your seat: whoever opens it plays that civ.
 
 ```
-PLAY Rome (you): http://127.0.0.1:49293/play#token=3f2a...
+PLAY player slot you (you): http://127.0.0.1:49293/players/you/play#x-openciv3-token=3f2a...
 ```
 
 From another terminal, `agent-env openciv3 play --open` finds the links of every running game and opens the first.
 The page is the game as your civilization sees it: the map under your fog of war, the real game's controls and
 hotkeys, the city screen, the advisors, and end turn. The agents wait for you to end each turn; a seat idle for 15
-minutes while others wait has its turn ended for it (`human_turn_seconds` in the task's `openciv3_match` step). The
-task waits for the game to end (`openciv3_await_game`), then grades it and saves the recording.
+minutes while others wait has its turn ended for it (`human_turn_seconds` in the task's `open_lobby` step). The task
+waits for the game to end (`await_match`), then grades it and saves the recording.
 
 With the client in the image (`agent-env openciv3 setup --client`), the page draws the map in the OpenCiv3 client's
 own art: its terrain, rivers, cities, unit sprites, fog of war and HUD, as the client draws them, and the units you
 see move walk where they went; **T** switches to the plain map ([docs/play.md](docs/play.md#6-the-games-art)).
 
-To seat yourself in any match, add `"humans": {"you": "Rome"}` to its `openciv3_match` step and an
-`openciv3_await_game` step that grading and the recording depend on. [docs/play.md](docs/play.md) has the details.
+To seat yourself in any match, add a player slot for yourself, `{"type": "add_player_slot", "player_id": "you",
+"player_kind": "human", "game_settings": {"civ": "Rome"}, ...}`, and an `await_match` step that `finish_match`
+depends on. [docs/play.md](docs/play.md) has the details.
 On a remote machine, forward the port as for the live view.
 
 ## How a match is built
 
 An AgentEnv [task](https://www.agentenvframework.com/docs/tasks) is a DAG of steps; agent-env runs every step whose
-dependencies are done, so independent steps run at the same time. Every match has this shape, shown here with the
-three players of `showmatch`; `frontier` has nine:
+dependencies are done, so independent steps run at the same time. The env is a game env of
+[agentenv-game-env](https://github.com/earakely-scale/agentenv-game-env): its lobby says who plays, and its match how
+the game goes and how it ended. Every match has this shape, shown here with the three players of `showmatch`;
+`frontier` has nine:
 
 ```mermaid
 flowchart LR
@@ -296,29 +299,42 @@ flowchart LR
     a1["deploy_agent<br/>opus · Claude Code"]
     a2["deploy_agent<br/>sol · Codex"]
     a3["deploy_agent<br/>kimi · Claude Code"]
-    match["openciv3_match<br/>seats · civs · turns · map<br/>pace · broadcast"]
+    lobby["open_lobby<br/>turns · map · pace · broadcast"]
+    s1["add_player_slot<br/>opus: Rome"]
+    s2["add_player_slot<br/>sol: America"]
+    s3["add_player_slot<br/>kimi: China"]
+    match["close_lobby<br/>the game starts"]
     p1["prompt_agent<br/>opus plays Rome"]
     p2["prompt_agent<br/>sol plays America"]
     p3["prompt_agent<br/>kimi plays China"]
-    grade["env_outcome_verifier<br/>names the victor"]
-    rec["save_env_recording<br/>MP4 + HTML replay"]
-    deploy --> a1 & a2 & a3
-    a1 & a2 & a3 --> match
+    finish["finish_match<br/>played to its end"]
+    grade["grade_match<br/>each agent's outcome"]
+    rec["save_match_files<br/>MP4 + HTML replay"]
+    deploy --> a1 & a2 & a3 & lobby
+    lobby --> s1 & s2 & s3
+    a1 --> s1
+    a2 --> s2
+    a3 --> s3
+    s1 & s2 & s3 --> match
     match --> p1 & p2 & p3
-    p1 & p2 & p3 --> grade & rec
+    p1 & p2 & p3 --> finish
+    finish --> grade & rec
 ```
 
 | Step | What it does |
 |---|---|
 | `deploy_env` | Starts the OpenCiv3 env: one container serving the game's MCP tools. |
-| `deploy_agent`, one per player | Starts a player agent and hands it the env's MCP server. `agent_name` names the player; `a2a_agent_id` picks its CLI (`openciv3-claude`, `openciv3-codex` or `openciv3-gemini`). |
-| `openciv3_match` (this plugin) | Starts the game once every agent is up: a seat per agent, each agent's civilization, the turn limit, AI civs if any, and the map (seed, size, difficulty, barbarians). For a stream it also sets the pace (`min_turn_seconds`) and the `broadcast`: the title and the AI casters. It logs the live view's URL. |
+| `deploy_agent`, one per player | Starts a player agent, with `"env_ids": []`: its player slot gives it its address. `agent_name` names the player; `a2a_agent_id` picks its CLI (`openciv3-claude`, `openciv3-codex` or `openciv3-gemini`). |
+| `open_lobby` (agentenv-game-env) | Opens the game's lobby with its settings: the turn limit and the map (seed, size, difficulty, barbarians). For a stream it also sets the pace (`min_turn_seconds`) and the `broadcast`: the title, the AI casters and the sponsor banners. |
+| `add_player_slot` (agentenv-game-env), one per player | Fills one player slot: an agent and its civilization, a person, or the game's AI. It registers the slot's address, `/players/<player_id>/mcp`, with the agent, so every call the agent makes plays its civilization. |
+| `close_lobby` (agentenv-game-env) | Closes the lobby, which creates the game and its match. |
 | `prompt_agent`, one per player | Sends each agent its prompt and model. All of them play at once, each a whole game. |
-| `env_outcome_verifier` | Runs `victor-verifier` against the env's final summary: who won, and each agent's rank, score and share of the world. |
-| `save_env_recording` (this plugin) | Renders the game's MP4 and HTML replay and stores them with the run. It runs alongside grading. |
+| `finish_match` (agentenv-game-env) | Once every player has stopped, plays the game out to its end: the env ends each remaining player's turn, turn after turn. |
+| `grade_match` (agentenv-game-env) | Grades each agent from the match: won 1, a draw 0.5, lost 0, with its score, cities, population and techs alongside ([Grading](#grading)). |
+| `save_match_files` (agentenv-game-env) | Renders the match's MP4 and HTML replay and stores them with the run. It runs alongside grading. |
 
-**Every agent plays every turn at the same time.** Each request names its seat in the `X-OpenCiv3-Seat` header, and
-the turn advances once every seat has ended it. Two of the `frontier` match's nine players:
+**Every agent plays every turn at the same time.** Each agent plays at its own player slot's address, and the turn
+advances once every seat has ended it. Two of the `frontier` match's nine players:
 
 ```mermaid
 sequenceDiagram
@@ -337,8 +353,8 @@ sequenceDiagram
     E-->>S: TURN T61 → T62, its events and next steps
 ```
 
-A seat that makes no call for five minutes has its turn ended for it; the verifier fails a match in which the env
-ended more than a tenth of any agent's turns. A game ends at its turn limit, or sooner when every other agent's
+A seat that makes no call for five minutes has its turn ended for it; an agent the env ended more than a tenth of
+the turns for scores 0. A game ends at its turn limit, or sooner when every other agent's
 civilization has been destroyed (conquest), one agent holds two thirds of the world's land and population
 (domination), or any civilization has a city with 20,000 culture points or 100,000 in all and twice the next one's
 (culture).
@@ -362,29 +378,35 @@ flowchart TB
     runner -- "A2A: each player's prompt" --> codex
     runner --> gemini
     claude --> server
-    codex -- "MCP over HTTP<br/>X-OpenCiv3-Seat header" --> server
+    codex -- "MCP over HTTP<br/>/players/sol/mcp" --> server
     gemini --> server
-    runner -- "new game · final summary · recording" --> server
+    runner -- "lobby · match · recording" --> server
     you -- "/live" --> server
 ```
 
 The game runs headless, with no Godot, no display and no Civilization III files, and it is deterministic: the same seed
 and the same actions give the same game.
 
-**Make your own match.** A match is plain JSON. To add a player, add its `deploy_agent` step (and list it in the
-match step's `depends_on`), its civilization in the match step's `civs`, and its `prompt_agent` step (and list that in
-the `depends_on` of the grading and recording steps). A `deploy_agent` without `a2a_agent_id` deploys your default
-agent, as `three-agents` does. Edit any agent's prompt to give it its own strategy:
+**Make your own match.** A match is plain JSON. To add a player, add its `deploy_agent` step, its `add_player_slot`
+step with its civilization (and list that in `close_lobby`'s `depends_on`), and its `prompt_agent` step (and list that
+in `finish_match`'s `depends_on`). A `deploy_agent` without `a2a_agent_id` deploys your default agent, as
+`three-agents` does. A slot of the game's AI, `{"player_id": "ai1", "player_kind": "ai"}`, adds an AI civilization.
+Edit any agent's prompt to give it its own strategy:
 
 ```jsonc
 {"id": "agent-sol", "type": "deploy_agent", "agent_name": "sol", "a2a_agent_id": "openciv3-codex",
- "env_ids": ["openciv3"], "env_vars": {"OPENCIV3_SESSION_TURNS": "40"}, "depends_on": ["deploy"]},
-{"id": "match", "type": "openciv3_match", "env_id": "openciv3", "turns": 50, "size": "Tiny",
- "civs": {"opus": "Rome", "sol": "America", "kimi": "China"}, "min_turn_seconds": 15,
- "broadcast": {"title": "OpenCiv3 Showmatch", "casters": {"model": "anthropic/claude-sonnet-5-5"}},
- "depends_on": ["agent-opus", "agent-sol", "agent-kimi"]},
+ "env_ids": [], "env_vars": {"OPENCIV3_SESSION_TURNS": "40"}, "depends_on": ["deploy"]},
+{"id": "lobby", "type": "open_lobby", "env_id": "openciv3", "depends_on": ["deploy"],
+ "game_settings": {"turn_limit": 50, "size": "Tiny", "min_turn_seconds": 15,
+                   "broadcast": {"title": "OpenCiv3 Showmatch", "casters": {"model": "anthropic/claude-sonnet-5-5"}}}},
+{"id": "slot-sol", "type": "add_player_slot", "env_id": "openciv3", "player_id": "sol", "player_kind": "agent",
+ "player_name": "sol", "game_settings": {"civ": "America"}, "depends_on": ["lobby", "agent-sol"]},
+{"id": "match", "type": "close_lobby", "env_id": "openciv3", "depends_on": ["slot-opus", "slot-sol", "slot-kimi"]},
 {"id": "sol", "type": "prompt_agent", "agent_name": "sol", "model": "openai/gpt-6-sol", "prompt_id": "sol",
- "prompt": "You lead a civilization in a game of OpenCiv3 ... Play to win.", "depends_on": ["match"]}
+ "prompt": "You lead a civilization in a game of OpenCiv3 ... Play to win.", "depends_on": ["match"]},
+{"id": "finish", "type": "finish_match", "env_id": "openciv3", "depends_on": ["opus", "sol", "kimi"]},
+{"id": "grade", "type": "grade_match", "env_id": "openciv3", "max_missed": 0.1, "depends_on": ["finish"]},
+{"id": "files", "type": "save_match_files", "env_id": "openciv3", "depends_on": ["finish"]}
 ```
 
 The [bundle's README](src/agentenv_openciv3/bundles/openciv3/README.md) lists every field, and
@@ -402,9 +424,9 @@ a framework concept:
 
 | AgentEnv concept | Here |
 |---|---|
-| [Environment](https://www.agentenvframework.com/docs/environments/creating): MCP tools, a data plane and extensions in one container | `src/agentenv_openciv3/server.py`, an `AgentEnvEnvironment` with 16 tools, `data/get` (the game's summary for verifiers) and the extensions `urn:openciv3:new-game/v1`, `autoplay/v1` and `recording/v1` |
-| [Plugin](https://www.agentenvframework.com/docs/plugins/environment-plugins): a pip package with entry points | `pyproject.toml`: the bundle (`agent_env.bundles`), the `agent-env openciv3` commands (`agent_env.cli_plugins`) and two task steps (`agent_env.task_steps`) |
-| [Task steps](https://www.agentenvframework.com/docs/plugins/task-step-plugins) | `openciv3_match` and `save_env_recording` in `src/agentenv_openciv3/steps.py` |
+| [Environment](https://www.agentenvframework.com/docs/environments/creating): MCP tools, a data plane and extensions in one container | `src/agentenv_openciv3/server.py`, an `AgentEnvGameEnv` ([agentenv-game-env](https://github.com/earakely-scale/agentenv-game-env)) with 16 tools, its lobby (`urn:game:lobby/v1`: the game's settings and a player slot per civilization) and match (`urn:game:match/v1`: turns, outcomes, scores, moves and files), `data/get` (the game's summary for verifiers) and the extensions `urn:openciv3:new-game/v1`, `autoplay/v1` and `recording/v1` |
+| [Plugin](https://www.agentenvframework.com/docs/plugins/environment-plugins): a pip package with entry points | `pyproject.toml`: the bundle (`agent_env.bundles`), the `agent-env openciv3` commands (`agent_env.cli_plugins`) and a task step (`agent_env.task_steps`) |
+| [Task steps](https://www.agentenvframework.com/docs/plugins/task-step-plugins) | `save_env_recording` in `src/agentenv_openciv3/steps.py`, for a default game; agentenv-game-env's lobby and match steps for the rest |
 | [Tasks](https://www.agentenvframework.com/docs/tasks/creating) and verifiers | `src/agentenv_openciv3/bundles/openciv3/`: the tasks and their verifiers, run with `agent-env run openciv3 --task <task>` |
 | [Agents](https://www.agentenvframework.com/docs/agents/creating): A2A agents handed the env's MCP server | `agents/`: the Claude Code, Codex and Gemini CLI players |
 | [Registry](https://www.agentenvframework.com/docs/registry): versioned images, envs, agents and runs | `agent-env openciv3 setup` registers the env and agents; every run, recording and grade is stored locally |
@@ -465,8 +487,8 @@ by the same rules, and each runs in its own container:
 - **Long games in sessions:** a prompt that names no stop turn plays the whole game in fresh sessions of
   `OPENCIV3_SESSION_TURNS` turns (75 by default), which bounds the model's context; each session picks the game up
   from the brief and the agent's plan. A prompt that says "until turn N" is one session to that turn.
-- **Seats:** an agent names its seat with its `agent_name` (or `OPENCIV3_SEAT`), and `end_turn` may wait minutes for
-  the others, so tool calls get a 30-minute timeout.
+- **Seats:** in a match, the MCP server an agent is handed is its player slot's, so its calls play its civilization;
+  `end_turn` may wait minutes for the others, so tool calls get a 30-minute timeout.
 - **Your own agent:** any A2A agent that advertises `urn:agentenv:mcp-config/v1` can play; set it in
   `deploy_agent`'s `a2a_agent_id`. Without agent-env, serve the env (the image `agent-env openciv3 setup` built, or
   `agent-env openciv3 serve` with a local bridge) and connect Claude Code, or any MCP client, to it:
@@ -479,10 +501,13 @@ claude "Play OpenCiv3 with the openciv3 tools until GAME OVER." --allowedTools "
 
 ## Grading
 
-**A match** (`three-agents`, `frontier`) is graded by the victor verifier. A conquest, domination or cultural victory
-ends the game and wins it; otherwise the top score at the turn limit wins. The grade is 1 for a valid match with one
-victor and 0.5 for a tie, and 0 when the match didn't reach its end, the engine failed, or the env ended more than 10%
-of any agent's turns. Each agent's rank, score, cities, techs and share of the world are reported alongside.
+**A match** (`three-agents`, `frontier`, the showmatches) is graded by agentenv-game-env's `grade_match`, from the
+match the env reports: each agent gets its own grade, 1 for a win, 0.5 for a draw and 0 for a loss. The game's own
+rules decide. A conquest, domination or cultural victory ends the game and wins it; otherwise the top score at the
+turn limit wins, an AI civilization's too (then every agent has lost), and a tie on top is no one's victory, a draw
+for every player left. A defeated civilization has lost. The grade is 0 for an agent that made no move or whose turns
+the env ended more than a tenth of (`max_missed`: 0.1), and a match whose engine failed has no grade. Each agent's
+score, cities, population and techs against the best opponent's are reported alongside.
 
 **A single agent** (`play`) is graded against baselines the env plays in the background on the same seed: `null`
 (never founds a city), `settler_bot` (a no-LLM script that follows the env's own suggestions through the same tools,
@@ -521,8 +546,8 @@ ended with grade 1 when Opus took America's last city: a conquest at turn 156, a
 
 `showmatch` and `livestream`: Opus 5.5 (Claude Code) as Rome, GPT-6 Sol (Codex) as America and Kimi K3 (Claude Code)
 as China, at Regent with roaming barbarians and no AI civilizations (seed 1). Their prompt tells them the game is
-broadcast, to message each other all game and to leave the audience a note with every `end_turn`. The match step
-paces the turns (at least 15 s, and 45 s for `livestream`) and puts two AI casters on the stream, Max and Ada, whose
+broadcast, to message each other all game and to leave the audience a note with every `end_turn`. The lobby's
+settings pace the turns (at least 15 s, and 45 s for `livestream`) and put two AI casters on the stream, Max and Ada, whose
 lines Sonnet 5.5 writes from the match data and `gpt-4o-mini-tts` voices. Both passed with grade 1 on an 8-core
 machine, and `livestream` went out live on Twitch for the whole game (restarted once, at turn 3, to put the casters
 on: the stream had attached to the env's own game before the match replaced it, a race now fixed).

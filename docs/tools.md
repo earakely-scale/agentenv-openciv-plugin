@@ -88,12 +88,19 @@ the valid alternatives and the exact call to make instead.
 
 ## Several agents in one game
 
-A game started with `seats` (new-game extension) is played by several agents, one civ each; there are no baselines.
+A game from the env's lobby ([agentenv-game-env](https://github.com/earakely-scale/agentenv-game-env)'s
+`urn:game:lobby/v1`) is played by several agents, or people, one civ each; there are no baselines. The lobby's
+`game_settings` are `seed`, `size`, `difficulty`, `barbarians`, `landform`, `ocean`, `turn_limit`,
+`human_turn_seconds`, `min_turn_seconds` and `broadcast`; each player slot is an agent's, a person's or the game's
+AI, two to twelve in all, with its `civ` (the next free one when it names none; the engine picks the AI's, so an AI
+slot takes none). Closing the lobby creates the game: a civ per agent and human slot, in the lobby's order, labelled
+with the slot's `player_name`, and an AI opponent per AI slot.
 
-- **Which seat a call plays:** the seat the request's `X-OpenCiv3-Seat` header names, by civ or by label (the
-  `openciv3_match` step labels each seat with its agent's name, and the player agents send their name, or
-  `OPENCIV3_SEAT` when set); with no header, the first civ. A game with one seat ignores the header. Each seat has
-  its own ids, plan, notices and action log.
+- **Which seat a call plays:** an agent plays at its player slot's address, `/players/<player_id>/mcp`, which
+  `add_player_slot` registers with it; every call there plays its civ. Each seat has its own ids, plan, notices and
+  action log. The env's own `/mcp` plays only the default game: in a game from the lobby a call there fails
+  (`no_player`, "the env's own address plays no one"), and one at a player slot the game doesn't have fails with
+  `unknown_player`.
 - **The rules:** the brief's `MATCH` line names the other agents and the AI civilizations and says how the match
   ends: at the turn limit (the top score wins), or sooner by conquest (one agent's civilization is the last an
   agent still plays, or any civ is the last left), domination (any civ holds two thirds of the world's land and
@@ -105,19 +112,21 @@ A game started with `seats` (new-game extension) is played by several agents, on
   answers `WAITING …` instead, and the next `end_turn` keeps waiting (or reports the turn, if it has advanced since).
   `until_attention` does not apply.
 - **A silent seat:** while others wait, a seat that has made no call for 5 minutes has its turn ended for it (with
-  `skip_idle`), and its next call starts with a `!!` line saying so. `data/get` counts these per seat.
+  `skip_idle`), and its next call starts with a `!!` line saying so. `data/get` counts these per seat, and the match
+  counts them as the player's missed moves.
 - **Diplomacy:** another agent's civ shows as `(another agent)`. Peace with it has no price: it is signed when both
   propose it, the second within a turn of the first; the brief marks a war whose enemy `offers peace`. The leaders
   can also talk: [Messages](#messages).
-- **The broadcast pace:** new-game `min_turn_seconds` (0-600, default 0) is the shortest a turn lasts, so people
+- **The broadcast pace:** the lobby's `min_turn_seconds` (0-600, default 0) is the shortest a turn lasts, so people
   watching can follow every turn. The `end_turn` of the last seat still playing a turn (an agent's, or a person's in
   the browser) waits until the turn has lasted that long, with the env serving the other seats meanwhile, then ends
   it. That seat counts as having ended the turn in the live view, and its wait is no silence: the env never ends
   its turn for it. A blocked `end_turn` doesn't wait; neither do games with one seat, autoplay, or a turn the env
   ends for a silent seat.
-- **The broadcast:** new-game `broadcast` is the stream's title, whether two AI casters talk over it and the
-  banners in its sponsor slot, set by the task (`openciv3_match`'s `broadcast`) and off when a new game leaves it out. `agent-env openciv3 stream` reads it
-  from the live data (`live.broadcast`) and follows it; the env only keeps it and never calls a model.
+- **The broadcast:** the lobby's `broadcast` is the stream's title, whether two AI casters talk over it and the
+  banners in its sponsor slot, set by the task (`open_lobby`'s `game_settings`) and off when the lobby leaves it out.
+  `agent-env openciv3 stream` reads it from the live data (`live.broadcast`) and follows it; the env only keeps it and
+  never calls a model.
 
   ```jsonc
   {"title": "OpenCiv3 Showmatch",                  // 1-80 characters: the title card and the casters' intro
@@ -129,7 +138,7 @@ A game started with `seats` (new-game extension) is played by several agents, on
                            "model": "anthropic/claude-sonnet-5-5"}},   // a caster's own model (default: model)
    "banners": [{"text": "Powered by {modal} Modal Sandboxes with {agentenv} AgentEnv Framework",   // 1-100 characters
                 "logos": {"modal": "https://github.com/modal-labs.png",                // {name} in the text: its logo
-                          "agentenv": "~/brand/agentenv-icon.png"},
+                          "agentenv": "https://raw.githubusercontent.com/scaleapi/agentenv-framework/main/assets/brand/icon-512.png"},
                 "theme": "light"},                                                     // optional: dark (the default)
                {"text": "Every match is open source"}]}                               // optional: up to 8, in turn
   ```
@@ -145,17 +154,28 @@ A game started with `seats` (new-game extension) is played by several agents, on
   `banners` fill the stream's sponsor slot, one at a time, each for 30 s ([viewer.md](viewer.md#5-broadcast-mode-stream)).
   A banner's text places each of its `logos` where `{name}` stands (names: `a-z`, `0-9`, `_`, `-`; every placeholder
   needs a logo and every logo a placeholder), and its `theme` is `dark`, the stream's colours, or `light`, a white plate
-  for logos made for light backgrounds. A logo's source is an `https://` URL, a `data:image/…;base64,` URI, or an image
-  file on the machine that runs the task (absolute or `~/…`): the `openciv3_match` step fetches or reads each one,
-  checks it is a PNG, JPEG, WebP, GIF or SVG image of at most 512 KB, and gives the env a `data:` URI, so the game's
-  settings hold all the stream shows and a broadcast never waits on another host. The env takes logos only as `data:`
-  URIs; its live data links each one (`live/logo/<banner>/<name>`) instead of carrying it.
-- **Human seats:** a seat in new-game `humans` is played by a person in the browser (`GET /play`, with the seat's
-  token from the result's `play`), through the same tool wrapper, action log and turn as an agent's seat. A tool call
-  that would play a human seat fails with `human_seat`: its header names it, or names no seat while the first civ is
-  human (agents must name their own seat then; a one-seat human game takes no tool calls). A human seat that idles
-  while others wait has its turn ended after `human_turn_seconds` (default 15 minutes; 0: never). The contract,
-  routes and UI: [play.md](play.md).
+  for logos made for light backgrounds. A logo's source is an `https://` URL or a `data:image/…;base64,` URI (the
+  lobby refuses anything else, an image file's path included: the env can't read the task's files). The env fetches
+  each URL as the lobby closes, checks it is a PNG, JPEG, WebP, GIF or SVG image of at most 512 KB, and keeps it as a
+  `data:` URI, so the game's settings hold all the stream shows and a broadcast never waits on another host; a logo
+  it can't fetch fails the lobby's close. Its live data links each logo (`live/logo/<banner>/<name>`) instead of
+  carrying it.
+- **Human seats:** a player slot of `"player_kind": "human"` is played by a person in the browser (`GET /play`, at
+  `/players/<player_id>/play`, with the play token the slot was given as its secret headers, which `add_player_slot`
+  puts in the link's fragment), through the same tool wrapper, action log and turn as an agent's seat. A tool call at
+  a person's player slot fails with `human_seat`. A human seat that idles while others wait has its turn ended after
+  `human_turn_seconds` (default 15 minutes; 0: never). The contract, routes and UI: [play.md](play.md).
+- **The match:** closing the lobby creates the match (`urn:game:match/v1`). Its progress is the game's turns against
+  the turn limit. Each player's outcome follows the game's own rules: a defeated civ has lost, and a victory
+  (conquest, domination, culture, or the top score at the turn limit, which may be an AI civ's) is its civ's player's,
+  every other player's (agents, people and the game's AI) a loss; a tie on top at the turn limit is no one's victory,
+  and the players are left undecided. Its scores per player are `score` (the main one), `cities`, `population` and
+  `techs`, and its moves the turns a player ended itself (`made`) and the turns the env ended for it (`missed`).
+  `finish_match` plays a match out once its players have stopped, ending every remaining player's turn, turn after
+  turn, to the game's end; those turns count as missed. `grade_match` grades the players from it. The match's files
+  are its recording, by kind: `map_video` (an mp4 of the map), `html_replay` (the viewer in one file), `last_turn` (a
+  png) and `client_video` (the real client's view, one per seat, in an image built with the client), all but
+  `last_turn` by default. Its spectator view is the live page, `/live`.
 
 ## Messages
 
@@ -247,19 +267,24 @@ authoritative record of what the agent did.
 ## Data plane and extensions
 
 - `data/reset`: start a new game from the current scenario.
-- `data/add`: a `DataPart` with `{"scenario": {...}}` updates the scenario and starts a new game.
+- `data/add`: a `DataPart` with `{"scenario": {...}}` updates the scenario and starts a new default game. The
+  lobby's own keys (`seats`, `labels`, `humans`, `human_turn_seconds`, `min_turn_seconds`, `broadcast`) are refused:
+  who plays a game, and how a match with people and a broadcast goes, come from the lobby.
 - `data/get`: one `DataPart` with the summary: `turn`, `turn_limit`, `game_over`, `defeated`, `seed`,
   `civ`, `human` (a person plays it), `score`, `metrics` (cities, pop, techs, tiles, units, gold, explored_pct),
   `baselines` (`null` and `engine_ai`, each with the score at the same turn and at the turn limit when known), and
   `actions` (`ok`, `invalid`, `max_consecutive_errors`). With seats (or a human seat), these describe the first
   seat, except `game_over` and `victory`, which are the game's: a seat knocked out is `defeated` while the others
   play on, and the game is over at a victory, the turn limit, or once every seat is defeated. `seats` lists every
-  seat: `civ`, `label`, `human`, `defeated`, `score`, `metrics`, `decisions`,
-  `actions`, `rank`, `share` and `auto_ended_turns`; `standings` entries carry `seat`.
+  seat: `civ`, `label`, `player_id` (its player slot's), `human`, `defeated`, `score`, `metrics`, `decisions`,
+  `actions`, `rank`, `share`, `auto_ended_turns` and `turns_ended` (those it ended itself); `standings` entries carry
+  `seat`.
 - Extensions (REST, for harnesses and `apply_server_config`):
-  - `urn:openciv3:new-game/v1`: scenario args, plus `seats` (more civs played by agents), `labels`
-    (`{civ: label}` for recordings and reports), `humans` and `human_turn_seconds` ([play.md](play.md)),
-    `min_turn_seconds` (the broadcast pace, above) and `broadcast` (the title and casters, above).
+  - `urn:openciv3:new-game/v1`: a new default game, one civ played at the env's own address against the game's AI:
+    `seed`, `civ`, `opponents`, `size`, `difficulty`, `barbarians`, `landform`, `ocean` and `turn_limit`. A game of
+    several players, or people, or a broadcast, comes from the lobby (above).
+  - `urn:game:lobby/v1`, `urn:game:match/v1` and `urn:game:license/v1`: agentenv-game-env's lobby, match and license
+    (the game needs no license), as its README describes them; the lobby takes the settings and player slots above.
   - `urn:openciv3:autoplay/v1`: `turns`, `policy` (`null`, `found_capital`, `engine_ai`).
 
 ## Round 2 additions (from the post-playtest audit)

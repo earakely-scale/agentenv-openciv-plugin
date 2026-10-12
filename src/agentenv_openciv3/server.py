@@ -1291,7 +1291,7 @@ class OpenCiv3Env(AgentEnvGameEnv):
     @reset_data
     async def data_reset(self) -> None:
         async with self.lock:
-            await self._new_game()
+            await self._new_game(self._default_scenario())
 
     @add_data
     async def data_add(self, parts: list) -> None:
@@ -1302,10 +1302,14 @@ class OpenCiv3Env(AgentEnvGameEnv):
             raise ValueError(f"{', '.join(lobby_only)}: a game's players, people and broadcast come from its lobby "
                              "(urn:game:lobby/v1)")
         async with self.lock:
-            scenario = self.scenario
+            scenario = self._default_scenario()
             for update in updates:
                 scenario = merge_scenario(scenario, update)
             await self._new_game(scenario)
+
+    def _default_scenario(self) -> dict:
+        """The running game's scenario as a default game's: without the keys only a lobby sets."""
+        return {k: v for k, v in self.scenario.items() if k not in LOBBY_ONLY}
 
     @get_data
     async def data_get(self) -> list[DataPart]:
@@ -1374,9 +1378,8 @@ class OpenCiv3Env(AgentEnvGameEnv):
         self.harness["extension_calls"] += 1
         args = {"seed": seed, "civ": civ, "opponents": opponents, "size": size, "difficulty": difficulty,
                 "barbarians": barbarians, "landform": landform, "ocean": ocean, "turn_limit": turn_limit}
-        base = {k: v for k, v in self.scenario.items() if k not in LOBBY_ONLY}
         async with self.lock:
-            await self._new_game(merge_scenario(base, args))
+            await self._new_game(merge_scenario(self._default_scenario(), args))
             return {**self.game, "scenario": self.scenario}
 
     @extension("urn:openciv3:autoplay/v1", description="Advance the game a number of turns with a scripted policy.")

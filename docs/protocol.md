@@ -598,8 +598,8 @@ events, decisions and plan state are its own. An unknown seat fails with `unknow
   change hands between seats.
 - **Victory** (see Conventions): conquest also when one seat's civilization is the last an agent still plays
   (the other seats are defeated), whatever AI civs are left. The game is then over for every seat. A victory on
-  score at the turn limit may be an AI civ's; the victor verifier then still ranks the seats by score, while an AI
-  civ's conquest, domination or cultural victory leaves the match without a victor.
+  score at the turn limit may be an AI civ's, as may a conquest, domination or cultural victory; the env's match then
+  counts it as that AI player slot's win and a loss for every seat (tools.md, Several agents in one game).
 - `autoplay` fails with `multi_seat`. The autosave (format 2) keeps every seat, the victory, the battles
   `known_map` lists and the standing peace and trade offers (`trade_offers`; a save without them loads with none);
   `load` restores them.

@@ -129,7 +129,12 @@ point. Its fields:
 - It logs one line per file, saying where the file is.
 - It works with any env that advertises an extension returning that shape, so it can later move to agent-env core unchanged.
 
-Every task in the `openciv3` bundle ends with this step, after the game and in parallel with grading.
+The bundle's default-game tasks (`smoke`, `play`, `full-game`) end with this step, after the game and in parallel
+with grading. A match from the lobby keeps the same recording through agentenv-game-env's `save_match_files`, after
+`finish_match`: the env's match files are the recording by kind, `map_video` (the mp4, or the gif without ffmpeg),
+`html_replay`, `last_turn` (the png) and `client_video` (one per seat, in an image built with the client), all but
+`last_turn` by default; each is stored as a `file` artifact and listed in
+`context.metadata["match_files"][<step id>]`.
 
 ## 4. Playtests and replays
 
@@ -189,7 +194,7 @@ seconds after GAME OVER, or a minute after the env is gone. `--record DIR` also 
 one RTMP server fails), and `--offline` only records. The stream keys come from agent-env's secret store (X's server
 URL too, `OPENCIV3_X_SERVER`), and the streamer replaces them in everything ffmpeg prints.
 
-When the task's `openciv3_match` turns on the casters (its `broadcast`, [tools.md](tools.md)), or with `--cast`,
+When the task's lobby turns on the casters (its `broadcast`, [tools.md](tools.md)), or with `--cast`,
 `streamer/caster.py` runs next to the browser: two AI casters, by default Max (play-by-play) and Ada (the analyst);
 the task may rename them and pick their voices, styles and models, and `--no-cast` keeps them off. It reads `GET /live/data.json` every 2 s, as the viewer does, and talks only about what that data shows:
 the intro (the players, the turns, that they can message each other), the biggest new events first (an elimination,
