@@ -2,7 +2,10 @@
 // hotkeys. Every action goes through the same env calls as an agent's tools. Needs map.js.
 "use strict";
 
-const TOKEN = new URLSearchParams(location.hash.slice(1)).get("token") || new URLSearchParams(location.search).get("token");
+// The play link carries the seat's token in its fragment: as the env logs it (token), or as add_player_slot gives the
+// player slot's headers (x-openciv3-token).
+const LINK = new URLSearchParams(location.hash.slice(1));
+const TOKEN = LINK.get("token") || LINK.get("x-openciv3-token") || new URLSearchParams(location.search).get("token");
 const S = {
   view: null, world: null, cam: new Camera(), painter: new PlayPainter(), sel: null, mode: null, hover: null,
   waited: new Set(), sites: null, sitesFor: null, busy: false, turn: null, gameId: null, dialog: null,

@@ -9,6 +9,7 @@ import shlex
 import subprocess
 import sys
 import time
+import tomllib
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -113,7 +114,8 @@ def setup(env_id: str, source: Path | None, build_platform: str | None, image: s
             raise click.ClickException("Docker's buildx plugin is required for the image builds. Docker Desktop has "
                                        "it; on Debian or Ubuntu: sudo apt-get install docker-buildx")
         target = ["--target", "client"] if client else []
-        build = ["docker", "build", "--platform", build_platform, *target, "-t", image, str(root)]
+        build = ["docker", "build", "--platform", build_platform, *target, "--build-arg",
+                 f"GAME_ENV={_game_env(root)}", "-t", image, str(root)]
         if subprocess.run(build).returncode:
             raise click.ClickException("docker build failed")
     click.echo("Storing the image (docker save, can take a minute)")
@@ -133,6 +135,15 @@ def setup(env_id: str, source: Path | None, build_platform: str | None, image: s
         click.echo(f"The bundle's agent tasks deploy the default agent: set [agents] default_a2a_agent_id = "
                    f'"{PLAYER_ID}" in .agentenv/config.toml, and the model endpoint in [model] (base_url, api_key). '
                    "The frontier, showmatch and livestream tasks name each player's agent.")
+
+
+def _game_env(root: Path) -> str:
+    """The agentenv-game-env archive the plugin's pyproject pins, for the env image."""
+    pinned = next((d for d in tomllib.loads((root / "pyproject.toml").read_text())["project"]["dependencies"]
+                   if d.startswith("agentenv-game-env @ ")), None)
+    if pinned is None:
+        raise click.ClickException(f"{root}/pyproject.toml pins no agentenv-game-env archive")
+    return pinned.removeprefix("agentenv-game-env @ ").strip()
 
 
 def _register_player(root: Path, build_platform: str, player_id: str) -> None:
@@ -254,8 +265,8 @@ def _running_envs() -> list[tuple[str, str]]:
 @click.option("--open", "open_page", is_flag=True, help="Open the first human seat's play page in the browser.")
 def play(open_page: bool):
     """Print the play link of every human seat in the OpenCiv3 games running in Docker, newest env first: whoever opens
-    a link plays that civilization in the browser (docs/play.md). A task seats people with openciv3_match's `humans`,
-    e.g. agent-env run openciv3 --task human-vs-ai."""
+    a link plays that civilization in the browser (docs/play.md). A task seats a person with add_player_slot's
+    `"player_kind": "human"`, e.g. agent-env run openciv3 --task human-vs-ai."""
     envs = _running_envs()
     if not envs:
         raise click.ClickException("no OpenCiv3 env is running; agent-env run starts one, e.g. "
@@ -267,7 +278,7 @@ def play(open_page: bool):
     if not links:
         raise click.ClickException(
             f"no human seats: the game in {', '.join(name for _, name in envs)} has no human players. A task seats "
-            "you with openciv3_match's humans, e.g. agent-env run openciv3 --task human-vs-ai")
+            "you in a human player slot, e.g. agent-env run openciv3 --task human-vs-ai")
     if open_page:
         click.launch(links[0][0])
 
@@ -322,7 +333,7 @@ def _playing(url: str) -> bool:
 
 
 def _broadcast(url: str) -> dict:
-    """The broadcast settings of the game behind a live view (openciv3_match's `broadcast`): {} when it has none."""
+    """The broadcast settings of the game behind a live view (the lobby's `broadcast`): {} when it has none."""
     return (_live(url) or {}).get("broadcast") or {}
 
 
@@ -350,7 +361,7 @@ def _broadcast(url: str) -> dict:
               help="Show the real OpenCiv3 client's view of each agent full size (the env needs setup --client).")
 @click.option("--cast/--no-cast", default=None,
               help="Two AI casters talk over the game, voiced and captioned, with the models and voices the task's "
-                   "openciv3_match broadcast names. Default: as the task says; --cast turns them on for a task that "
+                   "lobby's broadcast names. Default: as the task says; --cast turns them on for a task that "
                    "has none, --no-cast off. They use agent-env's model endpoint ([model] in .agentenv/config.toml).")
 @click.option("--title", help="The broadcast's title, on screen and in the casters' intro. Default: the task's.")
 @click.option("--record", "record_dir", type=click.Path(file_okay=False, path_type=Path),

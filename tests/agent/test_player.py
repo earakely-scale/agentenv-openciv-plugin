@@ -44,16 +44,6 @@ def test_mcp_servers_become_a_claude_code_mcp_config():
     assert claude.mcp_config(servers) == {"mcpServers": {
         "openciv3": {"type": "http", "url": "http://env:18765/mcp"},
         "other": {"type": "http", "url": "http://x/mcp", "headers": {"Authorization": "Bearer t"}}}}
-    seated = claude.mcp_config(servers, "Greece")["mcpServers"]
-    assert seated["openciv3"]["headers"] == {"X-OpenCiv3-Seat": "Greece"}
-    assert seated["other"]["headers"] == {"Authorization": "Bearer t", "X-OpenCiv3-Seat": "Greece"}
-
-
-def test_the_seat_is_openciv3_seat_or_else_the_agents_name():
-    named = claude.ClaudeConfig(name="opus")
-    assert common.seat_name({"OPENCIV3_SEAT": "Rome"}, named) == "Rome"
-    assert common.seat_name({}, named) == "opus"
-    assert common.seat_name({}, claude.ClaudeConfig()) is None
 
 
 def test_the_claude_command_allows_only_the_env_tools():
@@ -165,7 +155,7 @@ def test_a_prompt_without_a_stop_turn_plays_the_game_in_sessions_to_game_over(fa
     game_file = fake_cli("claude")
     result = run_task(claude.ClaudePlayer, claude.ClaudeConfig(name="opus"), "Lead Rome.")
     game = json.loads(game_file.read_text())
-    assert game["mcp"]["mcpServers"]["openciv3"]["headers"] == {"X-OpenCiv3-Seat": "opus"}
+    assert "headers" not in game["mcp"]["mcpServers"]["openciv3"]   # its player slot's address says who it plays
     assert [len(messages) for messages in game["sessions"].values()] == [3, 3, 2]
     first, second, third = game["sessions"].values()
     assert first[0].startswith("Lead Rome.\n\nA game longer than 10 turns is played in sessions of 10 turns.")

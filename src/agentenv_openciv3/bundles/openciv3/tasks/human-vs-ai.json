@@ -6,27 +6,88 @@
     "ttl_seconds": 43200
   },
   {
-    "id": "match",
-    "type": "openciv3_match",
+    "id": "lobby",
+    "type": "open_lobby",
     "env_id": "openciv3",
-    "turns": 100,
-    "size": "Small",
-    "humans": {
-      "you": "Rome"
+    "game_settings": {
+      "turn_limit": 100,
+      "size": "Small"
     },
-    "ai_opponents": 3,
     "depends_on": [
       "deploy"
     ]
   },
   {
+    "id": "slot-you",
+    "type": "add_player_slot",
+    "env_id": "openciv3",
+    "player_id": "you",
+    "player_kind": "human",
+    "player_name": "you",
+    "game_settings": {
+      "civ": "Rome"
+    },
+    "depends_on": [
+      "lobby"
+    ]
+  },
+  {
+    "id": "slot-ai1",
+    "type": "add_player_slot",
+    "env_id": "openciv3",
+    "player_id": "ai1",
+    "player_kind": "ai",
+    "depends_on": [
+      "lobby"
+    ]
+  },
+  {
+    "id": "slot-ai2",
+    "type": "add_player_slot",
+    "env_id": "openciv3",
+    "player_id": "ai2",
+    "player_kind": "ai",
+    "depends_on": [
+      "lobby"
+    ]
+  },
+  {
+    "id": "slot-ai3",
+    "type": "add_player_slot",
+    "env_id": "openciv3",
+    "player_id": "ai3",
+    "player_kind": "ai",
+    "depends_on": [
+      "lobby"
+    ]
+  },
+  {
+    "id": "match",
+    "type": "close_lobby",
+    "env_id": "openciv3",
+    "depends_on": [
+      "slot-you",
+      "slot-ai1",
+      "slot-ai2",
+      "slot-ai3"
+    ]
+  },
+  {
     "id": "await",
-    "type": "openciv3_await_game",
+    "type": "await_match",
     "env_id": "openciv3",
     "timeout_seconds": 36000,
     "fail_task_on_error": false,
     "depends_on": [
       "match"
+    ]
+  },
+  {
+    "id": "finish",
+    "type": "finish_match",
+    "env_id": "openciv3",
+    "depends_on": [
+      "await"
     ]
   },
   {
@@ -37,16 +98,16 @@
     "verifier_id": "full-game",
     "score_aggregator": "weighted_average",
     "depends_on": [
-      "await"
+      "finish"
     ]
   },
   {
-    "id": "recording",
-    "type": "save_env_recording",
+    "id": "files",
+    "type": "save_match_files",
     "env_id": "openciv3",
     "timeout_seconds": 1200,
     "depends_on": [
-      "await"
+      "finish"
     ]
   }
 ]

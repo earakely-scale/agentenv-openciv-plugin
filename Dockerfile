@@ -33,6 +33,11 @@ RUN pip install "agentenv-framework-protocol==0.1.275" "mcp>=1.25,<2" "pydantic>
                 "imageio-ffmpeg==0.6.0" \
  && ln -s "$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')" /usr/local/bin/ffmpeg \
  && ffmpeg -hide_banner -version >/dev/null
+# agentenv-game-env (the lobby and the match), its env side alone, from the archive pyproject.toml pins; agent-env
+# openciv3 setup passes it.
+ARG GAME_ENV
+RUN test -n "$GAME_ENV" || { echo "build with --build-arg GAME_ENV=<agentenv-game-env archive URL>" >&2; exit 1; } \
+ && pip install --no-deps "$GAME_ENV"
 COPY --from=bridge /out /opt/civbridge
 COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /opt/civbridge/licenses/
 COPY pyproject.toml README.md LICENSE NOTICE /tmp/pkg/

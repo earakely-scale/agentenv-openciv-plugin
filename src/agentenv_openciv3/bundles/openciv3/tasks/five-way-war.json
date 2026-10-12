@@ -10,9 +10,7 @@
     "type": "deploy_agent",
     "agent_name": "astra",
     "a2a_agent_id": "openciv3-codex",
-    "env_ids": [
-      "openciv3"
-    ],
+    "env_ids": [],
     "env_vars": {
       "OPENCIV3_SESSION_TURNS": "20"
     },
@@ -26,9 +24,7 @@
     "type": "deploy_agent",
     "agent_name": "sol",
     "a2a_agent_id": "openciv3-codex",
-    "env_ids": [
-      "openciv3"
-    ],
+    "env_ids": [],
     "env_vars": {
       "OPENCIV3_SESSION_TURNS": "30"
     },
@@ -42,9 +38,7 @@
     "type": "deploy_agent",
     "agent_name": "terra",
     "a2a_agent_id": "openciv3-codex",
-    "env_ids": [
-      "openciv3"
-    ],
+    "env_ids": [],
     "env_vars": {
       "OPENCIV3_SESSION_TURNS": "30"
     },
@@ -58,9 +52,7 @@
     "type": "deploy_agent",
     "agent_name": "opus",
     "a2a_agent_id": "openciv3-claude",
-    "env_ids": [
-      "openciv3"
-    ],
+    "env_ids": [],
     "env_vars": {
       "OPENCIV3_SESSION_TURNS": "30"
     },
@@ -74,9 +66,7 @@
     "type": "deploy_agent",
     "agent_name": "sonnet",
     "a2a_agent_id": "openciv3-claude",
-    "env_ids": [
-      "openciv3"
-    ],
+    "env_ids": [],
     "env_vars": {
       "OPENCIV3_SESSION_TURNS": "30"
     },
@@ -86,58 +76,136 @@
     ]
   },
   {
-    "id": "match",
-    "type": "openciv3_match",
+    "id": "lobby",
+    "type": "open_lobby",
     "env_id": "openciv3",
-    "turns": 750,
-    "size": "Tiny",
-    "civs": {
-      "astra": "America",
-      "sol": "England",
-      "terra": "Persia",
-      "opus": "Rome",
-      "sonnet": "Greece"
-    },
-    "barbarians": "Restless",
-    "min_turn_seconds": 55,
-    "broadcast": {
-      "title": "Five AI models at war in Civilization 3: Astra, Sol, Terra, Opus and Sonnet",
-      "names": {
-        "astra": "GPT-6 Astra",
-        "sol": "GPT-6 Sol",
-        "terra": "GPT-5.6 Terra",
-        "opus": "Opus 5.5",
-        "sonnet": "Sonnet 5.5"
-      },
-      "casters": {
-        "model": "anthropic/claude-sonnet-5-5",
-        "tts_model": "openai/gpt-4o-mini-tts",
-        "play_by_play": {
-          "name": "Max",
-          "voice": "ash"
+    "game_settings": {
+      "turn_limit": 750,
+      "size": "Tiny",
+      "barbarians": "Restless",
+      "min_turn_seconds": 55,
+      "broadcast": {
+        "title": "Five AI models at war in Civilization 3: Astra, Sol, Terra, Opus and Sonnet",
+        "names": {
+          "astra": "GPT-6 Astra",
+          "sol": "GPT-6 Sol",
+          "terra": "GPT-5.6 Terra",
+          "opus": "Opus 5.5",
+          "sonnet": "Sonnet 5.5"
         },
-        "analyst": {
-          "name": "Ada",
-          "voice": "sage"
-        }
-      },
-      "banners": [
-        {
-          "text": "Powered by {modal} Modal Sandboxes with {agentenv} AgentEnv Framework",
-          "theme": "light",
-          "logos": {
-            "modal": "https://github.com/modal-labs.png",
-            "agentenv": "https://raw.githubusercontent.com/scaleapi/agentenv-framework/main/assets/brand/icon-512.png"
+        "casters": {
+          "model": "anthropic/claude-sonnet-5-5",
+          "tts_model": "openai/gpt-4o-mini-tts",
+          "play_by_play": {
+            "name": "Max",
+            "voice": "ash"
+          },
+          "analyst": {
+            "name": "Ada",
+            "voice": "sage"
           }
-        }
-      ]
+        },
+        "banners": [
+          {
+            "text": "Powered by {modal} Modal Sandboxes with {agentenv} AgentEnv Framework",
+            "theme": "light",
+            "logos": {
+              "modal": "https://github.com/modal-labs.png",
+              "agentenv": "https://raw.githubusercontent.com/scaleapi/agentenv-framework/main/assets/brand/icon-512.png"
+            }
+          }
+        ]
+      }
     },
     "depends_on": [
-      "agent-astra",
-      "agent-sol",
-      "agent-terra",
-      "agent-opus",
+      "deploy"
+    ]
+  },
+  {
+    "id": "slot-astra",
+    "type": "add_player_slot",
+    "env_id": "openciv3",
+    "player_id": "astra",
+    "player_kind": "agent",
+    "player_name": "astra",
+    "game_settings": {
+      "civ": "America"
+    },
+    "depends_on": [
+      "lobby",
+      "agent-astra"
+    ]
+  },
+  {
+    "id": "slot-sol",
+    "type": "add_player_slot",
+    "env_id": "openciv3",
+    "player_id": "sol",
+    "player_kind": "agent",
+    "player_name": "sol",
+    "game_settings": {
+      "civ": "England"
+    },
+    "depends_on": [
+      "lobby",
+      "agent-sol"
+    ]
+  },
+  {
+    "id": "slot-terra",
+    "type": "add_player_slot",
+    "env_id": "openciv3",
+    "player_id": "terra",
+    "player_kind": "agent",
+    "player_name": "terra",
+    "game_settings": {
+      "civ": "Persia"
+    },
+    "depends_on": [
+      "lobby",
+      "agent-terra"
+    ]
+  },
+  {
+    "id": "slot-opus",
+    "type": "add_player_slot",
+    "env_id": "openciv3",
+    "player_id": "opus",
+    "player_kind": "agent",
+    "player_name": "opus",
+    "game_settings": {
+      "civ": "Rome"
+    },
+    "depends_on": [
+      "lobby",
+      "agent-opus"
+    ]
+  },
+  {
+    "id": "slot-sonnet",
+    "type": "add_player_slot",
+    "env_id": "openciv3",
+    "player_id": "sonnet",
+    "player_kind": "agent",
+    "player_name": "sonnet",
+    "game_settings": {
+      "civ": "Greece"
+    },
+    "depends_on": [
+      "lobby",
       "agent-sonnet"
+    ]
+  },
+  {
+    "id": "match",
+    "type": "close_lobby",
+    "env_id": "openciv3",
+    "depends_on": [
+      "slot-astra",
+      "slot-sol",
+      "slot-terra",
+      "slot-opus",
+      "slot-sonnet"
     ]
   },
   {
@@ -206,12 +274,9 @@
     ]
   },
   {
-    "id": "grade",
-    "type": "env_outcome_verifier",
+    "id": "finish",
+    "type": "finish_match",
     "env_id": "openciv3",
-    "file_artifact_id": "victor-verifier",
-    "verifier_id": "victor",
-    "score_aggregator": "weighted_average",
     "depends_on": [
       "astra",
       "sol",
@@ -221,16 +286,21 @@
     ]
   },
   {
-    "id": "recording",
-    "type": "save_env_recording",
+    "id": "grade",
+    "type": "grade_match",
+    "env_id": "openciv3",
+    "max_missed": 0.1,
+    "depends_on": [
+      "finish"
+    ]
+  },
+  {
+    "id": "files",
+    "type": "save_match_files",
     "env_id": "openciv3",
     "timeout_seconds": 14400,
     "depends_on": [
-      "astra",
-      "sol",
-      "terra",
-      "opus",
-      "sonnet"
+      "finish"
     ]
   }
 ]

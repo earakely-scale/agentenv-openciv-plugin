@@ -34,7 +34,6 @@ def fake_cli(monkeypatch, tmp_path):
         monkeypatch.setenv("PATH", f"{script.parent}{os.pathsep}{os.environ['PATH']}")
         monkeypatch.setenv("FAKE_GAME", str(tmp_path / "game.json"))
         monkeypatch.setenv("OPENCIV3_SESSION_TURNS", "10")
-        monkeypatch.delenv("OPENCIV3_SEAT", raising=False)
         return tmp_path / "game.json"
     return install
 

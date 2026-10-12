@@ -44,7 +44,7 @@ def toml(value: str) -> str:
     return json.dumps(value)
 
 
-def codex_config(environ: dict[str, str], servers: dict, seat: str | None) -> str:
+def codex_config(environ: dict[str, str], servers: dict) -> str:
     """CODEX_HOME/config.toml: the model endpoint and the env's MCP servers, whose calls may wait for other agents."""
     base = endpoint(environ)
     url = f"{base}/openai/v1" if base and "api.openai.com" not in base else "https://api.openai.com/v1"
@@ -53,7 +53,7 @@ def codex_config(environ: dict[str, str], servers: dict, seat: str | None) -> st
     for name, s in servers.items():
         lines += ["", f"[mcp_servers.{toml(name)}]", f"url = {toml(s['url'])}", "required = true",
                   "startup_timeout_sec = 60", f"tool_timeout_sec = {TOOL_TIMEOUT_SECONDS}"]
-        if headers := mcp_headers(s, seat):
+        if headers := mcp_headers(s):
             lines.append("http_headers = { " + ", ".join(f"{toml(k)} = {toml(v)}" for k, v in headers.items()) + " }")
     return "\n".join(lines) + "\n"
 
@@ -77,11 +77,11 @@ def tool_text(item: dict) -> str:
 class Codex(Harness):
     name, code, trajectory = "Codex", "codex", "codex-exec-json/v1"
 
-    def __init__(self, config: CodexConfig, servers: dict, seat: str | None, environ: dict[str, str], workdir: Path):
-        super().__init__(config, servers, seat, environ, workdir)
+    def __init__(self, config: CodexConfig, servers: dict, environ: dict[str, str], workdir: Path):
+        super().__init__(config, servers, environ, workdir)
         home = workdir / "codex"
         home.mkdir(exist_ok=True)
-        (home / "config.toml").write_text(codex_config(environ, servers, seat))
+        (home / "config.toml").write_text(codex_config(environ, servers))
         self.env = {**environ, "CODEX_HOME": str(home)}
         self.thread: str | None = None
 

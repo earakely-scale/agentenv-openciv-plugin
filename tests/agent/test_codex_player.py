@@ -10,15 +10,15 @@ SERVERS = {"openciv3": {"url": "http://env/mcp", "headers": {"Authorization": "B
 
 
 def test_the_config_routes_models_through_the_endpoint_and_waits_long_for_tools():
-    config = tomllib.loads(codex.codex_config({"LITELLM_BASE_URL": "https://llm.example.com/v1/"}, SERVERS, "sol"))
+    config = tomllib.loads(codex.codex_config({"LITELLM_BASE_URL": "https://llm.example.com/v1/"}, SERVERS))
     assert config["model_providers"]["agentenv"] == {
         "name": "agent-env", "base_url": "https://llm.example.com/openai/v1", "env_key": "LITELLM_API_KEY",
         "wire_api": "responses"}
     assert config["model_provider"] == "agentenv" and config["web_search"] == "disabled"
     assert config["mcp_servers"]["openciv3"] == {
         "url": "http://env/mcp", "required": True, "startup_timeout_sec": 60, "tool_timeout_sec": 1800,
-        "http_headers": {"Authorization": "Bearer t", "X-OpenCiv3-Seat": "sol"}}
-    direct = tomllib.loads(codex.codex_config({}, {"openciv3": {"url": "http://env/mcp"}}, None))
+        "http_headers": {"Authorization": "Bearer t"}}
+    direct = tomllib.loads(codex.codex_config({}, {"openciv3": {"url": "http://env/mcp"}}))
     assert direct["model_providers"]["agentenv"]["base_url"] == "https://api.openai.com/v1"
     assert "http_headers" not in direct["mcp_servers"]["openciv3"]
 
@@ -39,7 +39,7 @@ def test_a_prompt_without_a_stop_turn_plays_the_game_in_threads_to_game_over(fak
     result = run_task(codex.CodexPlayer, codex.CodexConfig(name="sol", model="openai/gpt-5.6-sol"), "Lead America.",
                       SERVERS)
     game = json.loads(game_file.read_text())
-    assert 'http_headers = { "Authorization" = "Bearer t", "X-OpenCiv3-Seat" = "sol" }' in game["config"]
+    assert 'http_headers = { "Authorization" = "Bearer t" }' in game["config"]
     assert [len(messages) for messages in game["sessions"].values()] == [3, 3, 2]
     first, second, _ = game["sessions"].values()
     assert first[0].startswith("Lead America.\n\nA game longer than 10 turns is played in sessions of 10 turns.")

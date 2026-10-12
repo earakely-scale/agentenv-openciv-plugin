@@ -10,9 +10,7 @@
     "type": "deploy_agent",
     "agent_name": "opus",
     "a2a_agent_id": "openciv3-claude",
-    "env_ids": [
-      "openciv3"
-    ],
+    "env_ids": [],
     "env_vars": {
       "OPENCIV3_SESSION_TURNS": "40"
     },
@@ -26,9 +24,7 @@
     "type": "deploy_agent",
     "agent_name": "sol",
     "a2a_agent_id": "openciv3-codex",
-    "env_ids": [
-      "openciv3"
-    ],
+    "env_ids": [],
     "env_vars": {
       "OPENCIV3_SESSION_TURNS": "40"
     },
@@ -38,27 +34,75 @@
     ]
   },
   {
-    "id": "match",
-    "type": "openciv3_match",
+    "id": "lobby",
+    "type": "open_lobby",
     "env_id": "openciv3",
-    "turns": 100,
-    "size": "Small",
-    "civs": {
-      "opus": "Greece",
-      "sol": "America"
+    "game_settings": {
+      "turn_limit": 100,
+      "size": "Small",
+      "human_turn_seconds": 900
     },
-    "humans": {
-      "you": "Rome"
-    },
-    "human_turn_seconds": 900,
     "depends_on": [
-      "agent-opus",
+      "deploy"
+    ]
+  },
+  {
+    "id": "slot-opus",
+    "type": "add_player_slot",
+    "env_id": "openciv3",
+    "player_id": "opus",
+    "player_kind": "agent",
+    "player_name": "opus",
+    "game_settings": {
+      "civ": "Greece"
+    },
+    "depends_on": [
+      "lobby",
+      "agent-opus"
+    ]
+  },
+  {
+    "id": "slot-sol",
+    "type": "add_player_slot",
+    "env_id": "openciv3",
+    "player_id": "sol",
+    "player_kind": "agent",
+    "player_name": "sol",
+    "game_settings": {
+      "civ": "America"
+    },
+    "depends_on": [
+      "lobby",
       "agent-sol"
     ]
   },
   {
+    "id": "slot-you",
+    "type": "add_player_slot",
+    "env_id": "openciv3",
+    "player_id": "you",
+    "player_kind": "human",
+    "player_name": "you",
+    "game_settings": {
+      "civ": "Rome"
+    },
+    "depends_on": [
+      "lobby"
+    ]
+  },
+  {
+    "id": "match",
+    "type": "close_lobby",
+    "env_id": "openciv3",
+    "depends_on": [
+      "slot-opus",
+      "slot-sol",
+      "slot-you"
+    ]
+  },
+  {
     "id": "await",
-    "type": "openciv3_await_game",
+    "type": "await_match",
     "env_id": "openciv3",
     "timeout_seconds": 36000,
     "fail_task_on_error": false,
@@ -93,12 +137,9 @@
     "prompt": "You lead a civilization in a game of OpenCiv3, an open-source Civilization III remake, against other players: AI agents and a person playing in the browser. Play to win. The get_turn_brief tool shows your civilization, your rivals, the match's rules and what needs orders; you act only through the openciv3 tools. The person may take several minutes over a turn, so end_turn can wait a while. Nobody will answer questions, so never ask or wait for confirmation. Keep playing until the end_turn tool reports GAME OVER, then reply with your final result."
   },
   {
-    "id": "grade",
-    "type": "env_outcome_verifier",
+    "id": "finish",
+    "type": "finish_match",
     "env_id": "openciv3",
-    "file_artifact_id": "victor-verifier",
-    "verifier_id": "victor",
-    "score_aggregator": "weighted_average",
     "depends_on": [
       "await",
       "opus",
@@ -106,14 +147,32 @@
     ]
   },
   {
-    "id": "recording",
-    "type": "save_env_recording",
+    "id": "grade",
+    "type": "grade_match",
+    "env_id": "openciv3",
+    "max_missed": 0.1,
+    "depends_on": [
+      "finish"
+    ]
+  },
+  {
+    "id": "grade-you",
+    "type": "grade_match",
+    "env_id": "openciv3",
+    "player_ids": [
+      "you"
+    ],
+    "depends_on": [
+      "finish"
+    ]
+  },
+  {
+    "id": "files",
+    "type": "save_match_files",
     "env_id": "openciv3",
     "timeout_seconds": 1200,
     "depends_on": [
-      "await",
-      "opus",
-      "sol"
+      "finish"
     ]
   }
 ]
