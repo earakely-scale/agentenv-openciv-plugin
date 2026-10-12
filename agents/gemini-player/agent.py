@@ -38,11 +38,11 @@ class GeminiConfig(PlayerConfig):
     model: str = "gemini-3.1-pro-preview"
 
 
-def gemini_settings(servers: dict, seat: str | None) -> dict:
+def gemini_settings(servers: dict) -> dict:
     """~/.gemini/settings.json: the env's MCP servers, whose calls may wait for other agents, and no other tools.
     Loop detection is off: a game repeats the same calls turn after turn."""
     def server(s: dict) -> dict:
-        headers = mcp_headers(s, seat)
+        headers = mcp_headers(s)
         return {"httpUrl": s["url"], "timeout": TOOL_TIMEOUT_SECONDS * 1000, "trust": True,
                 **({"headers": headers} if headers else {})}
     return {"mcpServers": {name: server(s) for name, s in servers.items()},
@@ -74,13 +74,12 @@ def tool_text(event: dict) -> str:
 class GeminiCli(Harness):
     name, code, trajectory = "Gemini CLI", "gemini", "gemini-cli-stream-json/v1"
 
-    def __init__(self, config: GeminiConfig, servers: dict, seat: str | None, environ: dict[str, str],
-                 workdir: Path):
-        super().__init__(config, servers, seat, environ, workdir)
+    def __init__(self, config: GeminiConfig, servers: dict, environ: dict[str, str], workdir: Path):
+        super().__init__(config, servers, environ, workdir)
         home, self.game = workdir / "home", workdir / "game"
         (home / ".gemini").mkdir(parents=True, exist_ok=True)
         self.game.mkdir(exist_ok=True)
-        (home / ".gemini" / "settings.json").write_text(json.dumps(gemini_settings(servers, seat), indent=1))
+        (home / ".gemini" / "settings.json").write_text(json.dumps(gemini_settings(servers), indent=1))
         (self.game / "GEMINI.md").write_text(config.system_prompt or SYSTEM_PROMPT)
         self.env = {**environ, **gemini_env(environ), "HOME": str(home)}
         self.session_id: str | None = None

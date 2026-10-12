@@ -6,36 +6,32 @@ import asyncio
 import base64
 import json
 import time
+import urllib.error
 from types import SimpleNamespace
 
 import pytest
+from agentenv_game import GameError
 from mcp.server.fastmcp.exceptions import ToolError
-from mcp.server.lowlevel.server import request_ctx
-from mcp.shared.context import RequestContext
+from seated import lobby_game, playing
 
 from agentenv_openciv3 import actionlog, broadcast, server
 
 pytestmark = pytest.mark.anyio
 
-MATCH = {"seats": ["Greece", "Egypt"], "labels": {"Rome": "opus", "Greece": "sonnet"}}
+MATCH = {"seats": ["Greece", "Egypt"], "labels": {"Rome": "opus", "Greece": "sonnet"}, "opponents": 3}
 CIVS = ("Rome", "Greece", "Egypt")
 INDEX = {"Rome": 0, "Greece": 1, "Egypt": 2}   # the fake bridge's player indices; Babylon (3) is an AI civ
 
 
 class Leader:
-    """The agent playing `civ`: its tool calls carry the seat header."""
+    """The agent playing `civ`: its tool calls are at its player slot's address."""
 
     def __init__(self, env, civ: str):
         self.env, self.civ = env, civ
 
     async def _call(self, name: str, args: dict):
-        request = SimpleNamespace(headers={server.SEAT_HEADER: self.civ})
-        token = request_ctx.set(RequestContext(request_id=0, meta=None, session=None, lifespan_context=None,
-                                               request=request))
-        try:
+        with playing(self.env, self.civ):
             return (await self.env.mcp.call_tool(name, args))[0].text
-        finally:
-            request_ctx.reset(token)
 
     async def __call__(self, name: str, **args) -> str:
         return await self._call(name, args)
@@ -48,7 +44,7 @@ class Leader:
 
 @pytest.fixture
 async def match(env):
-    await env.new_game(**MATCH)
+    await lobby_game(env, **MATCH)
     return env, {civ: Leader(env, civ) for civ in CIVS}
 
 
@@ -199,14 +195,14 @@ async def test_the_live_data_carries_notes_plans_and_messages(match):
     assert (turn2["notes"], turn2["plans"], turn2["messages"]) == (second["notes"], second["plans"],
                                                                    second["messages"])
 
-    await env.new_game(**MATCH)
+    await lobby_game(env, **MATCH)
     assert env.messages == [] and (await live_data(env))["live"]["seats"][0]["plan"] is None
 
 
 async def test_the_last_seat_ends_the_turn_no_sooner_than_min_turn_seconds(env, monkeypatch):
     monkeypatch.setattr(server, "SEAT_STALL_SECONDS", 0.3)
     monkeypatch.setattr(server, "STALL_CHECK_SECONDS", 0.05)
-    await env.new_game(**MATCH, min_turn_seconds=1)
+    await lobby_game(env, **MATCH, min_turn_seconds=1)
     leaders = {civ: Leader(env, civ) for civ in CIVS}
     started = env.turn_started
     waiting = [asyncio.create_task(leaders[c]("end_turn", skip_idle=True)) for c in ("Rome", "Greece")]
@@ -229,7 +225,7 @@ async def test_the_last_seat_ends_the_turn_no_sooner_than_min_turn_seconds(env, 
 async def test_the_pace_waits_for_no_blocked_end_turn_stalled_seat_or_single_seat(env, tools, monkeypatch):
     monkeypatch.setattr(server, "SEAT_STALL_SECONDS", 0.3)
     monkeypatch.setattr(server, "STALL_CHECK_SECONDS", 0.05)
-    await env.new_game(**MATCH, min_turn_seconds=1)
+    await lobby_game(env, **MATCH, min_turn_seconds=1)
     leaders = {civ: Leader(env, civ) for civ in CIVS}
     waiting = [asyncio.create_task(leaders[c]("end_turn", skip_idle=True)) for c in ("Rome", "Greece")]
     await asyncio.sleep(0.05)
@@ -242,21 +238,21 @@ async def test_the_pace_waits_for_no_blocked_end_turn_stalled_seat_or_single_sea
     assert all(t.startswith("TURN T1 → T2") for t in texts) and env.turn_started - started < 1
     assert env.seats[2].auto_ended_turns == 1
 
-    await env.new_game(min_turn_seconds=1, seats=[])
+    await lobby_game(env, min_turn_seconds=1, seats=[])
     clock = time.monotonic()
-    assert (await tools("end_turn", skip_idle=True)).startswith("TURN T1 → T2")
+    assert (await Leader(env, "Rome")("end_turn", skip_idle=True)).startswith("TURN T1 → T2")
     assert time.monotonic() - clock < 0.9
-    with pytest.raises(ValueError, match="min_turn_seconds must be an integer 0-600, got 601"):
-        await env.new_game(min_turn_seconds=601)
+    with pytest.raises(GameError, match="min_turn_seconds: Input should be less than or equal to 600"):
+        await lobby_game(env, min_turn_seconds=601)
 
 
 async def test_a_new_game_while_the_last_seat_waits_for_the_pace_fails_its_end_turn(env, monkeypatch):
     monkeypatch.setattr(server, "SEAT_WAIT_SECONDS", 3)
-    await env.new_game(**MATCH, min_turn_seconds=1)
+    await lobby_game(env, **MATCH, min_turn_seconds=1)
     leaders = {civ: Leader(env, civ) for civ in CIVS}
     waiting = [asyncio.create_task(leaders[c].error("end_turn", skip_idle=True)) for c in CIVS]
     await asyncio.sleep(0.3)
-    await env.new_game(**MATCH)
+    await lobby_game(env, **MATCH)
     assert all("a new game started" in err for err in await asyncio.gather(*waiting))
     assert env.turn == 1
 
@@ -264,7 +260,7 @@ async def test_a_new_game_while_the_last_seat_waits_for_the_pace_fails_its_end_t
 async def test_an_engine_restart_while_the_last_seat_waits_for_the_pace_has_every_seat_end_the_turn_again(
         env, monkeypatch):
     monkeypatch.setattr(server, "SEAT_WAIT_SECONDS", 3)
-    await env.new_game(**MATCH, min_turn_seconds=1)
+    await lobby_game(env, **MATCH, min_turn_seconds=1)
     leaders = {civ: Leader(env, civ) for civ in CIVS}
     waiting = [asyncio.create_task(leaders[c].error("end_turn", skip_idle=True)) for c in CIVS]
     await asyncio.sleep(0.3)
@@ -282,20 +278,20 @@ async def test_an_engine_restart_while_the_last_seat_waits_for_the_pace_has_ever
 async def test_a_new_game_sets_the_broadcast_the_live_data_carries(env):
     assert (await live_data(env))["live"]["broadcast"] is None   # no new game yet
     casters = {"model": "openai/gpt-5.6-luna", "analyst": {"name": " Iris ", "voice": "coral"}}
-    await env.new_game(**MATCH, broadcast={"title": " Battle of the Labs ", "casters": casters})
+    await lobby_game(env, **MATCH, broadcast={"title": " Battle of the Labs ", "casters": casters})
     assert (await live_data(env, since=99))["live"]["broadcast"] == {
         "title": "Battle of the Labs", "casters": {"model": "openai/gpt-5.6-luna",
                                                    "analyst": {"name": "Iris", "voice": "coral"}}}
-    await env.new_game(**MATCH, broadcast={"casters": True})
+    await lobby_game(env, **MATCH, broadcast={"casters": True})
     assert (await live_data(env))["live"]["broadcast"] == {"title": None, "casters": {}}
-    await env.new_game(**MATCH)   # off unless the new game asks again
+    await lobby_game(env, **MATCH)   # off unless the new game asks again
     assert (await live_data(env))["live"]["broadcast"] == {"title": None, "casters": None}
     # the broadcast's names for the seats go on the viewer's players
-    await env.new_game(**MATCH, broadcast={"names": {"opus": "Opus 5.5"}})
+    await lobby_game(env, **MATCH, broadcast={"names": {"opus": "Opus 5.5"}})
     players = {p["civ"]: p for p in (await live_data(env))["players"]}
     assert players["Rome"]["name"] == "Opus 5.5" and "name" not in players["Greece"]
-    with pytest.raises(ValueError, match="broadcast casters need two different names"):
-        await env.new_game(broadcast={"casters": {"play_by_play": {"name": "Max"}, "analyst": {"name": "max"}}})
+    with pytest.raises(GameError, match="broadcast casters need two different names"):
+        await lobby_game(env, broadcast={"casters": {"play_by_play": {"name": "Max"}, "analyst": {"name": "max"}}})
 
 
 @pytest.mark.parametrize(("value", "error"), [
@@ -319,12 +315,14 @@ async def test_a_new_game_sets_the_broadcast_the_live_data_carries(env):
     ({"banners": [{"text": " "}]}, "a broadcast banner's text must be 1-100 characters"),
     ({"banners": [{"text": "x" * 101}]}, "a broadcast banner's text must be 1-100 characters"),
     ({"banners": [{"text": "Powered by {modal}"}]}, r"places logos it has no source for: \['modal'\]"),
-    ({"banners": [{"text": "Powered by Modal", "logos": {"modal": "/m.png"}}]},
+    ({"banners": [{"text": "Powered by Modal", "logos": {"modal": "https://example.com/m.png"}}]},
      r"has logos it never places \(\{name\} in its text\): \['modal'\]"),
-    ({"banners": [{"text": "{Modal}", "logos": {"Modal": "/m.png"}}]}, "logos map names .* to image sources"),
+    ({"banners": [{"text": "{Modal}", "logos": {"Modal": "https://example.com/m.png"}}]},
+     "logos map names .* to image sources"),
     ({"banners": [{"text": "ad", "theme": "neon"}]}, "a broadcast banner's theme is one of dark, light"),
     ({"banners": [{"text": "{m}", "logos": {"m": "http://example.com/m.png"}}]},
-     "banner logo 'm' is an https:// URL, a data:image/...;base64, URI or an image file's path"),
+     "banner logo 'm' is an https:// URL or a data:image/...;base64, URI, which the env fetches"),
+    ({"banners": [{"text": "{m}", "logos": {"m": "/m.png"}}]}, "banner logo 'm' is an https:// URL"),
     ({"banners": [{"text": "{m}", "logos": {"m": "m.png"}}]}, "banner logo 'm' is an https:// URL"),
     ({"banners": [{"text": "{m}", "logos": {"m": "data:text/html;base64,PGI+"}}]},
      "banner logo 'm' is not a base64 data: URI of a PNG, JPEG, WebP, GIF or SVG image"),
@@ -343,48 +341,57 @@ def data_uri(body: bytes, kind: str = "image/png") -> str:
     return f"data:{kind};base64,{base64.b64encode(body).decode()}"
 
 
-def test_broadcast_banners_inline_each_logo_from_a_file_a_url_or_a_data_uri(tmp_path, monkeypatch):
-    (tmp_path / "modal.png").write_bytes(PNG)
-    fetched = []
+class Reply:
+    def __init__(self, body): self.body = body
+    def __enter__(self): return self
+    def __exit__(self, *exc): return False
+    def read(self, n): return self.body[:n]
 
-    class Reply:
-        def __init__(self, body): self.body = body
-        def __enter__(self): return self
-        def __exit__(self, *exc): return False
-        def read(self, n): return self.body[:n]
+
+def serving(monkeypatch, bodies: dict[str, bytes]) -> list:
+    """The web as broadcast.inline fetches it: `bodies` by URL, every other one missing. The fetches, in order."""
+    fetched = []
 
     def urlopen(request, timeout):
         fetched.append((request.full_url, timeout))
-        return Reply(SVG)
+        if request.full_url not in bodies:
+            raise urllib.error.URLError("no such host")
+        return Reply(bodies[request.full_url])
 
     monkeypatch.setattr(broadcast.urllib.request, "urlopen", urlopen)
+    return fetched
+
+
+def test_broadcast_banners_inline_each_logo_from_a_url_or_a_data_uri(monkeypatch):
+    fetched = serving(monkeypatch, {"https://example.com/modal.png": PNG, "https://example.com/icon.svg": SVG,
+                                    "https://example.com/page.png": b"<html>no</html>",
+                                    "https://example.com/big.png": PNG + b"0" * broadcast.LOGO_BYTES})
     show = {"title": "Five-way war", "banners": [
         {"text": "Powered by {modal} Modal with {agentenv} AgentEnv Framework", "theme": "light",
-         "logos": {"modal": str(tmp_path / "modal.png"), "agentenv": "https://example.com/icon.svg"}},
+         "logos": {"modal": "https://example.com/modal.png", "agentenv": "https://example.com/icon.svg"}},
         {"text": "Built by {scale}", "logos": {"scale": data_uri(PNG)}},
         {"text": "Every match is open source"}]}
     assert broadcast.settings(show)["banners"][2] == {"text": "Every match is open source", "logos": {},
                                                       "theme": "dark"}
     inlined = broadcast.inline(show)
-    assert fetched == [("https://example.com/icon.svg", broadcast.LOGO_SECONDS)]
+    assert fetched == [("https://example.com/modal.png", broadcast.LOGO_SECONDS),
+                       ("https://example.com/icon.svg", broadcast.LOGO_SECONDS)]
     assert inlined["banners"][0]["logos"] == {"modal": data_uri(PNG), "agentenv": data_uri(SVG, "image/svg+xml")}
     assert inlined["banners"][1] == show["banners"][1] and inlined["title"] == "Five-way war"
     assert broadcast.settings(inlined, inlined=True)["banners"][0]["theme"] == "light"
-    with pytest.raises(ValueError, match="reaches the env as a data: URI"):
+    with pytest.raises(ValueError, match="reaches the game as a data: URI"):
         broadcast.settings(show, inlined=True)
-    for body, error in ((b"<html>no</html>", "is not a PNG, JPEG, WebP, GIF or SVG image"),
-                        (PNG + b"0" * broadcast.LOGO_BYTES, "is over 524,288 bytes")):
-        (tmp_path / "bad.png").write_bytes(body)
+    for url, error in (("https://example.com/page.png", "is not a PNG, JPEG, WebP, GIF or SVG image"),
+                       ("https://example.com/big.png", "is over 524,288 bytes"),
+                       ("https://example.com/gone.png", "could not be read from")):
         with pytest.raises(ValueError, match=error):
-            broadcast.inline({"banners": [{"text": "{bad}", "logos": {"bad": str(tmp_path / "bad.png")}}]})
-    with pytest.raises(ValueError, match="could not be read from"):
-        broadcast.inline({"banners": [{"text": "{gone}", "logos": {"gone": str(tmp_path / "gone.png")}}]})
+            broadcast.inline({"banners": [{"text": "{bad}", "logos": {"bad": url}}]})
 
 
-async def test_the_live_data_links_each_banner_logo_and_the_env_serves_it(env):
+async def test_the_live_data_links_each_banner_logo_and_the_env_serves_it(env, monkeypatch):
     banners = [{"text": "Powered by {modal} Modal", "theme": "light", "logos": {"modal": data_uri(PNG)}},
                {"text": "{mark} AgentEnv", "logos": {"mark": data_uri(SVG, "image/svg+xml")}}]
-    await env.new_game(**MATCH, broadcast={"title": "Ads", "banners": banners})
+    await lobby_game(env, **MATCH, broadcast={"title": "Ads", "banners": banners})
     assert (await live_data(env))["live"]["broadcast"]["banners"] == [
         {"text": "Powered by {modal} Modal", "theme": "light", "logos": {"modal": "live/logo/0/modal"}},
         {"text": "{mark} AgentEnv", "theme": "dark", "logos": {"mark": "live/logo/1/mark"}}]
@@ -396,8 +403,13 @@ async def test_the_live_data_links_each_banner_logo_and_the_env_serves_it(env):
     assert (png.body, png.media_type, svg.body, svg.media_type) == (PNG, "image/png", SVG, "image/svg+xml")
     assert svg.headers["content-security-policy"].startswith("default-src 'none'")
     assert [(await get(b, n)).status_code for b, n in ((0, "mark"), (2, "modal"), (-1, "modal"))] == [404] * 3
-    with pytest.raises(ValueError, match="reaches the env as a data: URI"):
-        await env.new_game(**MATCH, broadcast={"banners": [{"text": "{m}", "logos": {"m": "https://example.com/m.png"}}]})
+    serving(monkeypatch, {"https://example.com/m.png": PNG})    # the env fetches a logo as the lobby closes
+    await lobby_game(env, **MATCH, broadcast={"banners": [{"text": "{m}", "logos": {"m": "https://example.com/m.png"}}]})
+    assert (await live_data(env))["live"]["broadcast"]["banners"][0]["logos"] == {"m": "live/logo/0/m"}
+    assert (await get(0, "m")).body == PNG
+    with pytest.raises(ValueError, match="banner logo 'm' could not be read from https://example.com/gone.png"):
+        await lobby_game(env, **MATCH, broadcast={"banners": [{"text": "{m}",
+                                                               "logos": {"m": "https://example.com/gone.png"}}]})
 
 
 def test_broadcast_settings_turn_the_casters_on_or_off():

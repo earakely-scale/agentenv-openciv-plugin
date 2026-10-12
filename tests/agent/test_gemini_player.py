@@ -9,13 +9,13 @@ SERVERS = {"openciv3": {"url": "http://env/mcp", "headers": {"Authorization": "B
 
 
 def test_the_settings_keep_only_the_game_tools_and_wait_long_for_them():
-    settings = gemini.gemini_settings(SERVERS, "gemini")
+    settings = gemini.gemini_settings(SERVERS)
     assert settings["mcpServers"] == {"openciv3": {
         "httpUrl": "http://env/mcp", "timeout": 1800000, "trust": True,
-        "headers": {"Authorization": "Bearer t", "X-OpenCiv3-Seat": "gemini"}}}
+        "headers": {"Authorization": "Bearer t"}}}
     assert settings["tools"]["core"] == [] and "generalist" in settings["tools"]["exclude"]
     assert settings["model"] == {"disableLoopDetection": True}
-    bare = gemini.gemini_settings({"openciv3": {"url": "http://env/mcp"}}, None)
+    bare = gemini.gemini_settings({"openciv3": {"url": "http://env/mcp"}})
     assert "headers" not in bare["mcpServers"]["openciv3"]
 
 
@@ -36,7 +36,7 @@ def test_a_prompt_without_a_stop_turn_plays_the_game_in_sessions_to_game_over(fa
     result = run_task(gemini.GeminiPlayer, gemini.GeminiConfig(name="gemini", system_prompt="Win."), "Lead England.",
                       SERVERS)
     game = json.loads(game_file.read_text())
-    assert game["settings"]["mcpServers"]["openciv3"]["headers"]["X-OpenCiv3-Seat"] == "gemini"
+    assert game["settings"]["mcpServers"]["openciv3"]["headers"] == {"Authorization": "Bearer t"}
     assert game["gemini_md"] == "Win." and game["endpoint"] == ["https://llm.example.com/gemini", "sk-proxy"]
     assert [len(messages) for messages in game["sessions"].values()] == [3, 3, 2]
     first, second, _ = game["sessions"].values()

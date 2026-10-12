@@ -7,13 +7,12 @@ import logging
 import re
 import shutil
 import subprocess
-from types import SimpleNamespace
 from urllib.parse import urlencode
 
 import pytest
+from agentenv_game import GameError
 from mcp.server.fastmcp.exceptions import ToolError
-from mcp.server.lowlevel.server import request_ctx
-from mcp.shared.context import RequestContext
+from seated import lobby_game, playing
 from starlette.requests import Request
 
 from agentenv_openciv3 import matchdata, server
@@ -60,15 +59,9 @@ class Player:
 
 
 async def mcp(env, tool: str, seat: str | None = None, **args) -> str:
-    """An agent's MCP tool call, with its X-OpenCiv3-Seat header when `seat` is given."""
-    if seat is None:
+    """An agent's MCP tool call, at the player slot of the seat `seat` names, else at the env's own address."""
+    with playing(env, seat):
         return (await env.mcp.call_tool(tool, args))[0].text
-    req = SimpleNamespace(headers={server.SEAT_HEADER: seat})
-    token = request_ctx.set(RequestContext(request_id=0, meta=None, session=None, lifespan_context=None, request=req))
-    try:
-        return (await env.mcp.call_tool(tool, args))[0].text
-    finally:
-        request_ctx.reset(token)
 
 
 async def mcp_error(env, tool: str, seat: str | None = None, **args) -> str:
@@ -83,13 +76,13 @@ def token_of(game: dict, civ: str) -> str:
 
 @pytest.fixture
 async def match(env):
-    game = await env.new_game(**MATCH)
+    game = await lobby_game(env, **MATCH)
     return env, Player(env, token_of(game, "Greece"))
 
 
 async def test_new_game_gives_each_human_seat_a_play_link(env, caplog):
     caplog.set_level(logging.INFO, logger=server.__name__)
-    game = await env.new_game(**MATCH)
+    game = await lobby_game(env, **MATCH)
     assert list(game["play"]) == ["Greece"] and re.fullmatch(r"/play#token=[0-9a-f]{32}", game["play"]["Greece"])
     assert game["scenario"]["humans"] == ["Greece"] and game["scenario"]["human_turn_seconds"] == 900
     assert [(s.civ, s.human, bool(s.token)) for s in env.seats] == [("Rome", False, False), ("Greece", True, True)]
@@ -97,13 +90,12 @@ async def test_new_game_gives_each_human_seat_a_play_link(env, caplog):
     assert f"NEW GAME {env.game_id}" in lines
     assert f"PLAY Greece (you) game {env.game_id} {game['play']['Greece']}" in lines
 
-    again = await env.new_game(**MATCH)
+    assert env.lobby.slot("you").headers == {"x-openciv3-token": env.seats[1].token}   # the token its fill gave
+    again = await lobby_game(env, **MATCH)
     assert again["play"]["Greece"] != game["play"]["Greece"]
-    assert (await env.new_game(seats=["Greece"]))["play"] == {}    # humans omitted: none
-    with pytest.raises(ValueError, match="humans must be civs of the game"):
-        await env.new_game(seats=["Greece"], humans=["Babylon"])
-    with pytest.raises(ValueError, match="human_turn_seconds must be an integer"):
-        await env.new_game(humans=["Rome"], human_turn_seconds=-1)
+    assert (await lobby_game(env, seats=["Greece"]))["play"] == {}    # no person: no link
+    with pytest.raises(GameError, match="human_turn_seconds: Input should be greater than or equal to 0"):
+        await lobby_game(env, humans=["Rome"], human_turn_seconds=-1)
 
 
 async def test_data_get_and_the_live_view_mark_human_seats(match):
@@ -122,7 +114,7 @@ async def test_every_route_but_the_page_needs_the_seats_token(match):
             assert status == 401 and data["ok"] is False and data["error"]["code"] == "bad_token", route
     r = await env._play_status(request("/play/api/status", player.token, header=False))
     assert r.status_code == 200 and json.loads(r.body)["game"] == env.game_id
-    await env.new_game(**MATCH)    # a new game: the old link plays nothing
+    await lobby_game(env, **MATCH)    # a new game: the old link plays nothing
     assert (await player.raw("status"))[0] == 401
 
 
@@ -267,7 +259,7 @@ async def test_end_turn_answers_at_once_and_the_turn_advances_when_every_seat_ha
 
 
 async def test_a_persons_end_turn_keeps_the_broadcast_pace_too(env):
-    game = await env.new_game(**MATCH, min_turn_seconds=1)
+    game = await lobby_game(env, **MATCH, min_turn_seconds=1)
     player = Player(env, token_of(game, "Greece"))
     started = env.turn_started
     waiting = asyncio.create_task(mcp(env, "end_turn", "Rome", skip_idle=True))
@@ -291,7 +283,7 @@ async def test_a_person_gets_the_agents_messages_as_notices(match):
 async def test_an_idle_human_seat_has_its_turn_ended_after_human_turn_seconds(env, monkeypatch):
     monkeypatch.setattr(server, "STALL_CHECK_SECONDS", 0.05)
     monkeypatch.setattr(server, "SEAT_STALL_SECONDS", 0.05)    # agents' limit: not the human's
-    game = await env.new_game(**MATCH, human_turn_seconds=1)
+    game = await lobby_game(env, **MATCH, human_turn_seconds=1)
     player = Player(env, token_of(game, "Greece"))
     waiting = asyncio.create_task(mcp(env, "end_turn", "Rome", skip_idle=True))
     await asyncio.sleep(0.4)
@@ -308,7 +300,7 @@ async def test_an_idle_human_seat_has_its_turn_ended_after_human_turn_seconds(en
 async def test_a_human_seat_with_human_turn_seconds_0_is_never_ended_for(env, monkeypatch):
     monkeypatch.setattr(server, "STALL_CHECK_SECONDS", 0.05)
     monkeypatch.setattr(server, "SEAT_WAIT_SECONDS", 0.5)
-    game = await env.new_game(**MATCH, human_turn_seconds=0)
+    game = await lobby_game(env, **MATCH, human_turn_seconds=0)
     env.seats[1].last_call -= 3600
     text = await mcp(env, "end_turn", "Rome", skip_idle=True)
     assert text.startswith("WAITING — you ended turn T1; Greece")
@@ -318,26 +310,24 @@ async def test_a_human_seat_with_human_turn_seconds_0_is_never_ended_for(env, mo
 
 
 async def test_agents_cannot_play_a_human_seat(env):
-    await env.new_game(**MATCH)
+    await lobby_game(env, **MATCH)
     assert "Greece is played by a person." in await mcp_error(env, "get_turn_brief", "Greece")
     assert "Greece is played by a person." in await mcp_error(env, "unit_order", "you", unit="u1", order="hold")
     assert (await mcp(env, "get_turn_brief", "Rome")).startswith("T1/8 (3950 BC) · Rome")
-    # no header: the first seat, an agent's
-    assert (await mcp(env, "get_turn_brief")).startswith("T1/8 (3950 BC) · Rome")
+    assert "the env's own address plays no one" in await mcp_error(env, "get_turn_brief")
     assert env.seats[1].actions.calls == {}
 
-    await env.new_game(seats=["Greece"], humans=["Rome"])
-    assert "Rome is played by a person; name your own seat in the X-OpenCiv3-Seat header." in await mcp_error(
-        env, "get_turn_brief")
+    await lobby_game(env, seats=["Greece"], humans=["Rome"])
+    assert "Rome is played by a person." in await mcp_error(env, "get_turn_brief", "Rome")
     assert (await mcp(env, "get_turn_brief", "Greece")).startswith("T1/8")
 
 
 async def test_a_game_with_one_human_seat(env, action_log):
-    game = await env.new_game(humans=["rome"])
+    game = await lobby_game(env, humans=["Rome"])
     assert list(game["play"]) == ["Rome"] and not env.multi
     player = Player(env, token_of(game, "Rome"))
-    assert "Rome is played by a person." in await mcp_error(env, "get_turn_brief")
-    assert "Rome is played by a person." in await mcp_error(env, "get_turn_brief", "anyone")
+    assert "Rome is played by a person." in await mcp_error(env, "get_turn_brief", "Rome")
+    assert "no player slot 'anyone' is played here" in await mcp_error(env, "get_turn_brief", "anyone")
     view = await player("view")
     assert view["game"]["me"]["civ"] == "Rome" and view["game"]["seats"][0]["human"]
     await player.act("unit_order", unit="u1", order="found_city")
@@ -348,6 +338,6 @@ async def test_a_game_with_one_human_seat(env, action_log):
     [part] = await env.data_get()
     assert part.data["human"] is True and [(s["civ"], s["human"]) for s in part.data["seats"]] == [("Rome", True)]
     assert env._live_now()["seats"][0]["human"] is True
-    # A one-seat game without humans plays as ever.
-    await env.new_game(humans=None)
-    assert (await mcp(env, "get_turn_brief", "anyone")).startswith("T1/8 (3950 BC) · Rome")
+    # The env's default game, without a lobby, plays at the env's own address.
+    await env.new_game()
+    assert (await mcp(env, "get_turn_brief")).startswith("T1/8 (3950 BC) · Rome")

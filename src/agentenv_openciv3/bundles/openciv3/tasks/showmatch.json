@@ -10,9 +10,7 @@
     "type": "deploy_agent",
     "agent_name": "opus",
     "a2a_agent_id": "openciv3-claude",
-    "env_ids": [
-      "openciv3"
-    ],
+    "env_ids": [],
     "ttl_seconds": 7200,
     "depends_on": [
       "deploy"
@@ -23,9 +21,7 @@
     "type": "deploy_agent",
     "agent_name": "sol",
     "a2a_agent_id": "openciv3-codex",
-    "env_ids": [
-      "openciv3"
-    ],
+    "env_ids": [],
     "ttl_seconds": 7200,
     "depends_on": [
       "deploy"
@@ -36,45 +32,93 @@
     "type": "deploy_agent",
     "agent_name": "kimi",
     "a2a_agent_id": "openciv3-claude",
-    "env_ids": [
-      "openciv3"
-    ],
+    "env_ids": [],
     "ttl_seconds": 7200,
     "depends_on": [
       "deploy"
     ]
   },
   {
-    "id": "match",
-    "type": "openciv3_match",
+    "id": "lobby",
+    "type": "open_lobby",
     "env_id": "openciv3",
-    "turns": 50,
-    "size": "Tiny",
-    "civs": {
-      "opus": "Rome",
-      "sol": "America",
-      "kimi": "China"
-    },
-    "min_turn_seconds": 15,
-    "broadcast": {
-      "title": "OpenCiv3 Showmatch: Opus 5.5 vs GPT-6 Sol vs Kimi K3",
-      "casters": {
-        "model": "anthropic/claude-sonnet-5-5",
-        "tts_model": "openai/gpt-4o-mini-tts",
-        "play_by_play": {
-          "name": "Max",
-          "voice": "ash"
-        },
-        "analyst": {
-          "name": "Ada",
-          "voice": "sage"
+    "game_settings": {
+      "turn_limit": 50,
+      "size": "Tiny",
+      "min_turn_seconds": 15,
+      "broadcast": {
+        "title": "OpenCiv3 Showmatch: Opus 5.5 vs GPT-6 Sol vs Kimi K3",
+        "casters": {
+          "model": "anthropic/claude-sonnet-5-5",
+          "tts_model": "openai/gpt-4o-mini-tts",
+          "play_by_play": {
+            "name": "Max",
+            "voice": "ash"
+          },
+          "analyst": {
+            "name": "Ada",
+            "voice": "sage"
+          }
         }
       }
     },
     "depends_on": [
-      "agent-opus",
-      "agent-sol",
+      "deploy"
+    ]
+  },
+  {
+    "id": "slot-opus",
+    "type": "add_player_slot",
+    "env_id": "openciv3",
+    "player_id": "opus",
+    "player_kind": "agent",
+    "player_name": "opus",
+    "game_settings": {
+      "civ": "Rome"
+    },
+    "depends_on": [
+      "lobby",
+      "agent-opus"
+    ]
+  },
+  {
+    "id": "slot-sol",
+    "type": "add_player_slot",
+    "env_id": "openciv3",
+    "player_id": "sol",
+    "player_kind": "agent",
+    "player_name": "sol",
+    "game_settings": {
+      "civ": "America"
+    },
+    "depends_on": [
+      "lobby",
+      "agent-sol"
+    ]
+  },
+  {
+    "id": "slot-kimi",
+    "type": "add_player_slot",
+    "env_id": "openciv3",
+    "player_id": "kimi",
+    "player_kind": "agent",
+    "player_name": "kimi",
+    "game_settings": {
+      "civ": "China"
+    },
+    "depends_on": [
+      "lobby",
       "agent-kimi"
+    ]
+  },
+  {
+    "id": "match",
+    "type": "close_lobby",
+    "env_id": "openciv3",
+    "depends_on": [
+      "slot-opus",
+      "slot-sol",
+      "slot-kimi"
     ]
   },
   {
@@ -117,12 +161,9 @@
     ]
   },
   {
-    "id": "grade",
-    "type": "env_outcome_verifier",
+    "id": "finish",
+    "type": "finish_match",
     "env_id": "openciv3",
-    "file_artifact_id": "victor-verifier",
-    "verifier_id": "victor",
-    "score_aggregator": "weighted_average",
     "depends_on": [
       "opus",
       "sol",
@@ -130,14 +171,21 @@
     ]
   },
   {
-    "id": "recording",
-    "type": "save_env_recording",
+    "id": "grade",
+    "type": "grade_match",
+    "env_id": "openciv3",
+    "max_missed": 0.1,
+    "depends_on": [
+      "finish"
+    ]
+  },
+  {
+    "id": "files",
+    "type": "save_match_files",
     "env_id": "openciv3",
     "timeout_seconds": 2400,
     "depends_on": [
-      "opus",
-      "sol",
-      "kimi"
+      "finish"
     ]
   }
 ]

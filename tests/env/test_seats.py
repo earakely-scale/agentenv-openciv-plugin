@@ -6,12 +6,10 @@ import asyncio
 import os
 import shlex
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from mcp.server.fastmcp.exceptions import ToolError
-from mcp.server.lowlevel.server import request_ctx
-from mcp.shared.context import RequestContext
+from seated import lobby_game, playing
 
 from agentenv_openciv3 import server
 from agentenv_openciv3.server import OpenCiv3Env
@@ -26,19 +24,14 @@ GAME = {"seed": 1, "opponents": 2, "seats": ["Greece", "Egypt"], "labels": {"Rom
 
 
 class SeatTools:
-    """Calls tools as the agent playing `civ` would: through FastMCP, with the seat header on the request."""
+    """Calls tools as the agent playing `civ` would: through FastMCP, at its player slot's address."""
 
     def __init__(self, env: OpenCiv3Env, civ: str):
         self.env, self.civ = env, civ
 
     async def _call(self, name: str, args: dict):
-        request = SimpleNamespace(headers={server.SEAT_HEADER: self.civ})
-        token = request_ctx.set(RequestContext(request_id=0, meta=None, session=None, lifespan_context=None,
-                                               request=request))
-        try:
+        with playing(self.env, self.civ):
             return await self.env.mcp.call_tool(name, args)
-        finally:
-            request_ctx.reset(token)
 
     async def __call__(self, name: str, **args) -> str:
         return (await self._call(name, args))[0].text
@@ -56,7 +49,7 @@ async def seats(env_vars, monkeypatch):
     monkeypatch.setenv("CIVBRIDGE_CMD", REAL_CMD)
     env = OpenCiv3Env()
     env.create_app()
-    await env.new_game(**GAME)
+    await lobby_game(env, **GAME)
     yield env, {civ: SeatTools(env, civ) for civ in SEATS}
     await env.close()
 
@@ -72,15 +65,17 @@ async def test_each_request_plays_its_seat(seats):
         assert (await tools[civ]("get_turn_brief")).startswith(f"T0/10 (4000 BC) · {civ} · Despotism")
     assert "u1 Settler founded Athens (c1)" in await tools["Greece"]("unit_order", unit="u1", order="found_city")
     assert "found here: yes" in await tools["Rome"]("list_units", filter="all")
-    assert "'Babylon' is not a seat in this game; the seats are Rome, Greece, Egypt." in await SeatTools(
+    assert "no player slot 'Babylon' is played here; this game's are A, B, Egypt" in await SeatTools(
         env, "Babylon").error("get_turn_brief")
     with pytest.raises(ValueError, match="every seat ends its own turns"):
         await env.autoplay(turns=1)
 
 
-async def test_an_agent_names_its_seat_by_its_label(seats):
+async def test_an_agent_plays_at_its_player_slot(seats):
     env, _ = seats
-    assert (await SeatTools(env, "b")("get_turn_brief")).startswith("T0/10 (4000 BC) · Greece")
+    assert [(s.civ, s.player_id) for s in env.seats] == [("Rome", "A"), ("Greece", "B"), ("Egypt", "Egypt")]
+    assert (await SeatTools(env, "B")("get_turn_brief")).startswith("T0/10 (4000 BC) · Greece")
+    assert "the env's own address plays no one" in await SeatTools(env, None).error("get_turn_brief")
     brief = await SeatTools(env, "Egypt")("get_turn_brief")
     assert ("MATCH vs agents Rome, Greece · every agent plays each turn at once; end_turn waits for the others · it "
             "ends at T10, or once one agent's civilization is the last an agent plays (conquest)") in brief
@@ -91,7 +86,8 @@ async def test_the_last_agent_standing_wins_and_the_game_ends(env_vars, monkeypa
     env = OpenCiv3Env()
     env.create_app()
     try:
-        await env.new_game(seed=1, opponents=1, seats=["Greece"], labels={"Rome": "A", "Greece": "B"}, turn_limit=10)
+        await lobby_game(env, seed=1, opponents=1, seats=["Greece"], labels={"Rome": "A", "Greece": "B"},
+                         turn_limit=10)
         greece, rome = SeatTools(env, "Greece"), SeatTools(env, "A")
         await greece("unit_order", unit="u2", order="disband")
         await greece("unit_order", unit="u1", order="disband")
@@ -180,8 +176,8 @@ async def test_the_turn_ends_when_the_seat_still_playing_it_is_defeated(env_vars
     env = OpenCiv3Env()
     env.create_app()
     try:
-        await env.new_game(seed=1, opponents=1, seats=["Greece"], labels={"Rome": "greece", "Greece": "rome"},
-                           turn_limit=10)
+        await lobby_game(env, seed=1, opponents=1, seats=["Greece"], labels={"Rome": "greece", "Greece": "rome"},
+                         turn_limit=10)
         rome, greece = SeatTools(env, "greece"), SeatTools(env, "rome")
         assert (await rome("get_turn_brief")).startswith("T0/10 (4000 BC) · Rome")
         waiting = asyncio.create_task(rome("end_turn", skip_idle=True))
@@ -193,10 +189,10 @@ async def test_the_turn_ends_when_the_seat_still_playing_it_is_defeated(env_vars
         await env.close()
 
 
-async def test_a_header_that_names_no_seat_touches_no_seat(seats):
+async def test_a_player_slot_the_game_does_not_have_touches_no_seat(seats):
     env, tools = seats
     env.seats[0].notices.append({"turn": 0, "kind": "turn_ended", "text": "a notice for Rome"})
-    assert "'Babylon' is not a seat" in await SeatTools(env, "Babylon").error("unit_order", unit="u1", order="hold")
+    assert "no player slot 'Babylon'" in await SeatTools(env, "Babylon").error("unit_order", unit="u1", order="hold")
     assert env.seats[0].notices_shown == 0 and env.seats[0].actions.summary()["invalid"] == 0
 
 
@@ -213,5 +209,5 @@ async def test_a_long_wait_returns_and_the_turn_is_not_lost(seats, monkeypatch):
     assert (await tools["Rome"]("get_turn_brief")).startswith("T1/10 (3950 BC) · Rome")
 
 
-async def test_a_game_with_one_seat_ignores_the_seat_header(env):
-    assert (await SeatTools(env, "default-agent")("get_turn_brief")).startswith("T1/8 (3950 BC) · Rome · Despotism")
+async def test_the_default_game_plays_at_the_envs_own_address(env):
+    assert (await SeatTools(env, None)("get_turn_brief")).startswith("T1/8 (3950 BC) · Rome · Despotism")

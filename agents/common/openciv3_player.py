@@ -6,9 +6,9 @@ agent-env deploys a player with `deploy_agent` and hands it the env's MCP server
 nudged to keep playing until the game reaches that turn or GAME OVER, so a task can split a long game into steps. Any
 other prompt plays the whole game in fresh sessions of OPENCIV3_SESSION_TURNS turns (75; 0 for a single session), which
 bounds the model's context: each session picks the game up from the brief and the plan tool. The model endpoint comes
-from agent-env as LITELLM_BASE_URL and LITELLM_API_KEY. In a game with several agents, the X-OpenCiv3-Seat header tells
-the env which civilization this agent plays: OPENCIV3_SEAT, or else the name deploy_agent gave the agent. end_turn may
-wait minutes for the others, so tool calls get a longer timeout.
+from agent-env as LITELLM_BASE_URL and LITELLM_API_KEY. In a game with several players, the MCP server agent-env hands
+the agent is its player slot's (add_player_slot), so its calls play its civilization. end_turn may wait minutes for
+the others, so tool calls get a longer timeout.
 """
 
 from __future__ import annotations
@@ -42,7 +42,6 @@ RESUME = ("This game is under way: an earlier session played it up to turn {turn
 SESSION_TURNS = 75
 FOOTER = re.compile(r"\[(GAME OVER )?T(\d+)/(\d+)")
 GAME_OVER = re.compile(r"^GAME OVER\b", re.MULTILINE)
-SEAT_HEADER = "X-OpenCiv3-Seat"
 TOOL_TIMEOUT_SECONDS = 1800
 STOP_AT = re.compile(r"\buntil turn (\d+)", re.IGNORECASE)
 STREAM_LIMIT = 64 * 1024 * 1024
@@ -54,13 +53,8 @@ class PlayerConfig(AgentConfig):
     max_nudges: int = 30
 
 
-def seat_name(environ: dict[str, str], config: AgentConfig) -> str | None:
-    """The seat this agent plays: OPENCIV3_SEAT, or else the name deploy_agent gave it, which the env maps to a seat."""
-    return environ.get("OPENCIV3_SEAT") or config.name
-
-
-def mcp_headers(server: dict, seat: str | None) -> dict[str, str]:
-    return {**(server.get("headers") or {}), **({SEAT_HEADER: seat} if seat else {})}
+def mcp_headers(server: dict) -> dict[str, str]:
+    return dict(server.get("headers") or {})
 
 
 def endpoint(environ: dict[str, str]) -> str:
@@ -164,8 +158,8 @@ class Harness:
     code: ClassVar[str]
     trajectory: ClassVar[str]
 
-    def __init__(self, config: PlayerConfig, servers: dict, seat: str | None, environ: dict[str, str], workdir: Path):
-        self.config, self.servers, self.seat, self.environ, self.workdir = config, servers, seat, environ, workdir
+    def __init__(self, config: PlayerConfig, servers: dict, environ: dict[str, str], workdir: Path):
+        self.config, self.servers, self.environ, self.workdir = config, servers, environ, workdir
 
     async def reply(self, text: str, session: Session) -> bool:
         """Send `text` and feed `session` the model's reply; False when the conversation cannot go on."""
@@ -249,7 +243,7 @@ async def play(cli: type[Harness], request: TaskRequest) -> TaskResult:
         return TaskResult.failure("no_mcp_server", "No MCP server was configured for this agent.")
     with tempfile.TemporaryDirectory(prefix=f"openciv3-{cli.code}-") as tmp:
         def start() -> Harness:
-            return cli(config, dict(request.mcp_servers), seat_name(environ, config), environ, Path(tmp))
+            return cli(config, dict(request.mcp_servers), environ, Path(tmp))
 
         sessions: list[Session] = []
         try:

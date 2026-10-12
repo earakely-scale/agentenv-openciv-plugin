@@ -1,4 +1,5 @@
-"""The task steps against fake envs served over HTTP, with agent-env's local stores."""
+"""The plugin's task step against fake envs served over HTTP, with agent-env's local stores, and the bundle's tasks as
+agent-env loads them."""
 
 import asyncio
 import base64
@@ -14,17 +15,11 @@ from agent_env.artifact import FileArtifact
 from agent_env.env.env import DeployedEnv
 from agent_env.task_step.context import DeployedAgent, TaskStepContext
 from agent_env.task_step.registry import get_task_step_registry
-from agentenv_protocol import AgentEnvEnvironment, DataPart, client, environment_card, extension, get_data
+from agentenv_protocol import AgentEnvEnvironment, client, environment_card, extension
 from agentenv_protocol.types import WELL_KNOWN_PATH
 
 from agentenv_openciv3 import broadcast
-from agentenv_openciv3.steps import (
-    NEW_GAME_EXTENSION,
-    RECORDING_EXTENSION,
-    OpenCiv3AwaitGameTaskStep,
-    OpenCiv3MatchTaskStep,
-    SaveEnvRecordingTaskStep,
-)
+from agentenv_openciv3.steps import RECORDING_EXTENSION, SaveEnvRecordingTaskStep
 
 pytestmark = pytest.mark.anyio
 
@@ -44,44 +39,6 @@ class FakeRecorder(AgentEnvEnvironment):
         return {"turns": 3, "files": [{"name": name, "content_type": CONTENT_TYPES[name.rpartition(".")[2]],
                                        "bytes": len(data), "base64": base64.b64encode(data).decode()}
                                       for name, data in out]}
-
-
-@environment_card(name="openciv3")
-class FakeGame(AgentEnvEnvironment):
-    def __init__(self):
-        self.games = []
-
-    @extension(NEW_GAME_EXTENSION, description="Start a new game.")
-    async def new_game(self, **args) -> dict:
-        self.games.append(args)
-        return {"turn": 1, **({"play": {civ: f"/play#token={civ.lower():x<32}" for civ in args["humans"]}}
-                              if args.get("humans") else {})}
-
-
-@environment_card(name="openciv3")
-class FakeOldGame(AgentEnvEnvironment):
-    """An env from before human seats: it takes the args but returns no play links."""
-
-    @extension(NEW_GAME_EXTENSION, description="Start a new game.")
-    async def new_game(self, **args) -> dict:
-        return {"turn": 1}
-
-
-@environment_card(name="openciv3")
-class FakeSummary(AgentEnvEnvironment):
-    """data/get answers from a script: a summary, or an exception to raise, per call; the last one repeats."""
-
-    def __init__(self, *answers):
-        self.answers = list(answers)
-        self.calls = 0
-
-    @get_data
-    async def summary(self) -> list[DataPart]:
-        answer = self.answers[min(self.calls, len(self.answers) - 1)]
-        self.calls += 1
-        if isinstance(answer, Exception):
-            raise answer
-        return [DataPart(data=answer)]
 
 
 @environment_card(name="openciv3")
@@ -172,309 +129,101 @@ def test_registered_under_its_type_and_round_trips(local_stores):
                                                                                             False)
 
 
-async def test_a_match_seats_every_deployed_agent_under_its_name(local_stores, caplog):
-    env = FakeGame()
-    step = OpenCiv3MatchTaskStep(id="match", version=None, env_id="openciv3", turns=10, civs={"sonnet": "Greece"},
-                                 ai_opponents=2, landform="Pangaea")
-    caplog.set_level(logging.INFO, logger="agentenv_openciv3.steps")
-    async with deployed(env) as record:
-        context = await step.execute(run_context(record, "opus", "sonnet", "haiku"))
-
-    assert env.games == [{"seed": 1, "size": "Small", "difficulty": "Regent", "barbarians": "Roaming", "turn_limit": 10,
-                          "civ": "Greece", "opponents": 4, "seats": ["Rome", "Egypt"],
-                          "labels": {"Greece": "sonnet", "Rome": "haiku", "Egypt": "opus"}, "landform": "Pangaea"}]
-    live_url = f"{record.environment_url}/live"
-    assert context.metadata["openciv3_match"] == {
-        "seats": [{"agent": "sonnet", "civ": "Greece"}, {"agent": "haiku", "civ": "Rome"},
-                  {"agent": "opus", "civ": "Egypt"}],
-        "turn_limit": 10, "live_url": live_url}
-    assert any("sonnet plays Greece" in m and live_url in m for m in caplog.messages)
+DEFAULT_GAMES = ["smoke", "play", "full-game"]
+LOBBY_GAMES = ["three-agents", "three-agents-quick", "frontier", "frontier-quick", "showmatch", "showmatch-quick",
+               "livestream", "sol-vs-opus", "five-way-war", "human-vs-ai", "human-vs-agents"]
 
 
-async def test_a_match_seats_only_the_agents_it_names(local_stores):
-    env = FakeGame()
-    step = OpenCiv3MatchTaskStep(id="match", version=None, env_id="openciv3", turns=5, agents=["opus"],
-                                 ai_opponents=1, ocean=70)
-    async with deployed(env) as record:
-        await step.execute(run_context(record, "opus", "judge"))
-    assert [(g["civ"], g["opponents"], g["seats"], g["labels"], g["ocean"]) for g in env.games] == [
-        ("Rome", 1, [], {"Rome": "opus"}, 70)]
-
-
-async def test_a_match_fails_for_an_agent_that_is_not_deployed(local_stores):
-    env = FakeGame()
-    step = OpenCiv3MatchTaskStep(id="match", version=None, env_id="openciv3", turns=10, civs={"gpt": "Rome"})
-    async with deployed(env) as record:
-        with pytest.raises(RuntimeError, match=r"agents \['gpt'\] are not deployed"):
-            await step.execute(run_context(record, "opus"))
-        with pytest.raises(RuntimeError, match="at least one deployed agent"):
-            await OpenCiv3MatchTaskStep(id="match", version=None, env_id="openciv3", turns=10).execute(
-                run_context(record))
-    assert env.games == []
-
-
-def test_the_match_is_registered_under_its_type_and_round_trips(local_stores):
-    cls = get_task_step_registry()["openciv3_match"]
-    assert cls is OpenCiv3MatchTaskStep
-    step = cls.from_dict({"id": "match", "type": "openciv3_match", "env_id": "openciv3", "turns": 10,
-                          "civs": {"opus": "Rome"}, "ocean": 70, "depends_on": ["agent-opus"]})
-    again = cls.from_dict(step.to_dict())
-    assert again.to_dict() == step.to_dict()
-    assert (again.turns, again.civs, again.agents, again.seed, again.size, again.ai_opponents, again.landform,
-            again.ocean, again.timeout_seconds, again.fail_task_on_error) == (
-        10, {"opus": "Rome"}, None, 1, "Small", 0, None, 70, 120, True)
-
-
-async def test_a_match_seats_humans_after_the_agents_and_logs_each_play_link(local_stores, caplog):
-    env = FakeGame()
-    step = OpenCiv3MatchTaskStep(id="match", version=None, env_id="openciv3", turns=100, civs={"opus": "Greece"},
-                                 humans={"you": "Rome", "friend": None}, human_turn_seconds=600)
-    caplog.set_level(logging.INFO, logger="agentenv_openciv3.steps")
-    async with deployed(env) as record:
-        context = await step.execute(run_context(record, "opus", "sol"))
-
-    assert env.games == [{"seed": 1, "size": "Small", "difficulty": "Regent", "barbarians": "Roaming",
-                          "turn_limit": 100, "civ": "Greece", "opponents": 3, "seats": ["Egypt", "Rome", "Babylon"],
-                          "labels": {"Greece": "opus", "Egypt": "sol", "Rome": "you", "Babylon": "friend"},
-                          "humans": ["Rome", "Babylon"], "human_turn_seconds": 600}]
-    base = record.environment_url
-    match = context.metadata["openciv3_match"]
-    assert match["seats"] == [{"agent": "opus", "civ": "Greece"}, {"agent": "sol", "civ": "Egypt"},
-                              {"agent": "you", "civ": "Rome", "human": True},
-                              {"agent": "friend", "civ": "Babylon", "human": True}]
-    assert match["play"] == {"you": {"civ": "Rome", "url": f"{base}/play#token={'rome':x<32}"},
-                             "friend": {"civ": "Babylon", "url": f"{base}/play#token={'babylon':x<32}"}}
-    plays = [r for r in caplog.records if r.getMessage().startswith("PLAY ")]
-    assert [(r.levelno, r.getMessage()) for r in plays] == [
-        (logging.WARNING, f"PLAY Rome (you): {base}/play#token={'rome':x<32}"),
-        (logging.WARNING, f"PLAY Babylon (friend): {base}/play#token={'babylon':x<32}")]
-
-
-async def test_a_match_may_seat_only_humans_and_names_them_from_a_list(local_stores):
-    env = FakeGame()
-    step = OpenCiv3MatchTaskStep(id="match", version=None, env_id="openciv3", turns=100, humans=["you"],
-                                 ai_opponents=3)
-    async with deployed(env) as record:
-        context = await step.execute(run_context(record))
-    assert [(g["civ"], g["opponents"], g["seats"], g["labels"], g["humans"], g["human_turn_seconds"])
-            for g in env.games] == [("Rome", 3, [], {"Rome": "you"}, ["Rome"], 900)]
-    assert context.metadata["openciv3_match"]["play"]["you"]["civ"] == "Rome"
-
-
-async def test_a_human_is_not_an_agent(local_stores):
-    env = FakeGame()
-    async with deployed(env) as record:
-        with pytest.raises(RuntimeError, match=r"\['opus'\] are named as both agents and humans"):
-            await OpenCiv3MatchTaskStep(id="match", version=None, env_id="openciv3", turns=10,
-                                        humans={"opus": "Rome"}, civs={"opus": "Greece"}).execute(
-                run_context(record, "opus"))
-        with pytest.raises(RuntimeError, match=r"\['Rome'\] are each named for more than one seat"):
-            await OpenCiv3MatchTaskStep(id="match", version=None, env_id="openciv3", turns=10,
-                                        humans={"you": "Rome"}, civs={"opus": "Rome"}).execute(
-                run_context(record, "opus"))
-        # A deployed agent that a human shares a name with is not seated as an agent.
-        await OpenCiv3MatchTaskStep(id="match", version=None, env_id="openciv3", turns=10, humans=["opus"]).execute(
-            run_context(record, "opus"))
-    assert [(g["civ"], g["labels"], g["humans"]) for g in env.games] == [("Rome", {"Rome": "opus"}, ["Rome"])]
-
-
-async def test_a_match_with_humans_fails_on_an_env_that_returns_no_play_links(local_stores):
-    step = OpenCiv3MatchTaskStep(id="match", version=None, env_id="openciv3", turns=10, humans={"you": "Rome"})
-    async with deployed(FakeOldGame()) as record:
-        with pytest.raises(RuntimeError, match=r"returned no play link for \['Rome'\]"):
-            await step.execute(run_context(record))
-
-
-async def test_a_match_paced_for_a_broadcast_asks_the_env_for_min_turn_seconds(local_stores):
-    env = FakeGame()
-    async with deployed(env) as record:
-        for pace in (15, 0):
-            await OpenCiv3MatchTaskStep(id="match", version=None, env_id="openciv3", turns=10,
-                                        min_turn_seconds=pace).execute(run_context(record, "opus", "sol"))
-    assert [g.get("min_turn_seconds") for g in env.games] == [15, None]
-
-
-def test_a_paced_match_round_trips(local_stores):
-    cls = get_task_step_registry()["openciv3_match"]
-    step = cls.from_dict({"id": "match", "type": "openciv3_match", "env_id": "openciv3", "turns": 10,
-                          "min_turn_seconds": 20})
-    again = cls.from_dict(step.to_dict())
-    assert again.to_dict() == step.to_dict() and again.min_turn_seconds == 20
-    assert cls.from_dict({"id": "m", "type": "openciv3_match", "env_id": "e", "turns": 1}).min_turn_seconds == 0
-
-
-async def test_a_match_names_its_broadcast_for_the_env(local_stores, tmp_path):
-    env = FakeGame()
-    show = {"title": "Showmatch", "casters": {"model": "openai/gpt-5.6-luna", "analyst": {"name": "Iris"}}}
-    png = b"\x89PNG\r\n\x1a\n" + b"\0" * 16
-    (tmp_path / "modal.png").write_bytes(png)
-    ad = {**show, "banners": [{"text": "Powered by {modal} Modal", "logos": {"modal": str(tmp_path / "modal.png")}}]}
-    async with deployed(env) as record:
-        for value in (show, None, ad):
-            step = OpenCiv3MatchTaskStep(id="match", version=None, env_id="openciv3", turns=10, broadcast=value)
-            await step.execute(run_context(record, "opus", "sol"))
-    # the env gets each banner logo inlined, the step keeps the task's source
-    uri = f"data:image/png;base64,{base64.b64encode(png).decode()}"
-    inlined = {**ad, "banners": [{**ad["banners"][0], "logos": {"modal": uri}}]}
-    assert [g.get("broadcast") for g in env.games] == [show, None, inlined]
-    assert step.broadcast == ad
-
-
-def test_a_broadcast_match_round_trips_and_a_bad_broadcast_fails_when_the_task_loads(local_stores):
-    cls = get_task_step_registry()["openciv3_match"]
-    data = {"id": "match", "type": "openciv3_match", "env_id": "openciv3", "turns": 10,
-            "broadcast": {"title": "Showmatch", "casters": True}}
-    again = cls.from_dict(cls.from_dict(data).to_dict())
-    assert again.to_dict() == cls.from_dict(data).to_dict() and again.broadcast == data["broadcast"]
-    assert cls.from_dict({"id": "m", "type": "openciv3_match", "env_id": "e", "turns": 1}).broadcast is None
-    with pytest.raises(ValueError, match="broadcast casters must be true, false or an object"):
-        cls.from_dict({**data, "broadcast": {"casters": "loud"}})
-
-
-def test_a_match_with_humans_round_trips(local_stores):
-    cls = get_task_step_registry()["openciv3_match"]
-    for humans in ({"you": "Rome"}, ["you", "friend"]):
-        step = cls.from_dict({"id": "match", "type": "openciv3_match", "env_id": "openciv3", "turns": 10,
-                              "humans": humans, "human_turn_seconds": 0})
-        again = cls.from_dict(step.to_dict())
-        assert again.to_dict() == step.to_dict()
-        assert (again.humans, again.human_turn_seconds) == (humans, 0)
-    assert cls.from_dict({"id": "m", "type": "openciv3_match", "env_id": "e", "turns": 1}).human_turn_seconds == 900
-
-
-def game(turn: int, game_over: bool = False, **more) -> dict:
-    return {"turn": turn, "turn_limit": 3, "game_over": game_over, "defeated": False, "victory": None,
-            "engine_failed": False, **more}
-
-
-async def test_await_game_polls_until_the_game_is_over_through_failures(local_stores, caplog):
-    env = FakeSummary(game(1), RuntimeError("busy"), RuntimeError("busy"), game(1), game(2), game(3, True))
-    step = OpenCiv3AwaitGameTaskStep(id="await", version=None, env_id="openciv3", poll_seconds=0.01)
-    caplog.set_level(logging.INFO, logger="agentenv_openciv3.steps")
-    async with deployed(env) as record:
-        context = await step.execute(run_context(record))
-    assert env.calls == 6
-    assert context.metadata["openciv3_game"] == {"turn": 3, "turn_limit": 3, "victory": None, "engine_failed": False}
-    messages = [m for m in caplog.messages if m.startswith("openciv3_await_game")]
-    assert [m for m in messages if "turn " in m and "over" not in m] == [
-        "openciv3_await_game: turn 1 of 3", "openciv3_await_game: turn 2 of 3", "openciv3_await_game: turn 3 of 3"]
-    assert sum("retrying" in m for m in messages) == 1
-
-
-@pytest.mark.parametrize("summary", [
-    game(2, victory={"kind": "conquest", "civ": "Rome", "label": "you", "turn": 2}),
-    game(2, engine_failed=True),
-    game(2, defeated=True),
-    game(2, seats=[{"civ": "Rome", "defeated": True}, {"civ": "Greece", "defeated": True}]),
-])
-async def test_await_game_ends_on_a_victory_a_failed_engine_or_every_seat_defeated(local_stores, summary):
-    env = FakeSummary(summary)
-    step = OpenCiv3AwaitGameTaskStep(id="await", version=None, env_id="openciv3", poll_seconds=0.01)
-    async with deployed(env) as record:
-        await step.execute(run_context(record))
-    assert env.calls == 1
-
-
-async def test_await_game_times_out_and_keeps_waiting_while_one_seat_is_left(local_stores):
-    env = FakeSummary(game(2, seats=[{"civ": "Rome", "defeated": True}, {"civ": "Greece", "defeated": False}]))
-    step = OpenCiv3AwaitGameTaskStep(id="await", version=None, env_id="openciv3", timeout_seconds=0.2,
-                                     poll_seconds=0.05)
-    async with deployed(env) as record:
-        with pytest.raises(TimeoutError, match=r"not over after 0.2s \(turn 2\)"):
-            await step.execute(run_context(record))
-    assert env.calls >= 2
-
-
-async def test_await_game_times_out_on_an_env_that_never_answers(local_stores):
-    step = OpenCiv3AwaitGameTaskStep(id="await", version=None, env_id="openciv3", timeout_seconds=0.2,
-                                     poll_seconds=0.05)
-    async with deployed(FakeSummary(RuntimeError("down"))) as record:
-        with pytest.raises(TimeoutError, match=r"\(turn None\)"):
-            await step.execute(run_context(record))
-
-
-def test_await_game_is_registered_under_its_type_and_round_trips(local_stores):
-    cls = get_task_step_registry()["openciv3_await_game"]
-    assert cls is OpenCiv3AwaitGameTaskStep
-    step = cls.from_dict({"id": "await", "type": "openciv3_await_game", "env_id": "openciv3", "poll_seconds": 5,
-                          "fail_task_on_error": False, "depends_on": ["match"]})
-    again = cls.from_dict(step.to_dict())
-    assert again.to_dict() == step.to_dict()
-    assert (again.env_id, again.timeout_seconds, again.poll_seconds, again.fail_task_on_error) == (
-        "openciv3", 36000, 5, False)
-
-
-@pytest.mark.parametrize("task", ["smoke", "play", "full-game", "three-agents", "three-agents-quick", "frontier",
-                                  "frontier-quick", "showmatch", "showmatch-quick", "livestream", "sol-vs-opus",
-                                  "five-way-war", "human-vs-ai",
-                                  "human-vs-agents"])
-def test_every_bundle_task_records_after_the_game_alongside_grading(local_stores, task):
-    steps = json.loads(files("agentenv_openciv3.bundles").joinpath(f"openciv3/tasks/{task}.json").read_text())
-    by_type = {s["type"]: s for s in steps}
-    record = get_task_step_registry()["save_env_recording"].from_dict(by_type["save_env_recording"])
-    assert record.fail_task_on_error is False
-    assert by_type["save_env_recording"]["depends_on"] == by_type["env_outcome_verifier"]["depends_on"]
-    players = [s["id"] for s in steps if s["type"] in ("openciv3_await_game", "prompt_agent")]
-    last = players if "match" in {s["id"] for s in steps} else [steps[-3]["id"]]
-    assert by_type["save_env_recording"]["depends_on"] == last
-
-
-def test_three_agents_each_play_their_seat_for_the_whole_game(local_stores):
-    steps = json.loads(files("agentenv_openciv3.bundles").joinpath("openciv3/tasks/three-agents.json").read_text())
+def task(name: str) -> list[dict]:
+    steps = json.loads(files("agentenv_openciv3.bundles").joinpath(f"openciv3/tasks/{name}.json").read_text())
     registry = get_task_step_registry()
     for s in steps:
         assert registry[s["type"]].from_dict(s).to_dict()["id"] == s["id"]
+    return steps
+
+
+def lobby(steps: list[dict]) -> tuple[dict, dict[str, dict]]:
+    """A task's game settings and its player slots, by player_id."""
+    settings = next(s for s in steps if s["type"] == "open_lobby")["game_settings"]
+    return settings, {s["player_id"]: s for s in steps if s["type"] == "add_player_slot"}
+
+
+@pytest.mark.parametrize("name", DEFAULT_GAMES)
+def test_a_default_game_task_records_after_the_game_alongside_grading(local_stores, name):
+    steps = task(name)
+    by_type = {s["type"]: s for s in steps}
+    assert get_task_step_registry()["save_env_recording"].from_dict(by_type["save_env_recording"]).fail_task_on_error \
+        is False
+    assert by_type["save_env_recording"]["depends_on"] == by_type["env_outcome_verifier"]["depends_on"] == [
+        steps[-3]["id"]]
+
+
+@pytest.mark.parametrize("name", LOBBY_GAMES)
+def test_a_lobby_task_seats_each_player_plays_it_out_grades_it_and_keeps_its_files(local_stores, name):
+    steps = task(name)
     by_id = {s["id"]: s for s in steps}
-    agents = [s for s in steps if s["type"] == "deploy_agent"]
-    assert [(s["agent_name"], s["depends_on"], "env_vars" in s) for s in agents] == [
-        (n, ["deploy"], False) for n in ["opus", "sonnet", "haiku"]]
-    match = registry["openciv3_match"].from_dict(by_id["match"])
-    assert (match.turns, match.agents) == (300, None)
-    assert match.civs == {"opus": "Rome", "sonnet": "Greece", "haiku": "Egypt"}
-    assert by_id["match"]["depends_on"] == [s["id"] for s in agents]
+    _, slots = lobby(steps)
+    agents = {s["agent_name"]: s for s in steps if s["type"] == "deploy_agent"}
+    assert all(a["env_ids"] == [] for a in agents.values())   # each plays at its player slot's address
+    for name_, a in agents.items():
+        slot = slots[name_]
+        assert (slot["player_kind"], slot["player_name"], slot["depends_on"]) == ("agent", name_, ["lobby", a["id"]])
+    assert by_id["lobby"]["depends_on"] == ["deploy"] and by_id["match"]["type"] == "close_lobby"
+    assert by_id["match"]["depends_on"] == [s["id"] for s in steps if s["type"] == "add_player_slot"]
     players = [s for s in steps if s["type"] == "prompt_agent"]
-    assert [(s["id"], s["agent_name"], s["depends_on"]) for s in players] == [
-        (n, n, ["match"]) for n in ["opus", "sonnet", "haiku"]]
+    assert {s["agent_name"] for s in players} == set(agents) and all(s["depends_on"] == ["match"] for s in players)
+    waits = [s["id"] for s in steps if s["type"] == "await_match"]
+    assert by_id["finish"]["type"] == "finish_match"
+    assert sorted(by_id["finish"]["depends_on"]) == sorted([*waits, *(s["id"] for s in players)])
+    assert (by_id["files"]["type"], by_id["files"]["depends_on"], by_id["files"].get("fail_task_on_error")) == (
+        "save_match_files", ["finish"], None)
+    assert by_id["grade"]["depends_on"] == ["finish"]
+    if by_id["grade"]["type"] == "grade_match":
+        assert by_id["grade"]["max_missed"] == 0.1    # a player whose turns the env ended past a tenth scores 0
+
+
+def test_three_agents_each_play_their_civilization_for_the_whole_game(local_stores):
+    steps = task("three-agents")
+    settings, slots = lobby(steps)
+    assert settings == {"turn_limit": 300}
+    assert {p: s["game_settings"]["civ"] for p, s in slots.items()} == {"opus": "Rome", "sonnet": "Greece",
+                                                                      "haiku": "Egypt"}
+    players = [s for s in steps if s["type"] == "prompt_agent"]
     assert all(s["agent_name"] in s["model"] and s["prompt"] == players[0]["prompt"] for s in players)
     assert "GAME OVER" in players[0]["prompt"]
-    assert (by_id["grade"]["file_artifact_id"], by_id["grade"]["verifier_id"]) == ("victor-verifier", "victor")
+    assert "player_ids" not in next(s for s in steps if s["id"] == "grade")   # every agent
 
 
 def test_frontier_seats_nine_models_on_a_standard_map(local_stores):
-    steps = json.loads(files("agentenv_openciv3.bundles").joinpath("openciv3/tasks/frontier.json").read_text())
-    registry = get_task_step_registry()
-    for s in steps:
-        assert registry[s["type"]].from_dict(s).to_dict()["id"] == s["id"]
-    match = next(s for s in steps if s["type"] == "openciv3_match")
+    steps = task("frontier")
+    settings, slots = lobby(steps)
     players = [s for s in steps if s["type"] == "prompt_agent"]
     agents = [s for s in steps if s["type"] == "deploy_agent"]
-    assert (match["turns"], match["size"], len(players)) == (200, "Standard", 9)
-    assert set(match["civs"]) == {s["agent_name"] for s in players} == {s["agent_name"] for s in agents}
-    assert len(set(match["civs"].values())) == 9 and len({s["model"] for s in players}) == 9
+    assert (settings["turn_limit"], settings["size"], len(players)) == (200, "Standard", 9)
+    assert set(slots) == {s["agent_name"] for s in players} == {s["agent_name"] for s in agents}
+    assert len({s["game_settings"]["civ"] for s in slots.values()}) == 9 and len({s["model"] for s in players}) == 9
     assert all(s["env_vars"] == {"OPENCIV3_SESSION_TURNS": "40"} for s in agents)
     harness = {s["agent_name"]: s["a2a_agent_id"] for s in agents}
     assert {s["agent_name"]: harness[s["agent_name"]] for s in players if s["model"].startswith("openai/")} == {
         "sol": "openciv3-codex", "luna": "openciv3-codex", "terra": "openciv3-codex"}
     assert harness["gemini"] == "openciv3-gemini" and {harness[n] for n in ("opus", "grok", "kimi")} == {
         "openciv3-claude"}
-    assert all(s["prompt"] == players[0]["prompt"] and s["depends_on"] == ["match"] for s in players)
+    assert all(s["prompt"] == players[0]["prompt"] for s in players)
 
 
-@pytest.mark.parametrize(("task", "turns", "size", "pace", "sessions"), [
+@pytest.mark.parametrize(("name", "turns", "size", "pace", "sessions"), [
     ("showmatch", 50, "Tiny", 15, None), ("livestream", 140, "Small", 45, {"OPENCIV3_SESSION_TURNS": "40"})])
-def test_the_broadcast_tasks_seat_three_labs_paced_and_cast_for_a_stream(local_stores, task, turns, size, pace,
+def test_the_broadcast_tasks_seat_three_labs_paced_and_cast_for_a_stream(local_stores, name, turns, size, pace,
                                                                          sessions):
-    steps = json.loads(files("agentenv_openciv3.bundles").joinpath(f"openciv3/tasks/{task}.json").read_text())
-    registry = get_task_step_registry()
-    for s in steps:
-        assert registry[s["type"]].from_dict(s).to_dict()["id"] == s["id"]
-    match = registry["openciv3_match"].from_dict(next(s for s in steps if s["type"] == "openciv3_match"))
-    assert (match.turns, match.size, match.min_turn_seconds) == (turns, size, pace)
-    assert match.civs == {"opus": "Rome", "sol": "America", "kimi": "China"}
-    assert broadcast.settings(match.broadcast)["casters"] == {
+    steps = task(name)
+    settings, slots = lobby(steps)
+    assert (settings["turn_limit"], settings["size"], settings["min_turn_seconds"]) == (turns, size, pace)
+    assert {p: s["game_settings"]["civ"] for p, s in slots.items()} == {"opus": "Rome", "sol": "America",
+                                                                      "kimi": "China"}
+    assert broadcast.settings(settings["broadcast"])["casters"] == {
         "model": "anthropic/claude-sonnet-5-5", "tts_model": "openai/gpt-4o-mini-tts",
         "play_by_play": {"name": "Max", "voice": "ash"}, "analyst": {"name": "Ada", "voice": "sage"}}
-    assert match.broadcast["title"].endswith("Opus 5.5 vs GPT-6 Sol vs Kimi K3")
+    assert settings["broadcast"]["title"].endswith("Opus 5.5 vs GPT-6 Sol vs Kimi K3")
     agents = {s["agent_name"]: s for s in steps if s["type"] == "deploy_agent"}
     assert {n: a["a2a_agent_id"] for n, a in agents.items()} == {
         "opus": "openciv3-claude", "sol": "openciv3-codex", "kimi": "openciv3-claude"}
@@ -482,19 +231,18 @@ def test_the_broadcast_tasks_seat_three_labs_paced_and_cast_for_a_stream(local_s
     players = [s for s in steps if s["type"] == "prompt_agent"]
     assert {s["agent_name"]: s["model"] for s in players} == {
         "opus": "anthropic/claude-opus-5-5", "sol": "openai/gpt-6-sol", "kimi": "bedrock/global.moonshotai.kimi-k3"}
-    assert all(s["prompt"] == players[0]["prompt"] and s["depends_on"] == ["match"] for s in players)
+    assert all(s["prompt"] == players[0]["prompt"] for s in players)
     assert all(w in players[0]["prompt"] for w in ("broadcast live", "message tool", "end_turn a note", "GAME OVER"))
 
 
 def test_sol_vs_opus_is_won_by_conquest_among_ai_civilizations(local_stores):
-    steps = json.loads(files("agentenv_openciv3.bundles").joinpath("openciv3/tasks/sol-vs-opus.json").read_text())
-    registry = get_task_step_registry()
-    for s in steps:
-        assert registry[s["type"]].from_dict(s).to_dict()["id"] == s["id"]
-    match = registry["openciv3_match"].from_dict(next(s for s in steps if s["type"] == "openciv3_match"))
-    assert (match.turns, match.size, match.ai_opponents, match.min_turn_seconds) == (750, "Tiny", 3, 30)
-    assert match.civs == {"opus": "Rome", "sol": "America"}
-    assert broadcast.settings(match.broadcast)["title"] == (
+    steps = task("sol-vs-opus")
+    settings, slots = lobby(steps)
+    assert (settings["turn_limit"], settings["size"], settings["min_turn_seconds"]) == (750, "Tiny", 30)
+    assert {p: (s["player_kind"], s.get("game_settings", {}).get("civ")) for p, s in slots.items()} == {
+        "opus": ("agent", "Rome"), "sol": ("agent", "America"), "ai1": ("ai", None), "ai2": ("ai", None),
+        "ai3": ("ai", None)}
+    assert broadcast.settings(settings["broadcast"])["title"] == (
         "GPT-6 Sol Battles Opus 5.5 in Civilization 3: which model is the best?")
     players = [s for s in steps if s["type"] == "prompt_agent"]
     assert {s["agent_name"]: s["model"] for s in players} == {
@@ -505,15 +253,13 @@ def test_sol_vs_opus_is_won_by_conquest_among_ai_civilizations(local_stores):
 
 
 def test_five_way_war_seats_five_models_and_no_ai_until_one_conquers_the_rest(local_stores):
-    steps = json.loads(files("agentenv_openciv3.bundles").joinpath("openciv3/tasks/five-way-war.json").read_text())
-    registry = get_task_step_registry()
-    for s in steps:
-        assert registry[s["type"]].from_dict(s).to_dict()["id"] == s["id"]
-    match = registry["openciv3_match"].from_dict(next(s for s in steps if s["type"] == "openciv3_match"))
-    settings = (match.turns, match.size, match.ai_opponents, match.barbarians, match.min_turn_seconds)
-    assert settings == (750, "Tiny", 0, "Restless", 55)
-    assert match.civs == {"astra": "America", "sol": "England", "terra": "Persia", "opus": "Rome", "sonnet": "Greece"}
-    shown = broadcast.settings(match.broadcast)
+    steps = task("five-way-war")
+    settings, slots = lobby(steps)
+    assert settings == {"turn_limit": 750, "size": "Tiny", "barbarians": "Restless", "min_turn_seconds": 55,
+                        "broadcast": settings["broadcast"]}
+    assert {p: s["game_settings"]["civ"] for p, s in slots.items()} == {
+        "astra": "America", "sol": "England", "terra": "Persia", "opus": "Rome", "sonnet": "Greece"}
+    shown = broadcast.settings(settings["broadcast"])
     assert shown["title"].startswith("Five AI models at war in Civilization 3")
     assert [(b["text"], b["theme"], sorted(b["logos"])) for b in shown["banners"]] == [
         ("Powered by {modal} Modal Sandboxes with {agentenv} AgentEnv Framework", "light", ["agentenv", "modal"])]
@@ -537,39 +283,33 @@ def test_five_way_war_seats_five_models_and_no_ai_until_one_conquers_the_rest(lo
 
 @pytest.mark.parametrize("full_name", ["three-agents", "frontier", "showmatch"])
 def test_a_quick_task_is_the_same_match_in_ten_turns(local_stores, full_name):
-    tasks = files("agentenv_openciv3.bundles").joinpath("openciv3/tasks")
-    full = json.loads(tasks.joinpath(f"{full_name}.json").read_text())
-    quick = json.loads(tasks.joinpath(f"{full_name}-quick.json").read_text())
-    registry = get_task_step_registry()
-    for s in quick:
-        assert registry[s["type"]].from_dict(s).to_dict()["id"] == s["id"]
-    limits = ["turns", "ttl_seconds", "timeout_seconds"]
+    full, quick = task(full_name), task(f"{full_name}-quick")
+    limits = ["ttl_seconds", "timeout_seconds"]
     for q, f in zip(quick, full, strict=True):
+        if q["type"] == "open_lobby":
+            assert q["game_settings"] == {**f["game_settings"], "turn_limit": 10}
+            assert f["game_settings"]["turn_limit"] > 10
+            continue
         assert q == {**f, **{k: q[k] for k in limits if k in f}}
         assert all(q[k] < f[k] for k in limits if k in f)
-    assert next(s for s in quick if s["type"] == "openciv3_match")["turns"] == 10
 
 
-@pytest.mark.parametrize("task", ["human-vs-ai", "human-vs-agents"])
-def test_a_human_task_seats_you_and_waits_for_the_game(local_stores, task):
-    steps = json.loads(files("agentenv_openciv3.bundles").joinpath(f"openciv3/tasks/{task}.json").read_text())
-    registry = get_task_step_registry()
-    for s in steps:
-        assert registry[s["type"]].from_dict(s).to_dict()["id"] == s["id"]
+@pytest.mark.parametrize("name", ["human-vs-ai", "human-vs-agents"])
+def test_a_human_task_seats_you_and_waits_for_the_game(local_stores, name):
+    steps = task(name)
     by_id = {s["id"]: s for s in steps}
-    match = registry["openciv3_match"].from_dict(by_id["match"])
-    assert (match.humans, match.turns, match.size) == ({"you": "Rome"}, 100, "Small")
-    wait = registry["openciv3_await_game"].from_dict(by_id["await"])
+    settings, slots = lobby(steps)
+    assert (settings["turn_limit"], settings["size"]) == (100, "Small")
+    assert (slots["you"]["player_kind"], slots["you"]["game_settings"]) == ("human", {"civ": "Rome"})
+    wait = get_task_step_registry()["await_match"].from_dict(by_id["await"])
     assert (wait.depends_on[0].task_step_id, wait.fail_task_on_error) == ("match", False)
     agents = [s for s in steps if s["type"] == "deploy_agent"]
-    players = [s for s in steps if s["type"] == "prompt_agent"]
-    assert {s["agent_name"] for s in agents} == {s["agent_name"] for s in players} == set(match.civs or {})
-    assert "you" not in (match.civs or {}) and all(s["depends_on"] == ["match"] for s in players)
-    if task == "human-vs-ai":
-        assert (match.ai_opponents, agents) == (3, [])
+    if name == "human-vs-ai":
+        assert agents == [] and [p for p, s in slots.items() if s["player_kind"] == "ai"] == ["ai1", "ai2", "ai3"]
         assert by_id["grade"]["file_artifact_id"] == "full-game-verifier"
     else:
         assert {s["agent_name"]: s["a2a_agent_id"] for s in agents} == {"opus": "openciv3-claude",
                                                                        "sol": "openciv3-codex"}
-        assert by_id["grade"]["file_artifact_id"] == "victor-verifier"
-        assert all("GAME OVER" in s["prompt"] for s in players)
+        assert "player_ids" not in by_id["grade"]    # every agent, a tenth of its turns missed at most
+        assert (by_id["grade-you"]["player_ids"], by_id["grade-you"].get("max_missed")) == (["you"], None)
+        assert all("GAME OVER" in s["prompt"] for s in steps if s["type"] == "prompt_agent")

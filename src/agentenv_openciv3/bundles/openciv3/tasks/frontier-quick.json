@@ -10,9 +10,7 @@
     "type": "deploy_agent",
     "agent_name": "opus",
     "a2a_agent_id": "openciv3-claude",
-    "env_ids": [
-      "openciv3"
-    ],
+    "env_ids": [],
     "env_vars": {
       "OPENCIV3_SESSION_TURNS": "40"
     },
@@ -26,9 +24,7 @@
     "type": "deploy_agent",
     "agent_name": "sonnet",
     "a2a_agent_id": "openciv3-claude",
-    "env_ids": [
-      "openciv3"
-    ],
+    "env_ids": [],
     "env_vars": {
       "OPENCIV3_SESSION_TURNS": "40"
     },
@@ -42,9 +38,7 @@
     "type": "deploy_agent",
     "agent_name": "haiku",
     "a2a_agent_id": "openciv3-claude",
-    "env_ids": [
-      "openciv3"
-    ],
+    "env_ids": [],
     "env_vars": {
       "OPENCIV3_SESSION_TURNS": "40"
     },
@@ -58,9 +52,7 @@
     "type": "deploy_agent",
     "agent_name": "sol",
     "a2a_agent_id": "openciv3-codex",
-    "env_ids": [
-      "openciv3"
-    ],
+    "env_ids": [],
     "env_vars": {
       "OPENCIV3_SESSION_TURNS": "40"
     },
@@ -74,9 +66,7 @@
     "type": "deploy_agent",
     "agent_name": "luna",
     "a2a_agent_id": "openciv3-codex",
-    "env_ids": [
-      "openciv3"
-    ],
+    "env_ids": [],
     "env_vars": {
       "OPENCIV3_SESSION_TURNS": "40"
     },
@@ -90,9 +80,7 @@
     "type": "deploy_agent",
     "agent_name": "terra",
     "a2a_agent_id": "openciv3-codex",
-    "env_ids": [
-      "openciv3"
-    ],
+    "env_ids": [],
     "env_vars": {
       "OPENCIV3_SESSION_TURNS": "40"
     },
@@ -106,9 +94,7 @@
     "type": "deploy_agent",
     "agent_name": "gemini",
     "a2a_agent_id": "openciv3-gemini",
-    "env_ids": [
-      "openciv3"
-    ],
+    "env_ids": [],
     "env_vars": {
       "OPENCIV3_SESSION_TURNS": "40"
     },
@@ -122,9 +108,7 @@
     "type": "deploy_agent",
     "agent_name": "grok",
     "a2a_agent_id": "openciv3-claude",
-    "env_ids": [
-      "openciv3"
-    ],
+    "env_ids": [],
     "env_vars": {
       "OPENCIV3_SESSION_TURNS": "40"
     },
@@ -138,9 +122,7 @@
     "type": "deploy_agent",
     "agent_name": "kimi",
     "a2a_agent_id": "openciv3-claude",
-    "env_ids": [
-      "openciv3"
-    ],
+    "env_ids": [],
     "env_vars": {
       "OPENCIV3_SESSION_TURNS": "40"
     },
@@ -150,32 +132,166 @@
     ]
   },
   {
-    "id": "match",
-    "type": "openciv3_match",
+    "id": "lobby",
+    "type": "open_lobby",
     "env_id": "openciv3",
-    "turns": 10,
-    "size": "Standard",
-    "civs": {
-      "opus": "Rome",
-      "sonnet": "Greece",
-      "haiku": "Egypt",
-      "sol": "America",
-      "luna": "Babylon",
-      "terra": "Persia",
-      "gemini": "England",
-      "grok": "Carthage",
-      "kimi": "China"
+    "game_settings": {
+      "turn_limit": 10,
+      "size": "Standard"
     },
     "depends_on": [
-      "agent-opus",
-      "agent-sonnet",
-      "agent-haiku",
-      "agent-sol",
-      "agent-luna",
-      "agent-terra",
-      "agent-gemini",
-      "agent-grok",
+      "deploy"
+    ]
+  },
+  {
+    "id": "slot-opus",
+    "type": "add_player_slot",
+    "env_id": "openciv3",
+    "player_id": "opus",
+    "player_kind": "agent",
+    "player_name": "opus",
+    "game_settings": {
+      "civ": "Rome"
+    },
+    "depends_on": [
+      "lobby",
+      "agent-opus"
+    ]
+  },
+  {
+    "id": "slot-sonnet",
+    "type": "add_player_slot",
+    "env_id": "openciv3",
+    "player_id": "sonnet",
+    "player_kind": "agent",
+    "player_name": "sonnet",
+    "game_settings": {
+      "civ": "Greece"
+    },
+    "depends_on": [
+      "lobby",
+      "agent-sonnet"
+    ]
+  },
+  {
+    "id": "slot-haiku",
+    "type": "add_player_slot",
+    "env_id": "openciv3",
+    "player_id": "haiku",
+    "player_kind": "agent",
+    "player_name": "haiku",
+    "game_settings": {
+      "civ": "Egypt"
+    },
+    "depends_on": [
+      "lobby",
+      "agent-haiku"
+    ]
+  },
+  {
+    "id": "slot-sol",
+    "type": "add_player_slot",
+    "env_id": "openciv3",
+    "player_id": "sol",
+    "player_kind": "agent",
+    "player_name": "sol",
+    "game_settings": {
+      "civ": "America"
+    },
+    "depends_on": [
+      "lobby",
+      "agent-sol"
+    ]
+  },
+  {
+    "id": "slot-luna",
+    "type": "add_player_slot",
+    "env_id": "openciv3",
+    "player_id": "luna",
+    "player_kind": "agent",
+    "player_name": "luna",
+    "game_settings": {
+      "civ": "Babylon"
+    },
+    "depends_on": [
+      "lobby",
+      "agent-luna"
+    ]
+  },
+  {
+    "id": "slot-terra",
+    "type": "add_player_slot",
+    "env_id": "openciv3",
+    "player_id": "terra",
+    "player_kind": "agent",
+    "player_name": "terra",
+    "game_settings": {
+      "civ": "Persia"
+    },
+    "depends_on": [
+      "lobby",
+      "agent-terra"
+    ]
+  },
+  {
+    "id": "slot-gemini",
+    "type": "add_player_slot",
+    "env_id": "openciv3",
+    "player_id": "gemini",
+    "player_kind": "agent",
+    "player_name": "gemini",
+    "game_settings": {
+      "civ": "England"
+    },
+    "depends_on": [
+      "lobby",
+      "agent-gemini"
+    ]
+  },
+  {
+    "id": "slot-grok",
+    "type": "add_player_slot",
+    "env_id": "openciv3",
+    "player_id": "grok",
+    "player_kind": "agent",
+    "player_name": "grok",
+    "game_settings": {
+      "civ": "Carthage"
+    },
+    "depends_on": [
+      "lobby",
+      "agent-grok"
+    ]
+  },
+  {
+    "id": "slot-kimi",
+    "type": "add_player_slot",
+    "env_id": "openciv3",
+    "player_id": "kimi",
+    "player_kind": "agent",
+    "player_name": "kimi",
+    "game_settings": {
+      "civ": "China"
+    },
+    "depends_on": [
+      "lobby",
       "agent-kimi"
+    ]
+  },
+  {
+    "id": "match",
+    "type": "close_lobby",
+    "env_id": "openciv3",
+    "depends_on": [
+      "slot-opus",
+      "slot-sonnet",
+      "slot-haiku",
+      "slot-sol",
+      "slot-luna",
+      "slot-terra",
+      "slot-gemini",
+      "slot-grok",
+      "slot-kimi"
     ]
   },
   {
@@ -296,12 +412,9 @@
     "prompt": "You lead a civilization in a game of OpenCiv3, an open-source Civilization III remake, against other AI agents. Play to win. The get_turn_brief tool shows your civilization, your rivals, the match's rules and what needs orders; you act only through the openciv3 tools. Nobody will answer questions, so never ask or wait for confirmation. Keep playing until the end_turn tool reports GAME OVER, then reply with your final result."
   },
   {
-    "id": "grade",
-    "type": "env_outcome_verifier",
+    "id": "finish",
+    "type": "finish_match",
     "env_id": "openciv3",
-    "file_artifact_id": "victor-verifier",
-    "verifier_id": "victor",
-    "score_aggregator": "weighted_average",
     "depends_on": [
       "opus",
       "sonnet",
@@ -315,20 +428,21 @@
     ]
   },
   {
-    "id": "recording",
-    "type": "save_env_recording",
+    "id": "grade",
+    "type": "grade_match",
+    "env_id": "openciv3",
+    "max_missed": 0.1,
+    "depends_on": [
+      "finish"
+    ]
+  },
+  {
+    "id": "files",
+    "type": "save_match_files",
     "env_id": "openciv3",
     "timeout_seconds": 1200,
     "depends_on": [
-      "opus",
-      "sonnet",
-      "haiku",
-      "sol",
-      "luna",
-      "terra",
-      "gemini",
-      "grok",
-      "kimi"
+      "finish"
     ]
   }
 ]

@@ -10,6 +10,7 @@ from pathlib import Path
 import anyio
 import httpx
 import pytest
+from agentenv_game import LOBBY
 from agentenv_protocol import DataPart, client
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
@@ -60,7 +61,10 @@ async def test_card(server):
     assert {t["name"] for t in card["capabilities"]["tools"]} == TOOLS
     assert card["capabilities"]["operations"] == ["data/reset", "data/add", "data/get"]
     ext = {e["uri"]: e for e in card["capabilities"]["extensions"]}
-    assert set(ext) == {"urn:openciv3:new-game/v1", "urn:openciv3:autoplay/v1", "urn:openciv3:recording/v1"}
+    assert set(ext) == {"urn:openciv3:new-game/v1", "urn:openciv3:autoplay/v1", "urn:openciv3:recording/v1",
+                        "urn:game:lobby/v1", "urn:game:match/v1", "urn:game:license/v1"}
+    fill = ext[LOBBY]["params"]["methods"]["fill"]["request"]
+    assert "civ" in str(fill) and "turn_limit" in str(ext[LOBBY]["params"]["methods"]["open"]["request"])
     assert ext["urn:openciv3:autoplay/v1"]["params"]["methods"]["autoplay"]["request"]["properties"]["policy"]["enum"] \
         == ["null", "found_capital", "engine_ai", "settler_bot"]
     recording = ext["urn:openciv3:recording/v1"]["params"]["methods"]["recording"]["request"]["properties"]
@@ -128,29 +132,46 @@ async def test_binds_before_the_bridge_starts(env_vars):
         proc.wait(10)
 
 
-async def test_the_seat_header_over_http(env_vars):
+async def lobby_game(base: str, civs: list[str], labels: dict | None = None, ai: int = 0, **settings) -> dict:
+    """A game from the env's lobby over HTTP: each of `civs` an agent's player slot, its player_id the civ's label
+    (else the civ), and `ai` slots of the game's AI. The closed lobby."""
+    card, labels = await client.get_card(base), labels or {}
+    await client.invoke_extension(base, card, LOBBY, {"game_settings": {"seed": 1, "turn_limit": 8, **settings}},
+                                  method="open")
+    for civ in civs:
+        await client.invoke_extension(base, card, LOBBY, {
+            "player_id": labels.get(civ, civ), "player_kind": "agent", "player_name": labels.get(civ),
+            "game_settings": {"civ": civ}}, method="fill")
+    for i in range(ai):
+        await client.invoke_extension(base, card, LOBBY, {"player_id": f"ai{i + 1}", "player_kind": "ai"},
+                                      method="fill")
+    return await client.invoke_extension(base, card, LOBBY, {}, method="close")
+
+
+async def test_each_agent_plays_at_its_player_slots_address_over_http(env_vars):
     proc, base = await serve(env_vars, CIVBRIDGE_CMD=REAL_CMD)
     try:
-        card = await client.get_card(base)
-        game = await client.invoke_extension(base, card, "urn:openciv3:new-game/v1",
-                                             {"seed": 1, "opponents": 2, "seats": ["Greece", "Egypt"]})
-        assert [s["civ"] for s in game["seats"]] == ["Rome", "Greece", "Egypt"]
-        headers = {"X-OpenCiv3-Seat": "Egypt"}
-        async with httpx.AsyncClient(headers=headers) as http, \
-                streamable_http_client(f"{base}/mcp", http_client=http) as (read, write, _), \
-                ClientSession(read, write) as session:
-            await session.initialize()
-            brief = await session.call_tool("get_turn_brief", {})
-            assert not brief.isError and brief.content[0].text.startswith("T0/8 (4000 BC) · Egypt")
+        lobby = await lobby_game(base, ["Rome", "Greece", "Egypt"])
+        assert [s["player_id"] for s in lobby["player_slots"]] == ["Rome", "Greece", "Egypt"]
+        for path, said in (("/players/Egypt/mcp", "T0/8 (4000 BC) · Egypt"),
+                           ("/mcp", "this game's players play at their player slot's address")):
+            async with streamable_http_client(f"{base}{path}") as (read, write, _), \
+                    ClientSession(read, write) as session:
+                await session.initialize()
+                brief = (await session.call_tool("get_turn_brief", {})).content[0].text
+                assert said in brief
+        async with httpx.AsyncClient() as http:
+            card = (await http.get(f"{base}/players/Greece/.well-known/agent-env.json")).json()
+        assert card["additionalInterfaces"] == [{"url": "/mcp", "transport": "mcp"}]
     finally:
         proc.terminate()
         proc.wait(10)
 
 
-async def play(base: str, civ: str, *calls: tuple[str, dict]) -> None:
-    """The agent playing `civ` makes these tool calls."""
-    async with httpx.AsyncClient(headers={"X-OpenCiv3-Seat": civ}, timeout=60) as http, \
-            streamable_http_client(f"{base}/mcp", http_client=http) as (read, write, _), \
+async def play(base: str, player_id: str, *calls: tuple[str, dict]) -> None:
+    """The agent in player slot `player_id` makes these tool calls, at its slot's address."""
+    async with httpx.AsyncClient(timeout=60) as http, \
+            streamable_http_client(f"{base}/players/{player_id}/mcp", http_client=http) as (read, write, _), \
             ClientSession(read, write) as session:
         await session.initialize()
         for name, args in calls:
@@ -170,9 +191,7 @@ async def test_the_live_view_follows_the_game(env_vars):
                 "events": [], "actions": [], "client": False, "recording": True}
             assert (await http.get("/live/frame.png")).status_code == 404
 
-            await client.invoke_extension(base, await client.get_card(base), "urn:openciv3:new-game/v1", {
-                "seed": 1, "opponents": 2, "seats": ["Greece", "Egypt"],
-                "labels": {"Rome": "A", "Greece": "B", "Egypt": "C"}})
+            await lobby_game(base, ["Rome", "Greece", "Egypt"], {"Rome": "A", "Greece": "B", "Egypt": "C"})
             state = (await http.get("/live/state.json")).json()
             assert (state["turn"], state["turn_limit"], state["game_over"], state["victory"]) == (0, 8, False, None)
             assert sorted((p["civ"], p["label"]) for p in state["players"] if p["is_agent"]) == [
@@ -189,7 +208,7 @@ async def test_the_live_view_follows_the_game(env_vars):
                 ("Rome", "A", 0), ("Greece", "B", 1), ("Egypt", "C", 2)]
 
             async with anyio.create_task_group() as tg:
-                tg.start_soon(play, base, "Greece", ("unit_order", {"unit": "u1", "order": "found_city"}), END_TURN)
+                tg.start_soon(play, base, "B", ("unit_order", {"unit": "u1", "order": "found_city"}), END_TURN)
                 with anyio.fail_after(20):
                     while True:
                         now = (await http.get("/live/data.json", params={"since": 0})).json()
@@ -203,8 +222,9 @@ async def test_the_live_view_follows_the_game(env_vars):
                 assert seats["Rome"]["calls"] == {"ok": 0, "failed": 0}
                 assert seats["Greece"]["actions"] == [{"text": "u1 found_city", "ok": True}]
                 assert (await http.get("/live/data.json", params={"since": "x"})).status_code == 400
-                for civ in ("Rome", "Egypt"):
-                    tg.start_soon(play, base, civ, ("unit_order", {"unit": "u1", "order": "found_city"}), END_TURN)
+                for player_id in ("A", "C"):
+                    tg.start_soon(play, base, player_id, ("unit_order", {"unit": "u1", "order": "found_city"}),
+                                  END_TURN)
             after = (await http.get("/live/data.json", params={"since": 0})).json()
             [turn1] = after["turns"]
             assert turn1["turn"] == 1 and after["live"]["turn"] == 1
@@ -223,10 +243,9 @@ async def test_the_live_view_follows_the_game(env_vars):
             latest = await http.get("/live/frame.png")
             assert latest.content == (await http.get("/live/frame.png", params={"turn": 1})).content
 
-            await client.invoke_extension(base, await client.get_card(base), "urn:openciv3:new-game/v1", {
-                "seed": 1, "opponents": 1, "seats": ["Greece"], "labels": {"Rome": "A", "Greece": "B"}})
-            await play(base, "Greece", *(("unit_order", {"unit": u, "order": "disband"}) for u in ("u2", "u1")))
-            await play(base, "Rome", END_TURN)
+            await lobby_game(base, ["Rome", "Greece"], {"Rome": "A", "Greece": "B"})
+            await play(base, "B", *(("unit_order", {"unit": u, "order": "disband"}) for u in ("u2", "u1")))
+            await play(base, "A", END_TURN)
             won = (await http.get("/live/state.json")).json()
             assert won["victory"] == {"kind": "conquest", "civ": "Rome", "label": "A", "turn": 1} and won["game_over"]
             data = (await http.get("/live/data.json")).json()

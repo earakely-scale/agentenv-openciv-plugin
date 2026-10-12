@@ -1,8 +1,12 @@
 """OpenCiv3 as an AgentEnv environment: sixteen MCP tools over one CivBridge game (docs/tools.md).
 
-A game may have several seats, one per agent (new-game `seats`): each MCP request plays the seat its
-X-OpenCiv3-Seat header names, and the turn advances once every seat has ended it. A person may play a seat
-(new-game `humans`) through the play API next to /mcp (docs/play.md)."""
+A game with several players comes from the env's lobby (agentenv-game-env, `urn:game:lobby/v1`): a civilization per
+agent and human player slot, and an AI opponent per AI slot. An agent plays at its slot's address,
+`/players/<player_id>/mcp`, and a person through the play API with their slot's token (docs/play.md); the turn
+advances once every player has ended it. Closing the lobby creates the game and its match (`urn:game:match/v1`): its
+turns, each player's outcome by the game's own victory rules, scores, and moves (turns a player ended itself, and
+those the env ended for it). An env whose lobby was never opened plays its default game: one civilization at the
+env's own /mcp."""
 
 from __future__ import annotations
 
@@ -28,8 +32,30 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal, get_type_hints
 
+from agentenv_game import (
+    AgentEnvGameEnv,
+    Counter,
+    GameError,
+    Lobby,
+    MatchFile,
+    MatchFiles,
+    MatchReport,
+    Moves,
+    PlayerKind,
+    PlayerSlot,
+    PlayerSlotLimits,
+    Score,
+    check_player_slot,
+    create_game,
+    match_files,
+    match_report,
+    play_out,
+    player_slot_card,
+    player_slot_headers,
+    player_slot_limits,
+    spectator_card,
+)
 from agentenv_protocol import (
-    AgentEnvEnvironment,
     DataPart,
     add_data,
     environment_card,
@@ -38,10 +64,10 @@ from agentenv_protocol import (
     reset_data,
     tool,
 )
+from agentenv_protocol.types import MCP_PATH, MCP_TRANSPORT, EnvironmentCard, EnvironmentInterface
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
-from mcp.server.lowlevel.server import request_ctx
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model, field_validator
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 
@@ -57,6 +83,14 @@ SCENARIO_KEYS = ("seed", "civ", "opponents", "size", "difficulty", "barbarians",
 SCENARIO_INTS = {"seed": (0, None), "opponents": (1, 11), "ocean": (0, 100), "turn_limit": (1, 1000),
                  "human_turn_seconds": (0, None), "min_turn_seconds": (0, 600)}
 ENV_ONLY = ("humans", "human_turn_seconds", "min_turn_seconds", "broadcast")   # the env's own keys, not new_game args
+LOBBY_ONLY = ("seats", "labels", "humans", "human_turn_seconds", "min_turn_seconds", "broadcast")
+"""A game's keys that only its lobby sets: who plays it and how a match with people and a broadcast goes."""
+MAX_CIVS = 12
+DEFAULT_CIVS = ["Rome", "Greece", "Egypt", "Babylon", "Germany", "Russia", "China", "America", "Japan", "France",
+                "India", "Persia"]
+"""A player slot's civilization when it names none, the first free one in this order."""
+FILE_KINDS = {"map_video": "mp4", "html_replay": "html", "last_turn": "png", "client_video": "client_mp4"}
+"""A match's files by kind (agentenv-game-env's match files), and the recording format behind each."""
 LOGO_HEADERS = {"Cache-Control": "max-age=3600", "X-Content-Type-Options": "nosniff",
                 "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"}
 ENV_SCENARIO = (("size", "OPENCIV_SIZE", str), ("opponents", "OPENCIV_OPPONENTS", int),
@@ -72,7 +106,6 @@ MESSAGES_PER_TURN = 3
 SITE_LOOKUPS = 2
 AUTOPLAY_CHUNK = 10
 RESTARTS_PER_TURN = 3
-SEAT_HEADER = "x-openciv3-seat"
 SEAT_WAIT_SECONDS = 600
 SEAT_STALL_SECONDS = 300
 HUMAN_TURN_SECONDS = 900
@@ -81,6 +114,47 @@ TOKEN_HEADER = "x-openciv3-token"
 
 UnitId = Annotated[str, Field(description='Unit id, e.g. "u7".')]
 CityId = Annotated[str, Field(description='City id, e.g. "c1".')]
+
+
+class MatchSettings(BaseModel):
+    """A lobby's game_settings: the map, the rules and the turn limit, and how a match with people and a broadcast is
+    paced."""
+
+    model_config = ConfigDict(extra="forbid", use_attribute_docstrings=True)
+    seed: int = Field(1, ge=0)
+    size: str = "Small"
+    """The map's size: Tiny, Small, Standard, Large or Huge."""
+    difficulty: str = "Regent"
+    """The game's AI's level: Chieftain, Warlord, Regent, Monarch, Emperor, Demigod or Deity."""
+    barbarians: str = "Roaming"
+    """None, Sedentary, Roaming, Restless, Raging or Random."""
+    landform: str | None = None
+    """Archipelago, Continents or Pangaea; the engine's default when omitted."""
+    ocean: int | None = Field(None, ge=0, le=100)
+    """The share of the map under water, in percent; the engine's default when omitted."""
+    turn_limit: int = Field(60, ge=1, le=1000)
+    human_turn_seconds: int = Field(HUMAN_TURN_SECONDS, ge=0)
+    """How long a person may make no move while the others wait before the env ends their turn; 0: never."""
+    min_turn_seconds: int = Field(0, ge=0, le=600)
+    """The shortest a turn lasts with several players (0-600), so people can follow a broadcast."""
+    broadcast: dict | None = None
+    """The stream's title, names, voiced casters and sponsor banners (docs/tools.md, Broadcast), which `agent-env
+    openciv3 stream` follows; the env fetches the banners' logos as the lobby closes."""
+
+    @field_validator("broadcast")
+    @classmethod
+    def _broadcast(cls, value: dict | None) -> dict | None:
+        broadcast.settings(value)
+        return value
+
+
+class SlotSettings(BaseModel):
+    """A player slot's game_settings."""
+
+    model_config = ConfigDict(extra="forbid", use_attribute_docstrings=True)
+    civ: str | None = None
+    """The civilization it plays (Rome, Greece, England, ...); the next free one when omitted. The engine picks the
+    game's AI's."""
 
 
 class UnitOrderSpec(BaseModel):
@@ -188,6 +262,7 @@ class Seat:
     label: str | None
     actions: ActionLog
     human: bool = False
+    player_id: str | None = None     # the lobby's player slot that plays it; None in the default game
     token: str | None = None         # a human seat's play token: whoever has it plays the seat (docs/play.md)
     cache: dict | None = None
     last_state: dict | None = None
@@ -201,6 +276,7 @@ class Seat:
     ready: bool = False
     turn_result: asyncio.Future | None = None
     auto_ended_turns: int = 0
+    turns_ended: int = 0             # turns it ended itself (end_turn), against those the env ended for it
     ended_at: float | None = None    # when the seat ended the turn (time.monotonic), while `ready` or `pacing`
     ended_itself: bool = False       # a human seat ended the turn (rather than the env, for it), while `ready`
     pacing: bool = False             # its end_turn waits for the broadcast pace (min_turn_seconds); ended_at is set
@@ -215,18 +291,12 @@ class Seat:
 SEAT: ContextVar[Seat | None] = ContextVar("openciv3_seat", default=None)
 
 
-def requested_seat() -> str | None:
-    """The civ the current MCP request's X-OpenCiv3-Seat header names, if any."""
-    try:
-        request = request_ctx.get().request
-    except LookupError:
-        return None
-    return (getattr(request, "headers", None) or {}).get(SEAT_HEADER)
-
-
 @environment_card(name="openciv3")
-class OpenCiv3Env(AgentEnvEnvironment):
+class OpenCiv3Env(AgentEnvGameEnv):
     """One OpenCiv3 game per env. The bridge starts on first use so the HTTP port binds at once."""
+
+    GameSettings = MatchSettings
+    PlayerSlotSettings = SlotSettings
 
     def __init__(self) -> None:
         self.cmd = shlex.split(os.environ.get("CIVBRIDGE_CMD", "/opt/civbridge/CivBridge"))
@@ -253,6 +323,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
         self.failed: str | None = None
         self.stall_watch: asyncio.Task | None = None
         self.colors: tuple[str | None, dict[int, str], dict[str, int]] = (None, {}, {})  # game, index->hex, civ->index
+        self.ai_civs: dict[str, str] = {}     # each AI player slot's civilization, which the engine picked
 
     # ---- seats ----
 
@@ -278,13 +349,20 @@ class OpenCiv3Env(AgentEnvEnvironment):
         return seat
 
     def _mcp_seat(self) -> Seat:
-        """The seat an MCP request plays: the one its header names (the first with none; a game with one seat ignores
-        the header). Agents can't play a person's seat; with a person in the first seat, agents must name theirs."""
-        name = requested_seat() if self.multi else None
-        seat = self._seat_named(name)
+        """The seat an MCP request plays: its player slot's, at `/players/<player_id>/mcp`, in a game from the lobby;
+        the env's own address plays the default game's one seat. Agents can't play a person's seat."""
+        try:
+            slot = self.player()
+        except GameError as e:
+            raise BridgeError(e.code, e.message) from None
+        if slot is None and any(s.player_id for s in self.seats):
+            raise BridgeError("no_player", "this game's players play at their player slot's address, "
+                                           "/players/<player_id>/mcp; the env's own address plays no one.")
+        seat = self.seats[0] if slot is None else next((s for s in self.seats if s.player_id == slot.player_id), None)
+        if seat is None:
+            raise BridgeError("no_player", f"player slot {slot.player_id!r} plays no civilization in the running game.")
         if seat.human:
-            hint = "" if name or not self.multi else "; name your own seat in the X-OpenCiv3-Seat header"
-            raise BridgeError("human_seat", f"{seat.civ} is played by a person{hint}.")
+            raise BridgeError("human_seat", f"{seat.civ} is played by a person.")
         return seat
 
     def _seat_of_token(self, token: str | None) -> Seat | None:
@@ -322,8 +400,9 @@ class OpenCiv3Env(AgentEnvEnvironment):
         multi = len(seats) > 1
         return [await bridge.call("state", **({"seat": s.civ} if multi else {})) for s in seats]
 
-    async def _new_game(self, scenario: dict | None = None) -> None:
-        """Start a game in a new bridge; the running game is replaced only once the new one has started."""
+    async def _new_game(self, scenario: dict | None = None, slots: dict[str, PlayerSlot] | None = None) -> None:
+        """Start a game in a new bridge; the running game is replaced only once the new one has started. `slots` are
+        the lobby's player slots by the civ each plays; a person's plays with the token its slot was given."""
         scenario = dict(scenario or self.scenario)
         self.games += 1
         game_dir = self.root / f"game-{self.games}"
@@ -334,7 +413,10 @@ class OpenCiv3Env(AgentEnvEnvironment):
             seats = [Seat(s["civ"], s.get("label"), ActionLog(self.action_log), human=s["civ"].lower() in humans)
                      for s in game.get("seats") or [{"civ": game["civ"]}]]
             for seat in seats:
-                seat.token = secrets.token_hex(16) if seat.human else None
+                slot = (slots or {}).get(seat.civ)
+                seat.player_id = slot.player_id if slot else None
+                seat.token = ((slot.headers.get(TOKEN_HEADER) if slot else None) or secrets.token_hex(16)
+                              if seat.human else None)
             states = await self._states(bridge, seats)
         except BaseException:
             await bridge.close()
@@ -1108,6 +1190,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
                 if res.get("blocked"):
                     seat.cache = before
                     raise BridgeError("blocked", render.blocked(res, before))
+                seat.turns_ended += 1
             else:
                 res = None
             if self.multi:
@@ -1208,18 +1291,25 @@ class OpenCiv3Env(AgentEnvEnvironment):
     @reset_data
     async def data_reset(self) -> None:
         async with self.lock:
-            await self._new_game()
+            await self._new_game(self._default_scenario())
 
     @add_data
     async def data_add(self, parts: list) -> None:
         updates = [p.data["scenario"] for p in parts if isinstance(p, DataPart) and "scenario" in p.data]
         if not updates:
             raise ValueError('data/add expects a DataPart {"scenario": {...}}')
+        if lobby_only := sorted({k for u in updates for k in u} & set(LOBBY_ONLY)):
+            raise ValueError(f"{', '.join(lobby_only)}: a game's players, people and broadcast come from its lobby "
+                             "(urn:game:lobby/v1)")
         async with self.lock:
-            scenario = self.scenario
+            scenario = self._default_scenario()
             for update in updates:
                 scenario = merge_scenario(scenario, update)
             await self._new_game(scenario)
+
+    def _default_scenario(self) -> dict:
+        """The running game's scenario as a default game's: without the keys only a lobby sets."""
+        return {k: v for k, v in self.scenario.items() if k not in LOBBY_ONLY}
 
     @get_data
     async def data_get(self) -> list[DataPart]:
@@ -1258,11 +1348,12 @@ class OpenCiv3Env(AgentEnvEnvironment):
         if self.multi or self.seats[0].human:
             players = {p["civ"]: p for p in world.get("players", [])}
             ranks = {p["civ"]: i for i, p in enumerate(standings, 1)}
-            summary["seats"] = [{"civ": seat.civ, "label": seat.label, "human": seat.human,
+            summary["seats"] = [{"civ": seat.civ, "label": seat.label, "player_id": seat.player_id, "human": seat.human,
                                  "defeated": states[seat.civ]["defeated"],
                                  **self._seat_summary(seat, states[seat.civ]), "rank": ranks.get(seat.civ),
                                  "share": (players.get(seat.civ) or {}).get("share"),
-                                 "auto_ended_turns": seat.auto_ended_turns} for seat in self.seats]
+                                 "auto_ended_turns": seat.auto_ended_turns, "turns_ended": seat.turns_ended}
+                                for seat in self.seats]
         return [DataPart(data=summary)]
 
     @staticmethod
@@ -1278,31 +1369,18 @@ class OpenCiv3Env(AgentEnvEnvironment):
     # ---- extensions (harness only; every call is counted in data/get's harness) ----
 
     @extension("urn:openciv3:new-game/v1",
-               description="Start a new game; omitted args keep the current scenario. seats: more civs played by "
-                           "agents (each in an opponent slot), each agent naming its civ in the X-OpenCiv3-Seat "
-                           "header; labels: a name per civ for recordings and reports, e.g. the agent's model; "
-                           "humans: civs (among civ and seats) that people play in the browser, each through the "
-                           "link in the result's `play` (none when omitted); human_turn_seconds: how long a human "
-                           "seat may idle while others wait before the env ends its turn (0: never); "
-                           "min_turn_seconds: with several seats, the shortest a turn lasts (0-600, default 0), so "
-                           "people can follow a broadcast: the last seat to end a turn waits until then; broadcast: "
-                           "the stream's title and voiced casters ({title, casters: false | true | {model, tts_model, "
-                           "play_by_play, analyst}}, off when omitted), which `agent-env openciv3 stream` follows.")
+               description="Start a new default game: one civilization, played at the env's own address, against "
+                           "the game's AI; omitted args keep the current scenario. A game with several players, or "
+                           "people, or a broadcast, comes from the lobby (urn:game:lobby/v1).")
     async def new_game(self, seed: int | None = None, civ: str | None = None, opponents: int | None = None,
                        size: str | None = None, difficulty: str | None = None, barbarians: str | None = None,
-                       landform: str | None = None, ocean: int | None = None, turn_limit: int | None = None,
-                       seats: list[str] | None = None, labels: dict[str, str] | None = None,
-                       humans: list[str] | None = None, human_turn_seconds: int = HUMAN_TURN_SECONDS,
-                       min_turn_seconds: int = 0, broadcast: dict | None = None) -> dict:
+                       landform: str | None = None, ocean: int | None = None, turn_limit: int | None = None) -> dict:
         self.harness["extension_calls"] += 1
         args = {"seed": seed, "civ": civ, "opponents": opponents, "size": size, "difficulty": difficulty,
-                "barbarians": barbarians, "landform": landform, "ocean": ocean, "turn_limit": turn_limit,
-                "seats": seats, "labels": labels, "humans": humans or [], "human_turn_seconds": human_turn_seconds,
-                "min_turn_seconds": min_turn_seconds, "broadcast": {} if broadcast is None else broadcast}
+                "barbarians": barbarians, "landform": landform, "ocean": ocean, "turn_limit": turn_limit}
         async with self.lock:
-            await self._new_game(merge_scenario(self.scenario, args))
-            return {**self.game, "scenario": self.scenario,
-                    "play": {seat.civ: self._play_link(seat) for seat in self.seats if seat.human}}
+            await self._new_game(merge_scenario(self._default_scenario(), args))
+            return {**self.game, "scenario": self.scenario}
 
     @extension("urn:openciv3:autoplay/v1", description="Advance the game a number of turns with a scripted policy.")
     async def autoplay(self, turns: int, policy: AUTOPLAY_POLICIES = "null") -> dict:
@@ -1378,6 +1456,15 @@ class OpenCiv3Env(AgentEnvEnvironment):
     async def recording(self, formats: list[str] | None = None, view: Literal["spectator", "agent"] = "spectator",
                         fps: int = 4, client_seats: list[str] | None = None) -> dict:
         self.harness["extension_calls"] += 1
+        files, notes, turns = await self._render(formats, view, fps, client_seats)
+        return {"turns": turns, "notes": notes,
+                "files": [{"name": f.name, "content_type": f.content_type, "bytes": len(f.data),
+                           "base64": base64.b64encode(f.data).decode()} for f in files]}
+
+    async def _render(self, formats: list[str] | None, view: str = "spectator", fps: int = 4,
+                      client_seats: list[str] | None = None) -> tuple[list[recording.File], list[str], int]:
+        """The game so far in `formats` (the recording's, and the client's): its files, notes on what was left out,
+        and the turns it covers."""
         formats = formats or ["mp4", "html", *([client.FORMAT] if self.client else [])]
         valid = [*recording.FORMATS, client.FORMAT]
         if unknown := set(formats) - set(valid):
@@ -1430,9 +1517,160 @@ class OpenCiv3Env(AgentEnvEnvironment):
                 humans=[s.civ for s in self.seats if s.human], seat_notes=seat_notes, plans=plans, messages=messages,
                 names=(self.scenario.get("broadcast") or {}).get("names"))
             notes = rendered_notes + notes
-        return {"turns": len(snapshots), "notes": notes,
-                "files": [{"name": f.name, "content_type": f.content_type, "bytes": len(f.data),
-                           "base64": base64.b64encode(f.data).decode()} for f in [*files, *videos]]}
+        return [*files, *videos], notes, len(snapshots)
+
+    # ---- the lobby and the match (agentenv-game-env): who plays, and how the game goes ----
+
+    @player_slot_limits
+    def slot_limits(self, game_settings: MatchSettings, requested: PlayerSlotLimits) -> PlayerSlotLimits:
+        """Two to twelve civilizations, as Civilization III takes: agents, people and the game's AI."""
+        if requested.max is not None and requested.max > MAX_CIVS:
+            raise ValueError(f"a game has at most {MAX_CIVS} civilizations, not {requested.max}")
+        return PlayerSlotLimits(min=max(requested.min or 2, 2), max=requested.max or MAX_CIVS,
+                                player_kinds=list(PlayerKind))
+
+    @check_player_slot
+    def slot_rules(self, slot: PlayerSlot, lobby: Lobby) -> None:
+        """A civilization plays once, and the engine picks the game's AI's."""
+        civ = slot.game_settings["civ"]
+        if civ is None:
+            return
+        if slot.player_kind is PlayerKind.AI:
+            raise ValueError("the engine picks the game's AI's civilizations: leave civ out of an AI player slot")
+        if any((s.game_settings.get("civ") or "").lower() == civ.lower() for s in lobby.player_slots):
+            raise ValueError(f"{civ} is another player slot's civilization")
+
+    @player_slot_card
+    def player_card(self, slot: PlayerSlot) -> EnvironmentCard:
+        """An agent's player slot: the MCP tools, played as its civilization. A person's: the play page, which sends
+        the slot's token."""
+        interface = (EnvironmentInterface(url="/play", transport="http") if slot.player_kind is PlayerKind.HUMAN
+                     else EnvironmentInterface(url=MCP_PATH, transport=MCP_TRANSPORT))
+        return EnvironmentCard(name=f"openciv3/{slot.player_id}", additionalInterfaces=[interface])
+
+    @player_slot_headers
+    def play_token(self, slot: PlayerSlot) -> dict[str, str]:
+        """A person's play token, which their page sends (docs/play.md): whoever has it plays the slot."""
+        return {TOKEN_HEADER: secrets.token_hex(16)} if slot.player_kind is PlayerKind.HUMAN else {}
+
+    @create_game
+    async def new_match(self, lobby: Lobby) -> None:
+        """The game the closed lobby describes: a civilization per agent and human player slot, in the lobby's order,
+        and an AI opponent per AI slot. The broadcast's banner logos are fetched now, so the stream never waits on
+        their hosts."""
+        s = lobby.game_settings
+        players = [p for p in lobby.player_slots if p.player_kind is not PlayerKind.AI]
+        ai = [p for p in lobby.player_slots if p.player_kind is PlayerKind.AI]
+        if not players:
+            raise ValueError("a game needs an agent or a person in a player slot: the game's AI plays only opponents")
+        chosen = {p.game_settings["civ"].lower() for p in players if p.game_settings["civ"]}
+        free = (c for c in DEFAULT_CIVS if c.lower() not in chosen)
+        civs = {p.player_id: p.game_settings["civ"] or next(free) for p in players}
+        show = await asyncio.to_thread(broadcast.inline, s["broadcast"])
+        first, *others = players
+        scenario = merge_scenario({}, {
+            "seed": s["seed"], "size": s["size"], "difficulty": s["difficulty"], "barbarians": s["barbarians"],
+            "landform": s["landform"], "ocean": s["ocean"], "turn_limit": s["turn_limit"],
+            "civ": civs[first.player_id], "opponents": len(others) + len(ai),
+            "seats": [civs[p.player_id] for p in others],
+            "labels": {civs[p.player_id]: p.player_name for p in players if p.player_name},
+            "humans": [civs[p.player_id] for p in players if p.player_kind is PlayerKind.HUMAN],
+            "human_turn_seconds": s["human_turn_seconds"], "min_turn_seconds": s["min_turn_seconds"],
+            "broadcast": show or {}})
+        async with self.lock:
+            await self._new_game(scenario, {civs[p.player_id]: p for p in players})
+            world = await self._call("score", seat=self.seats[0])
+        played = {seat.civ for seat in self.seats}
+        self.ai_civs = dict(zip((p.player_id for p in ai),
+                                (pl["civ"] for pl in world.get("players", []) if pl["civ"] not in played), strict=True))
+
+    @match_report
+    def report(self) -> MatchReport:
+        """The match as the game sees it: its turns; each player's outcome once the game's rules decide it (a defeated
+        civilization has lost, and a victory by conquest, domination, culture or score at the turn limit is its
+        civilization's, every other player's a loss); each player's score, cities, population and techs; and its
+        moves, the turns it ended itself and those the env ended for it."""
+        if self.game is None:
+            return MatchReport()
+        over, victory = self._game_over()
+        players = {seat.civ: seat.player_id for seat in self.seats if seat.player_id}
+        players.update({civ: player_id for player_id, civ in self.ai_civs.items()})
+        outcomes = {seat.player_id: "lost" for seat in self.seats
+                    if seat.player_id and (seat.last_state or {}).get("defeated")}
+        if victory:
+            outcomes = {player_id: "won" if civ == victory["civ"] else "lost" for civ, player_id in players.items()}
+        return MatchReport(
+            status="failed" if self.failed else "finished" if over else "started",
+            status_detail=self.failed or (self._ending(victory) if over else None),
+            progress=[Counter(name="game", unit="turns", value=self.turn or 0, limit=self.scenario.get("turn_limit"))],
+            outcomes=outcomes,
+            scores={seat.player_id: self._scores(seat.last_state) for seat in self.seats
+                    if seat.player_id and seat.last_state},
+            moves={seat.player_id: Moves(made=seat.turns_ended, missed=seat.auto_ended_turns) for seat in self.seats
+                   if seat.player_id})
+
+    def _ending(self, victory: dict | None) -> str:
+        if victory:
+            return f"{victory.get('label') or victory['civ']} won by {victory['kind']} on turn {victory['turn']}"
+        if all((s.last_state or {}).get("defeated") for s in self.seats):
+            return "every player was defeated"
+        return f"the turn limit, turn {self.turn}: a tie on top, no one's victory"
+
+    @staticmethod
+    def _scores(state: dict) -> list[Score]:
+        score = state["score"]
+        return [Score(name="score", value=score["total"], better="higher", unit="points"),
+                Score(name="cities", value=score["cities"], better="higher"),
+                Score(name="population", value=score["pop"], better="higher"),
+                Score(name="techs", value=score["techs"], better="higher")]
+
+    @play_out
+    async def run_out(self) -> None:
+        """finish: the game plays on with no more moves from its players. The env ends each one's turn, a turn it
+        missed, until the game's rules or its turn limit end the game."""
+        while True:
+            async with self.lock:
+                await self._ensure_game()
+                for seat in self.seats:
+                    await self._state(seat)
+                if self.failed or self._game_over()[0]:
+                    return
+                turn = self.turn
+                if self.multi:
+                    for seat in self.seats:
+                        if not seat.ready and not seat.over:
+                            await self._end_turn_for(seat)
+                    await self._advance_if_ended()
+                else:
+                    self.seats[0].cache = None
+                    await self._call("end_turn", seat=self.seats[0], skip_idle=True)
+                    self.seats[0].auto_ended_turns += 1
+                for seat in self.seats:
+                    seat.cache = None
+                    await self._state(seat)
+                if self.turn == turn and not self._game_over()[0]:
+                    raise RuntimeError(f"the game didn't advance past turn {turn}")
+
+    @spectator_card
+    def spectators(self) -> EnvironmentCard:
+        """The live view: the map, the players and their turns as they play (docs/viewer.md)."""
+        return EnvironmentCard(name="openciv3/spectators",
+                               additionalInterfaces=[EnvironmentInterface(url="/live", transport="http")])
+
+    @match_files
+    async def kept(self, kinds: list[str] | None) -> MatchFiles:
+        """The finished match's recording, by kind: `map_video` (the map, an mp4), `html_replay` (the match viewer in
+        one file), `last_turn` (a png) and `client_video` (the real client's view, a video per player, in an image
+        built with the client); by default all but the png."""
+        wanted = kinds or ["map_video", "html_replay", *(["client_video"] if self.client else [])]
+        if unknown := sorted(set(wanted) - set(FILE_KINDS)):
+            raise ValueError(f"OpenCiv3 keeps a match's {', '.join(FILE_KINDS)}, not {', '.join(unknown)}")
+        files, notes, _ = await self._render([FILE_KINDS[k] for k in wanted])
+        folder = Path(tempfile.mkdtemp(prefix="files-", dir=self.root))
+        for f in files:
+            (folder / f.name).write_bytes(f.data)
+        return MatchFiles(files=[MatchFile(name=f.name, kind=kind_of(f.name), content_type=f.content_type,
+                                           file=folder / f.name) for f in files], notes=notes)
 
     # ---- live view: GET /live follows the game while it plays ----
 
@@ -1806,6 +2044,7 @@ class OpenCiv3Env(AgentEnvEnvironment):
             if res.get("blocked"):
                 seat.cache = before
                 raise BridgeError("blocked", render.blocked(res, before))
+            seat.turns_ended += 1
             if "seats" in res:
                 self._advanced(res["seats"])
                 res = res["seats"][seat.civ]
@@ -1839,6 +2078,12 @@ def play_args(tool_name: str, given: dict) -> dict:
             f"{tool_name}_args", __config__=ConfigDict(extra="forbid"),
             **{p.name: (hints[p.name], ... if p.default is p.empty else p.default) for p in params})
     return _PLAY_MODELS[tool_name].model_validate(given).model_dump()
+
+
+def kind_of(name: str) -> str:
+    """A recording file's kind among a match's files, by its name."""
+    return ("client_video" if ".client" in name else "html_replay" if name.endswith(".html")
+            else "last_turn" if name.endswith(".png") else "map_video")
 
 
 def file_part(name: str) -> str:

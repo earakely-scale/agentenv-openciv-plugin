@@ -111,10 +111,10 @@ conditions added since cannot change what happened. On any difference it writes 
 
 `bots.py` plays a whole multi-seat match with scripted players, for testing the live viewer and the
 recordings on realistic games at no LLM cost. It starts the env locally (no Docker) on a copy of
-`build/bridge`, starts the match the way the `frontier` task does (the `urn:openciv3:new-game/v1`
-extension with civs, seats, labels, size and turn limit) and runs one MCP client per seat, each
-sending its `X-OpenCiv3-Seat` header and playing every turn with real tool calls, so the action log,
-per-seat turns and live routes all get exercised.
+`build/bridge`, starts the match the way the `frontier` task does (the env's lobby, `urn:game:lobby/v1`:
+the settings, then a player slot per civilization with its label) and runs one MCP client per seat,
+each at its player slot's address, `/players/<label>/mcp`, and playing every turn with real tool calls,
+so the action log, per-seat turns and live routes all get exercised.
 
 ```bash
 .venv/bin/python playtest/bots.py --out /tmp/match-9                       # 9 seats, Standard, Regent, 200 turns, seed 1
@@ -173,7 +173,7 @@ human flag in data/get and the viewer, 401 for a wrong token). Screenshots of ev
 ```bash
 .venv/bin/python playtest/bots.py --seats 2 --humans Rome=you --turns 25 --size Small --linger 120 --out /tmp/hv &
 NODE_PATH=$(npm root -g) node playtest/play_e2e.mjs /tmp/hv          # waits for /tmp/hv/play.json
-.venv/bin/python playtest/task_e2e.py --out /tmp/task-e2e --turns 8   # the human-vs-ai steps: match, browser, await
+.venv/bin/python playtest/task_e2e.py --out /tmp/task-e2e --turns 8   # the human-vs-ai steps: lobby, browser, await_match
 ```
 
 Open the printed `PLAY` link yourself instead to play; `--human-turn-seconds` sets how long the env waits for you.

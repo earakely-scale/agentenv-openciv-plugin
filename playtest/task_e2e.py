@@ -2,10 +2,11 @@
 
     .venv/bin/python playtest/task_e2e.py --out /tmp/task-e2e --turns 8
 
-Starts the env locally on a copy of the bridge (as bots.py does), then runs the real `openciv3_match` step with
-`humans` (no agents) and the `openciv3_await_game` step, while playtest/play_e2e.mjs plays the human seat in a
-headless browser from the link the match step produced. Checks that the match step stored the play link, that the
-await step returns once the game is over, and that the browser's checks pass. Needs node and the global playwright.
+Starts the env locally on a copy of the bridge (as bots.py does), then runs agentenv-game-env's real steps: open_lobby,
+add_player_slot for a person and two of the game's AI, close_lobby and await_match, while playtest/play_e2e.mjs plays
+the person's civilization in a headless browser from the page link add_player_slot gave (the slot's token in its
+fragment). Checks the link, that await_match returns once the match is over, that the match reports the person's
+outcome, scores and moves, and that the browser's checks pass. Needs node and the global playwright.
 """
 from __future__ import annotations
 
@@ -22,13 +23,13 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlencode
 
 from agent_env.env.env import DeployedEnv
 from agent_env.task_step.context import TaskStepContext
+from agentenv_game.steps import AddPlayerSlotTaskStep, AwaitMatchTaskStep, CloseLobbyTaskStep, OpenLobbyTaskStep
 from agentenv_protocol import client
 from agentenv_protocol.types import WELL_KNOWN_PATH
-
-from agentenv_openciv3.steps import OpenCiv3AwaitGameTaskStep, OpenCiv3MatchTaskStep
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -65,23 +66,30 @@ async def main(args: argparse.Namespace) -> int:
                              environment_card=card)
         context = TaskStepContext(deployed_envs=[record], metadata={"task_id": "task-e2e"}, instance_id="i1")
 
-        match = OpenCiv3MatchTaskStep(id="match", version=None, env_id="openciv3", turns=args.turns, size="Tiny",
-                                      humans={"you": "Rome"}, ai_opponents=2, human_turn_seconds=600)
-        context = await match.execute(context)
-        play = context.metadata["openciv3_match"]["play"]
-        print("match step:", json.dumps(play))
-        assert play["you"]["civ"] == "Rome" and "/play#token=" in play["you"]["url"], play
+        await OpenLobbyTaskStep(id="lobby", version=None, env_id="openciv3", game_settings={
+            "turn_limit": args.turns, "size": "Tiny", "human_turn_seconds": 600}).execute(context)
+        for player_id, kind, settings in (("you", "human", {"civ": "Rome"}), ("ai1", "ai", {}), ("ai2", "ai", {})):
+            await AddPlayerSlotTaskStep(id=f"slot-{player_id}", version=None, env_id="openciv3", player_id=player_id,
+                                        player_kind=kind, player_name=player_id if kind == "human" else None,
+                                        game_settings=settings).execute(context)
+        await CloseLobbyTaskStep(id="match", version=None, env_id="openciv3").execute(context)
+        slot = context.metadata["game_slots"]["you"]
+        url = f"{slot['interfaces'][0]['url']}#{urlencode(slot['headers'])}"
+        print("player slot:", url)
+        assert slot["interfaces"][0]["transport"] == "http" and "#x-openciv3-token=" in url, slot
 
-        (out / "play.json").write_text(json.dumps({"base": base, "play": {"Rome": play["you"]["url"]}}))
+        (out / "play.json").write_text(json.dumps({"base": base, "play": {"Rome": url}}))
         browser = subprocess.Popen(["node", str(ROOT / "playtest" / "play_e2e.mjs"), str(out), str(args.turns + 2)],
                                    env={**os.environ, "NODE_PATH": subprocess.run(
                                        ["npm", "root", "-g"], capture_output=True, text=True).stdout.strip()})
         started = time.monotonic()
-        await_step = OpenCiv3AwaitGameTaskStep(id="await", version=None, env_id="openciv3", timeout_seconds=900,
-                                               poll_seconds=2)
+        await_step = AwaitMatchTaskStep(id="await", version=None, env_id="openciv3", timeout_seconds=900,
+                                        poll_seconds=2)
         context = await await_step.execute(context)
-        game = context.metadata.get("openciv3_game")
-        print(f"await step returned after {time.monotonic() - started:.0f}s:", json.dumps(game)[:300])
+        match = context.metadata["game_match"]
+        print(f"await_match returned after {time.monotonic() - started:.0f}s:", json.dumps(match)[:600])
+        you = match["player_states"]["you"]
+        assert match["status"] == "finished" and you["moves"]["made"] > 0 and you["scores"][0]["name"] == "score", match
         res = await client.get_data(base, 60)
         summary = res.parts[0].data if hasattr(res.parts[0], "data") else res.parts[0].root.data
         (out / "summary.json").write_text(json.dumps(summary, indent=2, default=str))

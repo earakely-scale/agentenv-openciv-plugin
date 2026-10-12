@@ -1,7 +1,6 @@
-"""A match's broadcast settings: the openciv3_match step's `broadcast` option and the new-game argument of that name.
-The task decides whether two AI casters talk over the stream, and which models and voices they use, and which banners
-the stream's sponsor slot shows; `agent-env openciv3 stream` reads the settings from the running game (docs/tools.md,
-Broadcast)."""
+"""A match's broadcast settings: the lobby's `broadcast` game setting. The task decides whether two AI casters talk
+over the stream, and which models and voices they use, and which banners the stream's sponsor slot shows; `agent-env
+openciv3 stream` reads the settings from the running game (docs/tools.md, Broadcast)."""
 
 from __future__ import annotations
 
@@ -9,7 +8,6 @@ import base64
 import binascii
 import re
 import urllib.request
-from pathlib import Path
 
 TITLE_LIMIT = 80
 DISPLAY_LIMIT = 30      # a seat's name on screen: "Opus 5.5", "GPT-6 Sol"
@@ -48,9 +46,9 @@ def settings(value: object, *, inlined: bool = False) -> dict | None:
 
 
 def inline(value: dict | None) -> dict | None:
-    """`value` with each banner logo a data: URI: a URL fetched and a file read, each checked to be a PNG, JPEG, WebP,
-    GIF or SVG image of at most LOGO_BYTES. The game's settings then hold all the stream shows, and a broadcast never
-    waits on a third-party host. Raises ValueError for a logo that is missing, too big or not an image."""
+    """`value` with each banner logo a data: URI, a URL fetched, checked to be a PNG, JPEG, WebP, GIF or SVG image of
+    at most LOGO_BYTES. The game's settings then hold all the stream shows, and a broadcast never waits on a
+    third-party host. Raises ValueError for a logo that is missing, too big or not an image."""
     if not value or not value.get("banners"):
         return value
     return {**value, "banners": [{**b, "logos": {n: _data_uri(n, s) for n, s in (b.get("logos") or {}).items()}}
@@ -108,11 +106,11 @@ def _check_source(name: str, source: str, inlined: bool) -> None:
     if source.startswith("data:"):
         _decoded(name, source)
     elif inlined:
-        raise ValueError(f"banner logo {name!r} reaches the env as a data: URI (the openciv3_match step inlines URLs "
-                         f"and files), got {source[:80]!r}")
-    elif not (source.startswith("https://") and len(source) > 8 or source.startswith(("/", "~/"))):
-        raise ValueError(f"banner logo {name!r} is an https:// URL, a data:image/...;base64, URI or an image file's "
-                         f"path (absolute or ~/...), got {source[:80]!r}")
+        raise ValueError(f"banner logo {name!r} reaches the game as a data: URI (the env fetches a URL as the lobby "
+                         f"closes), got {source[:80]!r}")
+    elif not (source.startswith("https://") and len(source) > 8):
+        raise ValueError(f"banner logo {name!r} is an https:// URL or a data:image/...;base64, URI, which the env "
+                         f"fetches as the lobby closes, got {source[:80]!r}")
 
 
 def _decoded(name: str, uri: str) -> bytes:
@@ -133,13 +131,9 @@ def _data_uri(name: str, source: str) -> str:
         _decoded(name, source)
         return source
     try:
-        if source.startswith("https://"):
-            request = urllib.request.Request(source, headers={"User-Agent": "agentenv-openciv3"})
-            with urllib.request.urlopen(request, timeout=LOGO_SECONDS) as r:
-                body = r.read(LOGO_BYTES + 1)
-        else:
-            with Path(source).expanduser().open("rb") as f:
-                body = f.read(LOGO_BYTES + 1)
+        request = urllib.request.Request(source, headers={"User-Agent": "agentenv-openciv3"})
+        with urllib.request.urlopen(request, timeout=LOGO_SECONDS) as r:
+            body = r.read(LOGO_BYTES + 1)
     except OSError as e:
         raise ValueError(f"banner logo {name!r} could not be read from {source}: {e}") from e
     if len(body) > LOGO_BYTES:

@@ -37,7 +37,7 @@ the turns it hasn't seen; a recording embeds the whole document.
            "resources": ["Wheat", ...], "improvements": ["road", ...],   // grow; looks index them
            "victory": null},
   "players": [{"index": 1, "civ": "Rome", "label": "opus", "barbarian": false,
-               "name": "Opus 5.5",      // only when the broadcast names the label (new-game broadcast.names)
+               "name": "Opus 5.5",      // only when the broadcast names the label (the lobby's broadcast.names)
                "human": true,           // only on a seat a person plays (docs/play.md)
                "seat": 0,               // the seat number (bit in `known`), or null for an AI civ
                "color": "#3987e5", "engine_color": "#c43434"}],
@@ -95,7 +95,7 @@ the turns it hasn't seen; a recording embeds the whole document.
   `landing` (a civ's units that came off a ship onto land not its own, at the first; `from` the land's owner). Bridge
   events are kept for the kinds the snapshots can't show (`unit_lost`, `gold_stolen`, `disorder`, …, and `contact`
   in snapshots without `contacts`); per-seat chatter (`city_grew`, `job_done`, `built`, `threat`) is dropped.
-- **Names:** with new-game `broadcast.names` (`{"opus": "Opus 5.5"}`), a seat's player has its `name`, and the events'
+- **Names:** with the lobby's `broadcast.names` (`{"opus": "Opus 5.5"}`), a seat's player has its `name`, and the events'
   texts use it; the viewer (live, and the env's recordings and videos) shows a seat by `name`, else `label`, else civ.
 - **Cities** are told apart by their engine `id` from one snapshot to the next (by name in snapshots without ids): a
   civ that lost a city may found another of the same name. A great wonder is announced when it first appears in the

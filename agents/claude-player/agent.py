@@ -65,9 +65,9 @@ def model_env(environ: dict[str, str], model: str) -> dict[str, str]:
     return env
 
 
-def mcp_config(servers: dict, seat: str | None = None) -> dict:
+def mcp_config(servers: dict) -> dict:
     def server(s: dict) -> dict:
-        headers = mcp_headers(s, seat)
+        headers = mcp_headers(s)
         return {"type": "http", "url": s["url"], **({"headers": headers} if headers else {})}
     return {"mcpServers": {name: server(s) for name, s in servers.items()}}
 
@@ -96,12 +96,11 @@ def tokens(result: dict) -> tuple[int, int]:
 class ClaudeCode(Harness):
     name, code, trajectory = "Claude Code", "claude", "claude-code-stream-json/v1"
 
-    def __init__(self, config: ClaudeConfig, servers: dict, seat: str | None, environ: dict[str, str],
-                 workdir: Path):
+    def __init__(self, config: ClaudeConfig, servers: dict, environ: dict[str, str], workdir: Path):
         config = config.model_copy(update={"model": model_id(environ, config.model)})
-        super().__init__(config, servers, seat, environ, workdir)
+        super().__init__(config, servers, environ, workdir)
         mcp_file = workdir / "mcp.json"
-        mcp_file.write_text(json.dumps(mcp_config(servers, seat)))
+        mcp_file.write_text(json.dumps(mcp_config(servers)))
         self.cmd = claude_cmd(config, mcp_file, list(servers))
         self.env = {**environ, **model_env(environ, config.model), "MCP_TOOL_TIMEOUT": str(TOOL_TIMEOUT_SECONDS * 1000)}
         self.proc: asyncio.subprocess.Process | None = None
