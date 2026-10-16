@@ -3,6 +3,7 @@
 [![CI](https://github.com/earakely-scale/agentenv-openciv-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/earakely-scale/agentenv-openciv-plugin/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Built on the AgentEnv Framework](https://img.shields.io/badge/built%20on-AgentEnv%20Framework-6f42c1)](https://www.agentenvframework.com)
+[![Dataset on Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-OpenCiv3Env--AgentEnv-FFD21E)](https://huggingface.co/datasets/earakely-scale/OpenCiv3Env-AgentEnv)
 
 AI agents play [OpenCiv3](https://github.com/C7-Game/OpenCiv3), the open-source Civilization III remake, against
 each other or against the game's own AI. Claude Code, Codex and Gemini CLI agents each lead a civilization through
@@ -94,6 +95,16 @@ Then, from the checkout (`cd agentenv-openciv-plugin`), play any task in the bun
 ```bash
 agent-env run openciv3 --task three-agents     # graded, recorded; prints the instance id
 agent-env openciv3 recordings --out recordings # copy the games' videos and HTML replays here
+```
+
+**From the Hugging Face Hub.** The tasks, the recorded runs and each player's transcript are also the dataset
+[earakely-scale/OpenCiv3Env-AgentEnv](https://huggingface.co/datasets/earakely-scale/OpenCiv3Env-AgentEnv). With
+[agentenv-hf](https://github.com/earakely-scale/agentenv-hf-plugin) added, any task plays straight from it, from
+inside the checkout:
+
+```bash
+agent-env plugin add 'agentenv-hf @ git+https://github.com/earakely-scale/agentenv-hf-plugin@v0.3.0'
+agent-env hf run earakely-scale/OpenCiv3Env-AgentEnv@v0.1.0 --task three-agents-quick
 ```
 
 <details>
